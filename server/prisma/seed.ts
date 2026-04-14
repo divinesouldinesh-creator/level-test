@@ -149,26 +149,8 @@ async function main() {
   });
 
   const legacyBasicMathSubjectId = "seed-subject-basic-math";
+  const legacyBasicMathLevel0Id = "seed-basic-math-level-0";
   const basicMathSubject = subject;
-  const basicMathLevel0 = await prisma.level.upsert({
-    where: { id: "seed-basic-math-level-0" },
-    update: {
-      name: "Level 0: Basic Calculations",
-      order: 0,
-      subjectId: basicMathSubject.id,
-    },
-    create: {
-      id: "seed-basic-math-level-0",
-      name: "Level 0: Basic Calculations",
-      order: 0,
-      subjectId: basicMathSubject.id,
-    },
-  });
-  await prisma.levelTestConfig.upsert({
-    where: { levelId: basicMathLevel0.id },
-    update: { questionCount: 8 },
-    create: { levelId: basicMathLevel0.id, questionCount: 8 },
-  });
   const class7 = await prisma.schoolClass.upsert({
     where: { id: "seed-class-7" },
     update: { name: "Class 7", grade: "7" },
@@ -185,24 +167,37 @@ async function main() {
     create: { classId: class7.id, subjectId: basicMathSubject.id },
   });
   await prisma.level.updateMany({
-    where: { id: basicMathLevel0.id },
+    where: { id: legacyBasicMathLevel0Id },
     data: { subjectId: subject.id },
   });
   await prisma.topic.updateMany({
-    where: { levelId: basicMathLevel0.id },
-    data: { subjectId: subject.id },
+    where: { levelId: legacyBasicMathLevel0Id },
+    data: { subjectId: subject.id, levelId: level0.id },
   });
   await prisma.question.updateMany({
-    where: { levelId: basicMathLevel0.id },
-    data: { subjectId: subject.id },
+    where: { levelId: legacyBasicMathLevel0Id },
+    data: { subjectId: subject.id, levelId: level0.id },
   });
   await prisma.test.updateMany({
-    where: { levelId: basicMathLevel0.id },
-    data: { subjectId: subject.id },
+    where: { levelId: legacyBasicMathLevel0Id },
+    data: { subjectId: subject.id, levelId: level0.id },
   });
   await prisma.studentProgress.updateMany({
-    where: { levelId: basicMathLevel0.id },
-    data: { subjectId: subject.id },
+    where: { levelId: legacyBasicMathLevel0Id },
+    data: { subjectId: subject.id, levelId: level0.id },
+  });
+  await prisma.testAttempt.updateMany({
+    where: { suggestedNextLevelId: legacyBasicMathLevel0Id },
+    data: { suggestedNextLevelId: level0.id },
+  });
+  await prisma.levelTopicParticipation.deleteMany({
+    where: { levelId: legacyBasicMathLevel0Id },
+  });
+  await prisma.levelTestConfig.deleteMany({
+    where: { levelId: legacyBasicMathLevel0Id },
+  });
+  await prisma.level.deleteMany({
+    where: { id: legacyBasicMathLevel0Id },
   });
   await prisma.classSubject.deleteMany({
     where: { classId: class7.id, subjectId: legacyBasicMathSubjectId },
@@ -387,26 +382,26 @@ async function main() {
     ...topicDefs.map((t) => ({ ...t, levelId: level0.id })),
     ...topicDefsL1.map((t) => ({ ...t, levelId: level1.id })),
     ...topicDefsL2.map((t) => ({ ...t, levelId: level2.id })),
-    ...topicDefsClass7L0.map((t) => ({ ...t, levelId: basicMathLevel0.id })),
+    ...topicDefsClass7L0.map((t) => ({ ...t, levelId: level0.id })),
   ];
   for (const t of allTopicDefs) {
     await prisma.topic.upsert({
       where: { id: t.id },
       update: {
         name: t.name,
-        subjectId: t.levelId === basicMathLevel0.id ? basicMathSubject.id : subject.id,
+        subjectId: subject.id,
         levelId: t.levelId,
       },
       create: {
         id: t.id,
         name: t.name,
-        subjectId: t.levelId === basicMathLevel0.id ? basicMathSubject.id : subject.id,
+        subjectId: subject.id,
         levelId: t.levelId,
       },
     });
   }
 
-  for (const lvl of [level0, level1, level2, basicMathLevel0]) {
+  for (const lvl of [level0, level1, level2]) {
     const lvlTopics = allTopicDefs.filter((t) => t.levelId === lvl.id);
     await prisma.levelTopicParticipation.deleteMany({ where: { levelId: lvl.id } });
     for (let i = 0; i < lvlTopics.length; i++) {
@@ -790,7 +785,7 @@ async function main() {
       if (exists) continue;
       await prisma.question.create({
         data: {
-          subjectId: t.levelId === basicMathLevel0.id ? basicMathSubject.id : subject.id,
+          subjectId: subject.id,
           levelId: t.levelId,
           topicId: t.id,
           stem,
