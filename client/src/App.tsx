@@ -1,10 +1,12 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
+import { AdminLayout } from "./layouts/AdminLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { StudentSubjects } from "./pages/student/StudentSubjects";
 import { StudentLevels } from "./pages/student/StudentLevels";
 import { StudentTest } from "./pages/student/StudentTest";
-import { AdminDashboard } from "./pages/admin/AdminDashboard";
+import { AdminHome } from "./pages/admin/AdminHome";
+import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
 import { TeacherDashboard } from "./pages/teacher/TeacherDashboard";
 
 function Guard({
@@ -68,10 +70,13 @@ function AppRoutes() {
         path="/admin"
         element={
           <Guard role="ADMIN">
-            <AdminDashboard />
+            <AdminLayout />
           </Guard>
         }
-      />
+      >
+        <Route index element={<AdminHome />} />
+        <Route path="students" element={<AdminStudentsPage />} />
+      </Route>
       <Route path="/" element={<Navigate to="/login" replace />} />
     </Routes>
   );

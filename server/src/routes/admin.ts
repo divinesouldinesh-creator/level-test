@@ -1,4 +1,5 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs";
 import { z } from "zod";
@@ -6,6 +7,14 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { questionContentHash } from "../utils/questionHash.js";
 import { extractTextFromDocx, parseQuestionBlocks, parseDifficulty } from "../services/wordImport.js";
+import {
+  buildRowsFromUpload,
+  classLabelForDisplay,
+  generateStudentRows,
+  parseStudentSheetBuffer,
+  randomFourDigitPassword,
+  saveStudentAccounts,
+} from "../services/studentAccounts.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("ADMIN"));
@@ -307,17 +316,155 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
   res.json({ batchId: batch.id, imported, skipped, parseCount: parsed.length, errors });
 });
 
-// --- Users: students / teachers ---
-router.get("/students", async (_req, res) => {
+// --- Student account management ---
+const generateStudentsSchema = z.object({
+  classId: z.string().min(1),
+  sectionId: z.string().min(1),
+  count: z.number().int().min(1).max(500),
+});
+
+router.post("/generate-students", async (req, res) => {
+  const p = generateStudentsSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  try {
+    const students = await generateStudentRows(prisma, p.data);
+    res.json({ students });
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+const uploadRowsSchema = z.object({
+  rows: z.array(
+    z.object({
+      name: z.string(),
+      class: z.string(),
+      section: z.string(),
+    })
+  ),
+});
+
+router.post("/upload-students", async (req, res) => {
+  const p = uploadRowsSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  try {
+    const students = await buildRowsFromUpload(prisma, p.data.rows);
+    res.json({ students });
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+router.post(
+  "/upload-students/file",
+  upload.single("file"),
+  async (req, res) => {
+    if (!req.file?.path) return res.status(400).json({ error: "Missing file" });
+    try {
+      const buf = fs.readFileSync(req.file.path);
+      fs.unlinkSync(req.file.path);
+      const rows = parseStudentSheetBuffer(buf);
+      const students = await buildRowsFromUpload(prisma, rows);
+      res.json({ students });
+    } catch (e) {
+      if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      res.status(400).json({ error: String(e) });
+    }
+  }
+);
+
+const saveStudentsSchema = z.object({
+  students: z.array(
+    z.object({
+      fullName: z.string().min(1),
+      studentLoginId: z.string().min(1),
+      password: z.string().min(4).max(32),
+      classId: z.string().min(1),
+      sectionId: z.string().min(1),
+      className: z.string().optional(),
+      classLabel: z.string().optional(),
+      sectionName: z.string().optional(),
+    })
+  ),
+});
+
+router.post("/save-students", async (req, res) => {
+  const p = saveStudentsSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  try {
+    const result = await saveStudentAccounts(prisma, p.data.students);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+router.get("/students", async (req, res) => {
+  const classId =
+    typeof req.query.classId === "string" && req.query.classId ? req.query.classId : undefined;
+  const sectionId =
+    typeof req.query.sectionId === "string" && req.query.sectionId ? req.query.sectionId : undefined;
+
   const list = await prisma.student.findMany({
+    where: {
+      ...(classId ? { classId } : {}),
+      ...(sectionId ? { sectionId } : {}),
+    },
     include: {
       schoolClass: true,
       section: true,
       user: { select: { studentLoginId: true } },
     },
+    orderBy: [{ schoolClass: { name: "asc" } }, { section: { name: "asc" } }, { fullName: "asc" }],
   });
-  res.json(list);
+
+  res.json({
+    students: list.map((s) => ({
+      id: s.id,
+      userId: s.userId,
+      fullName: s.fullName,
+      classId: s.classId,
+      sectionId: s.sectionId,
+      className: s.schoolClass.name,
+      classLabel: classLabelForDisplay(s.schoolClass),
+      sectionName: s.section.name,
+      username: s.user.studentLoginId ?? "",
+    })),
+  });
 });
+
+router.patch("/students/:studentId/reset-password", async (req, res) => {
+  const studentId = req.params.studentId;
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
+    include: { user: true },
+  });
+  if (!student) return res.status(404).json({ error: "Student not found" });
+  const password = randomFourDigitPassword();
+  const passwordHash = await bcrypt.hash(password, 10);
+  await prisma.user.update({
+    where: { id: student.userId },
+    data: { passwordHash },
+  });
+  res.json({
+    password,
+    student: {
+      id: student.id,
+      fullName: student.fullName,
+      username: student.user.studentLoginId,
+    },
+  });
+});
+
+router.delete("/students/:studentId", async (req, res) => {
+  const studentId = req.params.studentId;
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) return res.status(404).json({ error: "Student not found" });
+  await prisma.user.delete({ where: { id: student.userId } });
+  res.json({ ok: true });
+});
+
+// --- Users: students / teachers (single create) ---
 
 const studentCreateSchema = z.object({
   studentLoginId: z.string(),
@@ -330,7 +477,6 @@ const studentCreateSchema = z.object({
 router.post("/students", async (req, res) => {
   const p = studentCreateSchema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
-  const bcrypt = await import("bcryptjs");
   const passwordHash = await bcrypt.hash(p.data.password, 10);
   const user = await prisma.user.create({
     data: {
@@ -358,7 +504,6 @@ router.post("/teachers", async (req, res) => {
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
-  const bcrypt = await import("bcryptjs");
   const passwordHash = await bcrypt.hash(p.data.password, 10);
   const user = await prisma.user.create({
     data: {

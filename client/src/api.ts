@@ -31,6 +31,22 @@ export async function api<T = unknown>(
   } catch {
     data = undefined;
   }
-  const err = !res.ok ? (data as { error?: string })?.error ?? res.statusText : undefined;
+  const err = !res.ok ? formatApiError(data, res.statusText) : undefined;
   return { ok: res.ok, data, error: err, status: res.status };
+}
+
+function formatApiError(data: unknown, fallback: string): string {
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    if (typeof d.error === "string" && d.error) return d.error;
+    const form = d.formErrors;
+    if (Array.isArray(form) && form.length) return String(form[0]);
+    const field = d.fieldErrors;
+    if (field && typeof field === "object") {
+      for (const v of Object.values(field as Record<string, unknown>)) {
+        if (Array.isArray(v) && v[0]) return String(v[0]);
+      }
+    }
+  }
+  return fallback;
 }

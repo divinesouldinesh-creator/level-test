@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 
-type NavItem = { to: string; label: string };
+type NavItem = { to: string; label: string; end?: boolean };
 
 export function AppShell({
   title,
@@ -55,7 +55,13 @@ export function AppShell({
         </div>
         <nav className="p-3 flex-1 space-y-1 overflow-y-auto">
           {nav.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === "/"} className={linkClass} onClick={() => setOpen(false)}>
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end ?? item.to === "/"}
+              className={linkClass}
+              onClick={() => setOpen(false)}
+            >
               {item.label}
             </NavLink>
           ))}

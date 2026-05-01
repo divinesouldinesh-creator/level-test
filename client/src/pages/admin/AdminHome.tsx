@@ -9,8 +9,6 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "../../api";
-import { useAuth } from "../../auth";
-import { AppShell } from "../../components/AppShell";
 
 type Summary = {
   weakestTopics: { name?: string; subject?: string; avgPercentage: number }[];
@@ -19,8 +17,7 @@ type Summary = {
   studentCount: number;
 };
 
-export function AdminDashboard() {
-  const { logout, auth } = useAuth();
+export function AdminHome() {
   const [data, setData] = useState<Summary | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -39,11 +36,7 @@ export function AdminDashboard() {
     })) ?? [];
 
   return (
-    <AppShell
-      title={auth.profile?.fullName ?? "Admin"}
-      onLogout={logout}
-      nav={[{ to: "/admin", label: "Dashboard" }]}
-    >
+    <>
       <h1 className="text-2xl font-bold text-slate-900">Admin dashboard</h1>
       <p className="text-slate-600 mt-1">School-wide topic performance (aggregated).</p>
       {err && <p className="text-red-600 mt-4">{err}</p>}
@@ -53,7 +46,7 @@ export function AdminDashboard() {
             Students: <strong>{data.studentCount}</strong>
           </p>
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
-            <div className="rounded-xl border bg-white p-4 shadow-sm overflow-x-auto">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm overflow-x-auto">
               <h2 className="font-semibold mb-2">Weakest topics</h2>
               <div className="h-56 min-w-[260px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -67,7 +60,7 @@ export function AdminDashboard() {
                 </ResponsiveContainer>
               </div>
             </div>
-            <div className="rounded-xl border bg-white p-4 shadow-sm">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="font-semibold mb-2">Class sizes</h2>
               <ul className="divide-y divide-slate-100">
                 {data.classSizes.map((c) => (
@@ -79,7 +72,7 @@ export function AdminDashboard() {
               </ul>
             </div>
           </div>
-          <div className="mt-6 rounded-xl border bg-white overflow-x-auto shadow-sm">
+          <div className="mt-6 rounded-xl border border-slate-200 bg-white overflow-x-auto shadow-sm">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50">
                 <tr>
@@ -101,6 +94,6 @@ export function AdminDashboard() {
           </div>
         </>
       )}
-    </AppShell>
+    </>
   );
 }
