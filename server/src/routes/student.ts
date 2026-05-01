@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
@@ -253,78 +254,82 @@ const submitSchema = z.object({
 });
 
 router.post("/tests/:testId/submit", async (req, res) => {
-  const parsed = submitSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
+  try {
+    const parsed = submitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
 
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: true },
-  });
-  if (!user?.student) {
-    res.status(400).json({ error: "Not a student" });
-    return;
-  }
-  const studentRecordId = user.student.id;
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      include: { student: true },
+    });
+    if (!user?.student) {
+      res.status(400).json({ error: "Not a student" });
+      return;
+    }
+    const studentRecordId = user.student.id;
 
-  const test = await prisma.test.findFirst({
-    where: { id: req.params.testId, studentId: studentRecordId, status: "IN_PROGRESS" },
-    include: {
-      testQuestions: { include: { question: true } },
-      subject: true,
-      level: true,
-    },
-  });
-
-  if (!test) {
-    res.status(404).json({ error: "Test not found or already submitted" });
-    return;
-  }
-
-  const answerByQ = new Map(parsed.data.answers.map((a) => [a.questionId, a.selectedOption]));
-  const expectedIds = new Set(test.testQuestions.map((tq) => tq.questionId));
-  if (answerByQ.size !== expectedIds.size || [...expectedIds].some((id) => !answerByQ.has(id))) {
-    res.status(400).json({ error: "Answer every question" });
-    return;
-  }
-
-  let score = 0;
-  const maxScore = test.testQuestions.length;
-  const topicScores = new Map<string, { correct: number; total: number }>();
-
-  for (const tq of test.testQuestions) {
-    const q = tq.question;
-    const sel = answerByQ.get(q.id)!;
-    const isCorrect = sel === q.correctOption;
-    if (isCorrect) score += 1;
-    const cur = topicScores.get(q.topicId) ?? { correct: 0, total: 0 };
-    cur.total += 1;
-    if (isCorrect) cur.correct += 1;
-    topicScores.set(q.topicId, cur);
-  }
-
-  const percentage = maxScore ? (100 * score) / maxScore : 0;
-  const band = bandFromPercentage(percentage);
-
-  const levels = await prisma.level.findMany({
-    where: { subjectId: test.subjectId },
-    orderBy: { order: "asc" },
-  });
-  const currentIdx = levels.findIndex((l) => l.id === test.levelId);
-  let suggestedNextLevelId: string | null = null;
-  if (percentage > 80 && currentIdx >= 0 && currentIdx < levels.length - 1) {
-    suggestedNextLevelId = levels[currentIdx + 1].id;
-  }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.test.update({
-      where: { id: test.id },
-      data: { status: "COMPLETED", completedAt: new Date() },
+    const test = await prisma.test.findFirst({
+      where: { id: req.params.testId, studentId: studentRecordId, status: "IN_PROGRESS" },
+      include: {
+        testQuestions: { include: { question: true } },
+        subject: true,
+        level: true,
+      },
     });
 
-    const attempt = await tx.testAttempt.create({
+    if (!test) {
+      res.status(404).json({ error: "Test not found or already submitted" });
+      return;
+    }
+
+    const answerByQ = new Map(parsed.data.answers.map((a) => [a.questionId, a.selectedOption]));
+    const expectedIds = new Set(test.testQuestions.map((tq) => tq.questionId));
+    if (answerByQ.size !== expectedIds.size || [...expectedIds].some((id) => !answerByQ.has(id))) {
+      res.status(400).json({ error: "Answer every question" });
+      return;
+    }
+
+    let score = 0;
+    const maxScore = test.testQuestions.length;
+    const topicScores = new Map<string, { correct: number; total: number }>();
+
+    for (const tq of test.testQuestions) {
+      const q = tq.question;
+      const sel = answerByQ.get(q.id)!;
+      const isCorrect = sel === q.correctOption;
+      if (isCorrect) score += 1;
+      const cur = topicScores.get(q.topicId) ?? { correct: 0, total: 0 };
+      cur.total += 1;
+      if (isCorrect) cur.correct += 1;
+      topicScores.set(q.topicId, cur);
+    }
+
+    const percentage = maxScore ? (100 * score) / maxScore : 0;
+    const band = bandFromPercentage(percentage);
+
+    const levels = await prisma.level.findMany({
+      where: { subjectId: test.subjectId },
+      orderBy: { order: "asc" },
+    });
+    const currentIdx = levels.findIndex((l) => l.id === test.levelId);
+    let suggestedNextLevelId: string | null = null;
+    if (percentage > 80 && currentIdx >= 0 && currentIdx < levels.length - 1) {
+      suggestedNextLevelId = levels[currentIdx + 1].id;
+    }
+
+    const markedCompleted = await prisma.test.updateMany({
+      where: { id: test.id, status: "IN_PROGRESS" },
+      data: { status: "COMPLETED", completedAt: new Date() },
+    });
+    if (markedCompleted.count === 0) {
+      res.status(409).json({ error: "Test already submitted" });
+      return;
+    }
+
+    await prisma.testAttempt.create({
       data: {
         testId: test.id,
         score,
@@ -332,24 +337,21 @@ router.post("/tests/:testId/submit", async (req, res) => {
         percentage,
         band,
         suggestedNextLevelId,
+        studentAnswers: {
+          create: test.testQuestions.map((tq) => {
+            const q = tq.question;
+            const sel = answerByQ.get(q.id)!;
+            return {
+              questionId: q.id,
+              selectedOption: sel,
+              isCorrect: sel === q.correctOption,
+            };
+          }),
+        },
       },
     });
 
-    for (const tq of test.testQuestions) {
-      const q = tq.question;
-      const sel = answerByQ.get(q.id)!;
-      const isCorrect = sel === q.correctOption;
-      await tx.studentAnswer.create({
-        data: {
-          testAttemptId: attempt.id,
-          questionId: q.id,
-          selectedOption: sel,
-          isCorrect,
-        },
-      });
-    }
-
-    await applyAttemptResults(tx, {
+    await applyAttemptResults(prisma, {
       studentId: studentRecordId,
       subjectId: test.subjectId,
       levelId: test.levelId,
@@ -357,34 +359,41 @@ router.post("/tests/:testId/submit", async (req, res) => {
       percentage,
       topicScores,
     });
-  });
 
-  const topicWise = await Promise.all(
-    [...topicScores.entries()].map(async ([topicId, v]) => {
-      const topic = await prisma.topic.findUnique({ where: { id: topicId } });
-      return {
-        topicId,
-        topicName: topic?.name ?? topicId,
-        correct: v.correct,
-        total: v.total,
-        percentage: v.total ? Math.round((100 * v.correct) / v.total) : 0,
-      };
-    })
-  );
+    const topicWise = await Promise.all(
+      [...topicScores.entries()].map(async ([topicId, v]) => {
+        const topic = await prisma.topic.findUnique({ where: { id: topicId } });
+        return {
+          topicId,
+          topicName: topic?.name ?? topicId,
+          correct: v.correct,
+          total: v.total,
+          percentage: v.total ? Math.round((100 * v.correct) / v.total) : 0,
+        };
+      })
+    );
 
-  const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
-  const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);
+    const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
+    const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);
 
-  res.json({
-    score,
-    maxScore,
-    percentage: Math.round(percentage * 10) / 10,
-    band,
-    suggestedNextLevelId,
-    topicWise,
-    strongTopics,
-    weakTopics,
-  });
+    res.json({
+      score,
+      maxScore,
+      percentage: Math.round(percentage * 10) / 10,
+      band,
+      suggestedNextLevelId,
+      topicWise,
+      strongTopics,
+      weakTopics,
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      res.status(409).json({ error: "Test already submitted" });
+      return;
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to submit test" });
+  }
 });
 
 export default router;
