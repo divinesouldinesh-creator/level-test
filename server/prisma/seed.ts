@@ -1,10 +1,38 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import fs from "fs";
+import path from "path";
 import { questionContentHash } from "../src/utils/questionHash.js";
 
 const prisma = new PrismaClient();
 
 type Q = [string, string, string, string, string, number];
+
+function loadDraftBank(filename: string): Q[] {
+  const filePath = path.resolve(process.cwd(), "prisma", "question-drafts", filename);
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("Topic:") && !l.startsWith("Level:"));
+
+  const out: Q[] = [];
+  for (let i = 0; i < lines.length; ) {
+    const stem = lines[i++];
+    const optionsLine = lines[i++] ?? "";
+    const ansLine = lines[i++] ?? "";
+
+    const optionsMatch = optionsLine.match(/^A\)\s*(.*?)\s+B\)\s*(.*?)\s+C\)\s*(.*?)\s+D\)\s*(.*)$/);
+    const answerMatch = ansLine.match(/^Ans:\s*([ABCD])\)\s*(.*)$/i);
+    if (!optionsMatch || !answerMatch) continue;
+
+    const [, optionA, optionB, optionC, optionD] = optionsMatch;
+    const answerLetter = answerMatch[1].toUpperCase();
+    const correctOption = { A: 0, B: 1, C: 2, D: 3 }[answerLetter as "A" | "B" | "C" | "D"];
+    out.push([stem, optionA, optionB, optionC, optionD, correctOption]);
+  }
+  return out;
+}
 
 async function ensureStudent(params: {
   loginId: string;
@@ -166,6 +194,95 @@ async function main() {
     update: {},
     create: { classId: class7.id, subjectId: basicMathSubject.id },
   });
+
+  const class12 = await prisma.schoolClass.upsert({
+    where: { id: "seed-class-12" },
+    update: { name: "Class 12", grade: "12" },
+    create: { id: "seed-class-12", name: "Class 12", grade: "12" },
+  });
+  const sec12A = await prisma.section.upsert({
+    where: { id: "seed-sec-12a" },
+    update: { name: "A", classId: class12.id },
+    create: { id: "seed-sec-12a", classId: class12.id, name: "A" },
+  });
+  await prisma.classSubject.upsert({
+    where: { classId_subjectId: { classId: class12.id, subjectId: basicMathSubject.id } },
+    update: {},
+    create: { classId: class12.id, subjectId: basicMathSubject.id },
+  });
+
+  const class8 = await prisma.schoolClass.upsert({
+    where: { id: "seed-class-8" },
+    update: { name: "Class 8", grade: "8" },
+    create: { id: "seed-class-8", name: "Class 8", grade: "8" },
+  });
+  await prisma.section.upsert({
+    where: { id: "seed-sec-8a" },
+    update: { name: "A", classId: class8.id },
+    create: { id: "seed-sec-8a", classId: class8.id, name: "A" },
+  });
+  await prisma.classSubject.upsert({
+    where: { classId_subjectId: { classId: class8.id, subjectId: basicMathSubject.id } },
+    update: {},
+    create: { classId: class8.id, subjectId: basicMathSubject.id },
+  });
+
+  const class9 = await prisma.schoolClass.upsert({
+    where: { id: "seed-class-9" },
+    update: { name: "Class 9", grade: "9" },
+    create: { id: "seed-class-9", name: "Class 9", grade: "9" },
+  });
+  await prisma.section.upsert({
+    where: { id: "seed-sec-9a" },
+    update: { name: "A", classId: class9.id },
+    create: { id: "seed-sec-9a", classId: class9.id, name: "A" },
+  });
+  await prisma.classSubject.upsert({
+    where: { classId_subjectId: { classId: class9.id, subjectId: basicMathSubject.id } },
+    update: {},
+    create: { classId: class9.id, subjectId: basicMathSubject.id },
+  });
+
+  const class10 = await prisma.schoolClass.upsert({
+    where: { id: "seed-class-10" },
+    update: { name: "Class 10", grade: "10" },
+    create: { id: "seed-class-10", name: "Class 10", grade: "10" },
+  });
+  await prisma.section.upsert({
+    where: { id: "seed-sec-10a" },
+    update: { name: "A", classId: class10.id },
+    create: { id: "seed-sec-10a", classId: class10.id, name: "A" },
+  });
+  await prisma.classSubject.upsert({
+    where: { classId_subjectId: { classId: class10.id, subjectId: basicMathSubject.id } },
+    update: {},
+    create: { classId: class10.id, subjectId: basicMathSubject.id },
+  });
+
+  const class11 = await prisma.schoolClass.upsert({
+    where: { id: "seed-class-11" },
+    update: { name: "Class 11", grade: "11" },
+    create: { id: "seed-class-11", name: "Class 11", grade: "11" },
+  });
+  await prisma.section.upsert({
+    where: { id: "seed-sec-11a" },
+    update: { name: "A", classId: class11.id },
+    create: { id: "seed-sec-11a", classId: class11.id, name: "A" },
+  });
+  await prisma.classSubject.upsert({
+    where: { classId_subjectId: { classId: class11.id, subjectId: basicMathSubject.id } },
+    update: {},
+    create: { classId: class11.id, subjectId: basicMathSubject.id },
+  });
+
+  // Keep Basic Mathematics only where explicitly needed; remove from classes 8-12.
+  await prisma.classSubject.deleteMany({
+    where: {
+      subjectId: basicMathSubject.id,
+      classId: { in: [class11.id, class12.id] },
+    },
+  });
+
   await prisma.level.updateMany({
     where: { id: legacyBasicMathLevel0Id },
     data: { subjectId: subject.id },
@@ -334,6 +451,87 @@ async function main() {
     });
   }
 
+  const class12Students: { loginId: string; fullName: string }[] = [
+    { loginId: "C12001", fullName: "Class 12 Demo Student" },
+    { loginId: "C12002", fullName: "Class 12 Demo Two" },
+  ];
+  const allowedLoginIdsClass12 = new Set(class12Students.map((s) => s.loginId));
+  const existingClass12 = await prisma.student.findMany({
+    where: { classId: class12.id },
+    include: { user: true },
+  });
+  for (const row of existingClass12) {
+    const loginId = row.user.studentLoginId ?? "";
+    if (!allowedLoginIdsClass12.has(loginId)) {
+      await prisma.user.delete({ where: { id: row.userId } });
+    }
+  }
+  for (const s of class12Students) {
+    await ensureStudent({
+      loginId: s.loginId,
+      fullName: s.fullName,
+      classId: class12.id,
+      sectionId: sec12A.id,
+      passwordHash,
+    });
+  }
+
+  const class8Students: { loginId: string; fullName: string }[] = [
+    { loginId: "C8001", fullName: "Class 8 Demo Student" },
+    { loginId: "C8002", fullName: "Class 8 Demo Two" },
+  ];
+  for (const s of class8Students) {
+    await ensureStudent({
+      loginId: s.loginId,
+      fullName: s.fullName,
+      classId: class8.id,
+      sectionId: "seed-sec-8a",
+      passwordHash,
+    });
+  }
+
+  const class9Students: { loginId: string; fullName: string }[] = [
+    { loginId: "C9001", fullName: "Class 9 Demo Student" },
+    { loginId: "C9002", fullName: "Class 9 Demo Two" },
+  ];
+  for (const s of class9Students) {
+    await ensureStudent({
+      loginId: s.loginId,
+      fullName: s.fullName,
+      classId: class9.id,
+      sectionId: "seed-sec-9a",
+      passwordHash,
+    });
+  }
+
+  const class10Students: { loginId: string; fullName: string }[] = [
+    { loginId: "C10001", fullName: "Class 10 Demo Student" },
+    { loginId: "C10002", fullName: "Class 10 Demo Two" },
+  ];
+  for (const s of class10Students) {
+    await ensureStudent({
+      loginId: s.loginId,
+      fullName: s.fullName,
+      classId: class10.id,
+      sectionId: "seed-sec-10a",
+      passwordHash,
+    });
+  }
+
+  const class11Students: { loginId: string; fullName: string }[] = [
+    { loginId: "C11001", fullName: "Class 11 Demo Student" },
+    { loginId: "C11002", fullName: "Class 11 Demo Two" },
+  ];
+  for (const s of class11Students) {
+    await ensureStudent({
+      loginId: s.loginId,
+      fullName: s.fullName,
+      classId: class11.id,
+      sectionId: "seed-sec-11a",
+      passwordHash,
+    });
+  }
+
   // Cleanup old multi-section seed data to keep a single section setup.
   await prisma.section.deleteMany({ where: { id: { in: ["seed-sec-6b"] } } });
   await prisma.schoolClass.deleteMany({ where: { id: { in: ["seed-class-6a", "seed-class-6b"] } } });
@@ -378,11 +576,55 @@ async function main() {
     { id: "seed-c7-l0-div-double", name: "Double Digit Division" },
     { id: "seed-c7-l0-bodmas", name: "Mixed Operation (BODMAS)" },
   ];
+  const topicDefsClass8L0 = [
+    { id: "seed-c8-l0-table-recall", name: "Table Recall" },
+    { id: "seed-c8-l0-addition", name: "Addition" },
+    { id: "seed-c8-l0-subtraction", name: "Subtraction" },
+    { id: "seed-c8-l0-mul-single", name: "Single Digit Multiplication" },
+    { id: "seed-c8-l0-mul-double", name: "Double Digit Multiplication" },
+    { id: "seed-c8-l0-div-simple", name: "Simple Division" },
+    { id: "seed-c8-l0-div-double", name: "Double Digit Division" },
+    { id: "seed-c8-l0-bodmas", name: "Mixed Operation (BODMAS)" },
+  ];
+  const topicDefsClass9L0 = [
+    { id: "seed-c9-l0-table-recall", name: "Table Recall" },
+    { id: "seed-c9-l0-addition", name: "Addition" },
+    { id: "seed-c9-l0-subtraction", name: "Subtraction" },
+    { id: "seed-c9-l0-mul-single", name: "Single Digit Multiplication" },
+    { id: "seed-c9-l0-mul-double", name: "Double Digit Multiplication" },
+    { id: "seed-c9-l0-div-simple", name: "Simple Division" },
+    { id: "seed-c9-l0-div-double", name: "Double Digit Division" },
+    { id: "seed-c9-l0-bodmas", name: "Mixed Operation (BODMAS)" },
+  ];
+  const topicDefsClass10L0 = [
+    { id: "seed-c10-l0-table-recall", name: "Table Recall" },
+    { id: "seed-c10-l0-addition", name: "Addition" },
+    { id: "seed-c10-l0-subtraction", name: "Subtraction" },
+    { id: "seed-c10-l0-mul-single", name: "Single Digit Multiplication" },
+    { id: "seed-c10-l0-mul-double", name: "Double Digit Multiplication" },
+    { id: "seed-c10-l0-div-simple", name: "Simple Division" },
+    { id: "seed-c10-l0-div-double", name: "Double Digit Division" },
+    { id: "seed-c10-l0-bodmas", name: "Mixed Operation (BODMAS)" },
+  ];
+  const topicDefsClass12L0 = [
+    { id: "seed-c12-l0-table-recall", name: "Table Recall" },
+    { id: "seed-c12-l0-addition", name: "Addition" },
+    { id: "seed-c12-l0-subtraction", name: "Subtraction" },
+    { id: "seed-c12-l0-mul-single", name: "Single Digit Multiplication" },
+    { id: "seed-c12-l0-mul-double", name: "Double Digit Multiplication" },
+    { id: "seed-c12-l0-div-simple", name: "Simple Division" },
+    { id: "seed-c12-l0-div-double", name: "Double Digit Division" },
+    { id: "seed-c12-l0-bodmas", name: "Mixed Operation (BODMAS)" },
+  ];
   const allTopicDefs = [
     ...topicDefs.map((t) => ({ ...t, levelId: level0.id })),
     ...topicDefsL1.map((t) => ({ ...t, levelId: level1.id })),
     ...topicDefsL2.map((t) => ({ ...t, levelId: level2.id })),
     ...topicDefsClass7L0.map((t) => ({ ...t, levelId: level0.id })),
+    ...topicDefsClass8L0.map((t) => ({ ...t, levelId: level0.id })),
+    ...topicDefsClass9L0.map((t) => ({ ...t, levelId: level0.id })),
+    ...topicDefsClass10L0.map((t) => ({ ...t, levelId: level0.id })),
+    ...topicDefsClass12L0.map((t) => ({ ...t, levelId: level0.id })),
   ];
   for (const t of allTopicDefs) {
     await prisma.topic.upsert({
@@ -662,62 +904,14 @@ async function main() {
       ["450 − (15 × 12) = ______", "260", "270", "280", "290", 1],
       ["80 + (120 ÷ 6 × 2) = ______", "110", "120", "130", "140", 1],
     ],
-    "seed-l1-simplify": [
-      ["Simplify: 54/72 = ______", "2/3", "3/4", "4/5", "5/6", 0],
-      ["Simplify: 63/84 = ______", "2/3", "3/4", "4/5", "5/6", 1],
-      ["Simplify: 56/70 = ______", "2/3", "3/4", "4/5", "5/6", 2],
-      ["Simplify: 60/90 = ______", "1/2", "2/3", "3/4", "4/5", 1],
-      ["Simplify: 91/104 = ______", "5/6", "6/7", "7/8", "8/9", 2],
-    ],
-    "seed-l1-compare": [
-      ["Compare: 7/9 ___ 5/6", ">", "<", "=", "Cannot say", 1],
-      ["Compare: 11/12 ___ 7/8", ">", "<", "=", "Cannot say", 0],
-      ["Compare: 9/10 ___ 5/6", ">", "<", "=", "Cannot say", 0],
-      ["Compare: 9/16 ___ 5/9", ">", "<", "=", "Cannot say", 0],
-      ["Compare: 15/18 ___ 4/5", ">", "<", "=", "Cannot say", 0],
-    ],
-    "seed-l1-add": [
-      ["5/12 + 7/18 = ______", "29/36", "31/36", "33/36", "35/36", 0],
-      ["7/15 + 2/5 = ______", "11/15", "12/15", "13/15", "14/15", 2],
-      ["5/6 + 7/12 = ______", "15/12", "16/12", "17/12", "18/12", 2],
-      ["11/20 + 7/15 = ______", "59/60", "61/60", "63/60", "65/60", 1],
-      ["13/16 + 3/8 = ______", "17/16", "18/16", "19/16", "20/16", 2],
-    ],
-    "seed-l1-sub": [
-      ["7/8 − 1/4 = ______", "3/8", "4/8", "5/8", "6/8", 2],
-      ["5/6 − 1/3 = ______", "1/6", "2/6", "3/6", "4/6", 2],
-      ["13/16 − 1/8 = ______", "9/16", "10/16", "11/16", "12/16", 2],
-      ["17/20 − 3/10 = ______", "9/20", "10/20", "11/20", "12/20", 2],
-      ["13/15 − 1/3 = ______", "6/15", "7/15", "8/15", "9/15", 2],
-    ],
-    "seed-l1-recip": [
-      ["Write the reciprocal of 7/9 = ______", "9/7", "7/9", "1/7", "1/9", 0],
-      ["Write the reciprocal of 11/13 = ______", "11/13", "13/11", "1/11", "1/13", 1],
-      ["Write the reciprocal of 8/15 = ______", "15/8", "8/15", "1/8", "1/15", 0],
-      ["Write the reciprocal of 12/7 = ______", "7/12", "12/7", "1/12", "1/7", 0],
-      ["Write the reciprocal of 21/5 = ______", "5/21", "21/5", "1/21", "1/5", 0],
-    ],
-    "seed-l1-order": [
-      ["Arrange in ascending order: 3/4, 2/3, 5/6", "2/3, 3/4, 5/6", "3/4, 2/3, 5/6", "5/6, 3/4, 2/3", "2/3, 5/6, 3/4", 0],
-      ["Arrange in descending order: 5/8, 3/4, 2/3", "2/3, 5/8, 3/4", "5/8, 2/3, 3/4", "3/4, 2/3, 5/8", "3/4, 5/8, 2/3", 2],
-      ["Arrange in descending order: 11/12, 5/6, 3/4", "11/12, 5/6, 3/4", "3/4, 5/6, 11/12", "5/6, 3/4, 11/12", "3/4, 11/12, 5/6", 0],
-      ["Arrange in ascending order: 9/16, 2/3, 5/8", "9/16, 5/8, 2/3", "5/8, 9/16, 2/3", "2/3, 5/8, 9/16", "9/16, 2/3, 5/8", 0],
-      ["Arrange in descending order: 4/11, 3/5, 7/8", "4/11, 3/5, 7/8", "3/5, 4/11, 7/8", "7/8, 3/5, 4/11", "4/11, 7/8, 3/5", 2],
-    ],
-    "seed-l1-between": [
-      ["Write one fraction between 1/3 and 2/3 = ______", "1/4", "1/2", "3/4", "5/6", 1],
-      ["Write one fraction between 2/5 and 4/5 = ______", "1/2", "2/3", "5/6", "1", 1],
-      ["Write one fraction between 1/6 and 1/2 = ______", "1/3", "2/3", "3/4", "5/6", 0],
-      ["Write one fraction between 5/8 and 7/8 = ______", "3/4", "6/8", "7/10", "8/8", 1],
-      ["Write one fraction between 3/4 and 1 = ______", "4/5", "5/6", "7/8", "9/10", 2],
-    ],
-    "seed-l1-tf": [
-      ["True or False: 3/4 > 2/3", "True", "False", "Equal", "Cannot say", 0],
-      ["True or False: 7/10 > 4/5", "True", "False", "Equal", "Cannot say", 1],
-      ["True or False: 9/12 = 3/4", "True", "False", "Cannot say", "Equal only sometimes", 0],
-      ["True or False: 1/4 > 1/3", "True", "False", "Equal", "Cannot say", 1],
-      ["True or False: 7/9 < 8/9", "True", "False", "Equal", "Cannot say", 0],
-    ],
+    "seed-l1-simplify": loadDraftBank("level1-integer-addition-subtraction.txt"),
+    "seed-l1-compare": loadDraftBank("level1-integer-multiplication-division.txt"),
+    "seed-l1-add": loadDraftBank("level1-fraction-addition.txt"),
+    "seed-l1-sub": loadDraftBank("level1-fraction-multiplication.txt"),
+    "seed-l1-recip": loadDraftBank("level1-decimal-multiplication.txt"),
+    "seed-l1-order": loadDraftBank("level1-decimal-subtraction.txt"),
+    "seed-l1-between": loadDraftBank("level1-fraction-to-decimal-conversion.txt"),
+    "seed-l1-tf": loadDraftBank("level1-square-root.txt"),
     "seed-l2-add": [
       ["0.4 + 0.275 = ______", "0.575", "0.675", "0.775", "0.875", 1],
       ["0.8 + 0.125 = ______", "0.825", "0.925", "1.025", "1.125", 1],
@@ -776,7 +970,45 @@ async function main() {
     ],
   };
 
-  const mergedBank: Record<string, Q[]> = { ...questionBank, ...questionBankExtra };
+  const class12L0Suffixes = [
+    "table-recall",
+    "addition",
+    "subtraction",
+    "mul-single",
+    "mul-double",
+    "div-simple",
+    "div-double",
+    "bodmas",
+  ] as const;
+  const questionBankClass12: Record<string, Q[]> = {};
+  for (const s of class12L0Suffixes) {
+    const from = `seed-c7-l0-${s}` as keyof typeof questionBankExtra;
+    questionBankClass12[`seed-c12-l0-${s}`] = questionBankExtra[from];
+  }
+  const questionBankClass8: Record<string, Q[]> = {};
+  for (const s of class12L0Suffixes) {
+    const from = `seed-c7-l0-${s}` as keyof typeof questionBankExtra;
+    questionBankClass8[`seed-c8-l0-${s}`] = questionBankExtra[from];
+  }
+  const questionBankClass9: Record<string, Q[]> = {};
+  for (const s of class12L0Suffixes) {
+    const from = `seed-c7-l0-${s}` as keyof typeof questionBankExtra;
+    questionBankClass9[`seed-c9-l0-${s}`] = questionBankExtra[from];
+  }
+  const questionBankClass10: Record<string, Q[]> = {};
+  for (const s of class12L0Suffixes) {
+    const from = `seed-c7-l0-${s}` as keyof typeof questionBankExtra;
+    questionBankClass10[`seed-c10-l0-${s}`] = questionBankExtra[from];
+  }
+
+  const mergedBank: Record<string, Q[]> = {
+    ...questionBank,
+    ...questionBankExtra,
+    ...questionBankClass8,
+    ...questionBankClass9,
+    ...questionBankClass10,
+    ...questionBankClass12,
+  };
   for (const t of allTopicDefs) {
     const rows = mergedBank[t.id] ?? [];
     for (const [stem, a, b, c, d, correct] of rows) {
@@ -806,8 +1038,9 @@ async function main() {
     admin: "admin@school.local / password123",
     teacher: "teacher@school.local / password123",
     students: "STU001 and STU002 / password123",
+    class12Demo: "C12001 or C12002 / password123 (studentId login)",
     classMap:
-      "Class 6 (A) -> Basic Mathematics (Levels 0, 1, 2) and Class 7 (A) -> Basic Mathematics (Level 0) loaded",
+      "Class 6 (A) -> Basic Mathematics (Levels 0, 1, 2); Class 7 (A), Class 8 (A), Class 9 (A), Class 10 (A) and Class 12 (A) -> Basic Mathematics (Level 0) loaded",
   });
 }
 

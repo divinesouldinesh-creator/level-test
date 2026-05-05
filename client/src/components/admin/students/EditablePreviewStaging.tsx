@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CSVDownloadButton } from "./CSVDownloadButton";
 import { downloadCredentialsXlsx } from "./credentialExport";
 import type { StudentPreviewRow } from "./types";
@@ -30,11 +31,25 @@ export function EditablePreviewStaging({
   csvFilename,
   printTitle,
 }: Props) {
+  const [bulkPassword, setBulkPassword] = useState("");
+
   if (!rows.length) return null;
 
   function updateName(index: number, fullName: string) {
     const next = rows.map((r, i) => (i === index ? { ...r, fullName } : r));
     onRowsChange(next);
+  }
+
+  function updatePassword(index: number, password: string) {
+    const next = rows.map((r, i) => (i === index ? { ...r, password } : r));
+    onRowsChange(next);
+  }
+
+  function applyBulkPassword() {
+    const value = bulkPassword.trim();
+    if (value.length < 4 || value.length > 32) return;
+    onRowsChange(rows.map((r) => ({ ...r, password: value })));
+    setBulkPassword("");
   }
 
   function printAll() {
@@ -51,17 +66,44 @@ export function EditablePreviewStaging({
   }
 
   const emptyNames = rows.some((r) => !r.fullName.trim());
+  const invalidPasswords = rows.some((r) => r.password.trim().length < 4 || r.password.trim().length > 32);
 
   return (
     <div className="mt-6 space-y-4">
       <h3 className="text-sm font-semibold text-slate-800">Preview (not saved yet)</h3>
       <p className="text-sm text-slate-600">
         Edit the <strong>Name</strong> column so login cards and the student home screen show the correct name. Usernames
-        and passwords stay the same.
+        stay the same. You can also change passwords before saving.
       </p>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p className="text-sm font-medium text-slate-800">Reset password for all generated students</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={bulkPassword}
+            onChange={(e) => setBulkPassword(e.target.value)}
+            className="w-full max-w-xs rounded-md border border-slate-200 bg-white px-3 py-2 text-sm min-h-[40px]"
+            placeholder="Enter one password for all (4-32 chars)"
+            aria-label="Set one password for all students"
+          />
+          <button
+            type="button"
+            disabled={busy || bulkPassword.trim().length < 4 || bulkPassword.trim().length > 32}
+            onClick={applyBulkPassword}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium min-h-[40px] hover:bg-slate-100 disabled:opacity-50"
+          >
+            Apply to all
+          </button>
+        </div>
+      </div>
       {emptyNames && (
         <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           Some names are empty. Fill every name before saving, or printing may show a placeholder.
+        </p>
+      )}
+      {invalidPasswords && (
+        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Some passwords are invalid. Each password must be between 4 and 32 characters.
         </p>
       )}
       <PrintCardsPreview
@@ -96,7 +138,16 @@ export function EditablePreviewStaging({
                   />
                 </td>
                 <td className="p-2 font-mono text-xs align-middle">{r.studentLoginId}</td>
-                <td className="p-2 font-mono align-middle">{r.password}</td>
+                <td className="p-2 align-middle">
+                  <input
+                    type="text"
+                    value={r.password}
+                    onChange={(e) => updatePassword(index, e.target.value)}
+                    className="w-full min-w-[140px] rounded-md border border-slate-200 px-2 py-2 text-sm min-h-[40px] font-mono"
+                    placeholder="Password"
+                    aria-label={`Password for ${r.studentLoginId}`}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -109,7 +160,7 @@ export function EditablePreviewStaging({
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || invalidPasswords}
           onClick={() => onSave(rows)}
           className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 min-h-[44px]"
         >

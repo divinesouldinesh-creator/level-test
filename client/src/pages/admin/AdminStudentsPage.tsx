@@ -16,6 +16,7 @@ type SchoolClassMeta = {
 };
 
 type Toast = { type: "ok" | "err"; message: string };
+type ResetDialog = { studentId: string; studentName: string; password: string };
 
 export function AdminStudentsPage() {
   const [tab, setTab] = useState<AdminStudentTabId>("generate");
@@ -31,6 +32,9 @@ export function AdminStudentsPage() {
   const [filterClassId, setFilterClassId] = useState("");
   const [filterSectionId, setFilterSectionId] = useState("");
   const [passwordHints, setPasswordHints] = useState<Record<string, string>>({});
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
+  const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [confirm, setConfirm] = useState<{
     message: string;
@@ -98,6 +102,11 @@ export function AdminStudentsPage() {
     }
   }, [filterClassId, filterSectionId, filterSectionOptions]);
 
+  useEffect(() => {
+    const visibleIds = new Set(allStudents.map((s) => s.id));
+    setSelectedStudentIds((prev) => prev.filter((id) => visibleIds.has(id)));
+  }, [allStudents]);
+
   async function saveRows(rows: StudentPreviewRow[]) {
     if (!rows.length) return;
     const trimmed = rows.map((r) => ({ ...r, fullName: r.fullName.trim() }));
@@ -150,11 +159,28 @@ export function AdminStudentsPage() {
     );
   }
 
-  async function resetPassword(studentId: string) {
-    if (!window.confirm("Issue a new 4-digit password for this student?")) return;
+  function resetPassword(studentId: string) {
+    const student = allStudents.find((s) => s.id === studentId);
+    setShowResetPassword(false);
+    setResetDialog({
+      studentId,
+      studentName: student?.fullName ?? "this student",
+      password: "",
+    });
+  }
+
+  async function submitResetPassword() {
+    if (!resetDialog) return;
+    const password = resetDialog.password.trim();
+    if (password.length < 4) {
+      showToast({ type: "err", message: "Password must be at least 4 characters." });
+      return;
+    }
+    const studentId = resetDialog.studentId;
     setBusyId(studentId);
     const r = await api<{ password: string }>(`/api/v1/admin/students/${studentId}/reset-password`, {
       method: "PATCH",
+      json: { password },
     });
     setBusyId(null);
     if (!r.ok) {
@@ -164,8 +190,10 @@ export function AdminStudentsPage() {
     const pwd = r.data?.password;
     if (pwd) {
       setPasswordHints((prev) => ({ ...prev, [studentId]: pwd }));
-      showToast({ type: "ok", message: `New password: ${pwd} (shown once — print now if needed)` });
+      showToast({ type: "ok", message: `Password updated: ${pwd} (shown once — print now if needed)` });
     }
+    setShowResetPassword(false);
+    setResetDialog(null);
   }
 
   async function deleteStudent(studentId: string) {
@@ -184,6 +212,61 @@ export function AdminStudentsPage() {
       return next;
     });
     await loadStudents();
+  }
+
+  function toggleStudentSelection(studentId: string, checked: boolean) {
+    setSelectedStudentIds((prev) => {
+      if (checked) {
+        if (prev.includes(studentId)) return prev;
+        return [...prev, studentId];
+      }
+      return prev.filter((id) => id !== studentId);
+    });
+  }
+
+  function toggleAllVisibleSelection(checked: boolean) {
+    const visibleIds = allStudents.map((s) => s.id);
+    setSelectedStudentIds((prev) => {
+      if (checked) {
+        return [...new Set([...prev, ...visibleIds])];
+      }
+      const visibleSet = new Set(visibleIds);
+      return prev.filter((id) => !visibleSet.has(id));
+    });
+  }
+
+  function deleteSelectedStudents() {
+    if (selectedStudentIds.length === 0) return;
+    setConfirm({
+      message: `Delete ${selectedStudentIds.length} selected student account(s) permanently? This cannot be undone.`,
+      onConfirm: async () => {
+        setConfirm(null);
+        setBusy(true);
+        const ids = [...selectedStudentIds];
+        const r = await api<{ requested: number; deleted: number; notFoundIds: string[] }>("/api/v1/admin/students", {
+          method: "DELETE",
+          json: { studentIds: ids },
+        });
+        setBusy(false);
+        if (!r.ok) {
+          showToast({ type: "err", message: r.error ?? "Bulk delete failed" });
+          return;
+        }
+        const deleted = r.data?.deleted ?? 0;
+        const missing = r.data?.notFoundIds?.length ?? 0;
+        showToast({
+          type: "ok",
+          message: `Deleted ${deleted} student(s).${missing ? ` ${missing} already missing.` : ""}`,
+        });
+        setSelectedStudentIds([]);
+        setPasswordHints((prev) => {
+          const next = { ...prev };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+        await loadStudents();
+      },
+    });
   }
 
   return (
@@ -252,6 +335,11 @@ export function AdminStudentsPage() {
           classOptions={filterClassOptions}
           sectionOptions={filterSectionOptions}
           busyId={busyId}
+          bulkBusy={busy}
+          selectedIds={selectedStudentIds}
+          onToggleRow={toggleStudentSelection}
+          onToggleAllVisible={toggleAllVisibleSelection}
+          onDeleteSelected={deleteSelectedStudents}
           onResetPassword={(id) => void resetPassword(id)}
           onDelete={(id) => void deleteStudent(id)}
           onPrintClass={() => printFilteredClass()}
@@ -289,6 +377,58 @@ export function AdminStudentsPage() {
                 onClick={() => confirm.onConfirm()}
               >
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resetDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-900">Set password</h3>
+            <p className="mt-2 text-sm text-slate-700">
+              Set a new password for <span className="font-medium">{resetDialog.studentName}</span>.
+            </p>
+            <label className="mt-4 block text-sm font-medium text-slate-700">
+              New password
+              <input
+                type={showResetPassword ? "text" : "password"}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 min-h-[44px]"
+                value={resetDialog.password}
+                onChange={(e) =>
+                  setResetDialog((prev) => (prev ? { ...prev, password: e.target.value } : prev))
+                }
+                placeholder="Enter at least 4 characters"
+                autoFocus
+              />
+            </label>
+            <button
+              type="button"
+              className="mt-2 text-xs font-medium text-slate-600 hover:text-slate-900"
+              onClick={() => setShowResetPassword((v) => !v)}
+            >
+              {showResetPassword ? "Hide password" : "Show password"}
+            </button>
+            <p className="mt-2 text-xs text-slate-500">Minimum 4 characters.</p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium min-h-[44px]"
+                onClick={() => {
+                  setShowResetPassword(false);
+                  setResetDialog(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busyId === resetDialog.studentId || resetDialog.password.trim().length < 4}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white min-h-[44px] disabled:opacity-50"
+                onClick={() => void submitResetPassword()}
+              >
+                Save password
               </button>
             </div>
           </div>

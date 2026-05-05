@@ -7,6 +7,7 @@ import { StudentLevels } from "./pages/student/StudentLevels";
 import { StudentTest } from "./pages/student/StudentTest";
 import { AdminHome } from "./pages/admin/AdminHome";
 import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
+import { AdminCurriculumPage } from "./pages/admin/AdminCurriculumPage";
 import { TeacherDashboard } from "./pages/teacher/TeacherDashboard";
 
 function Guard({
@@ -75,6 +76,7 @@ function AppRoutes() {
         }
       >
         <Route index element={<AdminHome />} />
+        <Route path="curriculum" element={<AdminCurriculumPage />} />
         <Route path="students" element={<AdminStudentsPage />} />
       </Route>
       <Route path="/" element={<Navigate to="/login" replace />} />

@@ -10,6 +10,7 @@ export function AdminLayout() {
       onLogout={logout}
       nav={[
         { to: "/admin", label: "Dashboard", end: true },
+        { to: "/admin/curriculum", label: "Curriculum" },
         { to: "/admin/students", label: "Students" },
       ]}
     >

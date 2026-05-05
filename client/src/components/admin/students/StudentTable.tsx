@@ -12,6 +12,11 @@ export function StudentTable({
   classOptions,
   sectionOptions,
   busyId,
+  bulkBusy,
+  selectedIds,
+  onToggleRow,
+  onToggleAllVisible,
+  onDeleteSelected,
   onResetPassword,
   onDelete,
   onPrintClass,
@@ -25,10 +30,19 @@ export function StudentTable({
   classOptions: { id: string; label: string }[];
   sectionOptions: { id: string; label: string }[];
   busyId: string | null;
+  bulkBusy: boolean;
+  selectedIds: string[];
+  onToggleRow: (id: string, checked: boolean) => void;
+  onToggleAllVisible: (checked: boolean) => void;
+  onDeleteSelected: () => void;
   onResetPassword: (id: string) => void;
   onDelete: (id: string) => void;
   onPrintClass: () => void;
 }) {
+  const selectedSet = new Set(selectedIds);
+  const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedSet.has(row.id));
+  const someVisibleSelected = rows.some((row) => selectedSet.has(row.id));
+
   function rowToCard(row: StudentListRow) {
     return {
       name: row.fullName,
@@ -108,6 +122,14 @@ export function StudentTable({
           </label>
           <button
             type="button"
+            disabled={!selectedIds.length || bulkBusy}
+            onClick={onDeleteSelected}
+            className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-800 min-h-[44px] hover:bg-red-100 disabled:opacity-50"
+          >
+            Delete selected ({selectedIds.length})
+          </button>
+          <button
+            type="button"
             onClick={onPrintClass}
             className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium min-h-[44px] hover:bg-slate-50"
           >
@@ -139,6 +161,18 @@ export function StudentTable({
         <table className="min-w-full text-sm text-left">
           <thead className="bg-slate-50 text-slate-600">
             <tr>
+              <th className="p-3 font-medium">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-brand-600"
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected;
+                  }}
+                  onChange={(e) => onToggleAllVisible(e.target.checked)}
+                  aria-label="Select all visible students"
+                />
+              </th>
               <th className="p-3 font-medium">Name</th>
               <th className="p-3 font-medium">Class</th>
               <th className="p-3 font-medium">Section</th>
@@ -149,13 +183,22 @@ export function StudentTable({
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="p-6 text-center text-slate-500">
+                <td colSpan={6} className="p-6 text-center text-slate-500">
                   No students match the filters.
                 </td>
               </tr>
             ) : (
               rows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50/80">
+                  <td className="p-3">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-brand-600"
+                      checked={selectedSet.has(row.id)}
+                      onChange={(e) => onToggleRow(row.id, e.target.checked)}
+                      aria-label={`Select ${row.fullName}`}
+                    />
+                  </td>
                   <td className="p-3 font-medium text-slate-900">{row.fullName}</td>
                   <td className="p-3">{row.classLabel}</td>
                   <td className="p-3">{row.sectionName}</td>

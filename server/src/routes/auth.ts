@@ -12,13 +12,25 @@ const loginSchema = z.object({
   email: z.string().email().optional(),
 });
 
+function normalizeLoginInput(parsed: z.infer<typeof loginSchema>) {
+  const studentId = parsed.studentId?.trim() || undefined;
+  const email = parsed.email?.trim().toLowerCase() || undefined;
+  const password = parsed.password;
+  return { studentId, email, password };
+}
+
 router.post("/login", async (req, res) => {
+  const body = req.body as Record<string, unknown> | undefined;
+  if (body && typeof body === "object") {
+    if (typeof body.studentId === "string") body.studentId = body.studentId.trim();
+    if (typeof body.email === "string") body.email = body.email.trim();
+  }
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const { password, studentId, email } = parsed.data;
+  const { password, studentId, email } = normalizeLoginInput(parsed.data);
 
   let user = null;
   if (studentId) {
@@ -28,7 +40,7 @@ router.post("/login", async (req, res) => {
     });
   } else if (email) {
     user = await prisma.user.findFirst({
-      where: { email: email.toLowerCase() },
+      where: { email },
       include: { teacher: true, admin: true, student: true },
     });
   } else {

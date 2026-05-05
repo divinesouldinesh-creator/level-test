@@ -17,10 +17,13 @@ export function LoginPage() {
     e.preventDefault();
     setErr(null);
     setBusy(true);
+    const sid = studentId.trim();
+    const em = email.trim();
+    const pwd = password;
     const body =
       mode === "student"
-        ? { studentId, password }
-        : { email, password };
+        ? { studentId: sid, password: pwd }
+        : { email: em, password: pwd };
     const r = await api<{ token: string; user: { role: string } }>("/api/v1/auth/login", {
       method: "POST",
       json: body,
@@ -43,6 +46,12 @@ export function LoginPage() {
       <div className="w-full max-w-md rounded-2xl bg-white shadow-lg border border-slate-100 p-6 md:p-8">
         <h1 className="text-2xl font-bold text-brand-900 text-center">Level Test</h1>
         <p className="text-slate-600 text-center mt-2 text-sm">School assessment — find weak topics</p>
+
+        <p className="mt-4 text-xs text-slate-500 text-center leading-relaxed">
+          <strong className="text-slate-600">Students:</strong> use your printed student ID here (e.g.{" "}
+          <span className="font-mono">C12001</span>), not email. <strong className="text-slate-600">Teachers / admins:</strong>{" "}
+          switch to the other tab and sign in with your school email.
+        </p>
 
         <div className="flex gap-2 mt-6">
           <button

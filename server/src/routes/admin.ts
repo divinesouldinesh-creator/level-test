@@ -12,7 +12,6 @@ import {
   classLabelForDisplay,
   generateStudentRows,
   parseStudentSheetBuffer,
-  randomFourDigitPassword,
   saveStudentAccounts,
 } from "../services/studentAccounts.js";
 
@@ -121,9 +120,37 @@ router.post("/classes/:classId/subjects", async (req, res) => {
   res.json(cs);
 });
 
+router.delete("/classes/:classId/subjects/:subjectId", async (req, res) => {
+  const { classId, subjectId } = req.params;
+  try {
+    await prisma.classSubject.delete({
+      where: { classId_subjectId: { classId, subjectId } },
+    });
+  } catch {
+    return res.status(404).json({ error: "Class subject link not found" });
+  }
+  res.json({ ok: true });
+});
+
 // --- Subjects / levels / topics ---
 router.get("/subjects", async (_req, res) => {
-  res.json(await prisma.subject.findMany({ include: { levels: { orderBy: { order: "asc" } } } }));
+  const list = await prisma.subject.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      topics: { orderBy: [{ levelId: "asc" }, { name: "asc" }] },
+      levels: {
+        orderBy: { order: "asc" },
+        include: {
+          testConfig: true,
+          levelTopicParticipations: {
+            orderBy: { sortOrder: "asc" },
+            include: { topic: { select: { id: true, name: true } } },
+          },
+        },
+      },
+    },
+  });
+  res.json(list);
 });
 
 router.post("/subjects", async (req, res) => {
@@ -134,24 +161,70 @@ router.post("/subjects", async (req, res) => {
 });
 
 router.post("/subjects/:subjectId/levels", async (req, res) => {
-  const schema = z.object({ name: z.string(), order: z.number().int() });
+  const subjectId = req.params.subjectId;
+  const schema = z.object({
+    name: z.string(),
+    order: z.number().int().optional(),
+    questionCount: z.number().int().positive().optional(),
+  });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
+  const agg = await prisma.level.aggregate({
+    where: { subjectId },
+    _max: { order: true },
+  });
+  const order = p.data.order ?? (agg._max.order ?? -1) + 1;
   const lvl = await prisma.level.create({
-    data: { subjectId: req.params.subjectId, name: p.data.name, order: p.data.order },
+    data: { subjectId, name: p.data.name, order },
+  });
+  await prisma.levelTestConfig.create({
+    data: { levelId: lvl.id, questionCount: p.data.questionCount ?? 8 },
   });
   res.json(lvl);
 });
 
 router.post("/subjects/:subjectId/topics", async (req, res) => {
+  const subjectId = req.params.subjectId;
   const schema = z.object({ name: z.string(), levelId: z.string().optional() });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
+  if (p.data.levelId) {
+    const lvl = await prisma.level.findFirst({
+      where: { id: p.data.levelId, subjectId },
+    });
+    if (!lvl) return res.status(400).json({ error: "levelId must belong to this subject" });
+  }
   const t = await prisma.topic.create({
     data: {
-      subjectId: req.params.subjectId,
+      subjectId,
       name: p.data.name,
       levelId: p.data.levelId,
+    },
+  });
+  res.json(t);
+});
+
+router.patch("/topics/:topicId", async (req, res) => {
+  const topicId = req.params.topicId;
+  const schema = z.object({
+    name: z.string().optional(),
+    levelId: z.string().nullable().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const existing = await prisma.topic.findUnique({ where: { id: topicId } });
+  if (!existing) return res.status(404).json({ error: "Topic not found" });
+  if (p.data.levelId !== undefined && p.data.levelId !== null) {
+    const lvl = await prisma.level.findFirst({
+      where: { id: p.data.levelId, subjectId: existing.subjectId },
+    });
+    if (!lvl) return res.status(400).json({ error: "levelId must belong to the same subject" });
+  }
+  const t = await prisma.topic.update({
+    where: { id: topicId },
+    data: {
+      ...(p.data.name !== undefined ? { name: p.data.name } : {}),
+      ...(p.data.levelId !== undefined ? { levelId: p.data.levelId } : {}),
     },
   });
   res.json(t);
@@ -433,21 +506,26 @@ router.get("/students", async (req, res) => {
   });
 });
 
+const resetPasswordSchema = z.object({
+  password: z.string().min(4).max(32),
+});
+
 router.patch("/students/:studentId/reset-password", async (req, res) => {
+  const p = resetPasswordSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
   const studentId = req.params.studentId;
   const student = await prisma.student.findUnique({
     where: { id: studentId },
     include: { user: true },
   });
   if (!student) return res.status(404).json({ error: "Student not found" });
-  const password = randomFourDigitPassword();
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(p.data.password, 10);
   await prisma.user.update({
     where: { id: student.userId },
     data: { passwordHash },
   });
   res.json({
-    password,
+    password: p.data.password,
     student: {
       id: student.id,
       fullName: student.fullName,
@@ -462,6 +540,37 @@ router.delete("/students/:studentId", async (req, res) => {
   if (!student) return res.status(404).json({ error: "Student not found" });
   await prisma.user.delete({ where: { id: student.userId } });
   res.json({ ok: true });
+});
+
+const bulkDeleteStudentsSchema = z.object({
+  studentIds: z.array(z.string().min(1)).min(1).max(500),
+});
+
+router.delete("/students", async (req, res) => {
+  const p = bulkDeleteStudentsSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const requestedIds = [...new Set(p.data.studentIds)];
+  const students = await prisma.student.findMany({
+    where: { id: { in: requestedIds } },
+    select: { id: true, userId: true },
+  });
+
+  const foundIdSet = new Set(students.map((s) => s.id));
+  const notFoundIds = requestedIds.filter((id) => !foundIdSet.has(id));
+  const userIds = [...new Set(students.map((s) => s.userId))];
+
+  if (userIds.length > 0) {
+    await prisma.user.deleteMany({
+      where: { id: { in: userIds } },
+    });
+  }
+
+  res.json({
+    requested: requestedIds.length,
+    deleted: students.length,
+    notFoundIds,
+  });
 });
 
 // --- Users: students / teachers (single create) ---

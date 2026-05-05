@@ -51,11 +51,11 @@ export async function maxLoginIndexForPrefix(
   db: PrismaClient | Prisma.TransactionClient,
   prefix: string
 ): Promise<number> {
-  const re = new RegExp(`^${escapeRegex(prefix)}_(\\d+)$`);
+  const re = new RegExp(`^${escapeRegex(prefix)}_?(\\d+)$`);
   const users = await db.user.findMany({
     where: {
       role: "STUDENT",
-      studentLoginId: { startsWith: `${prefix}_` },
+      studentLoginId: { startsWith: prefix },
     },
     select: { studentLoginId: true },
   });
@@ -177,7 +177,7 @@ export async function generateStudentRows(
     const idx = start + i;
     rows.push({
       fullName: `Student ${i + 1}`,
-      studentLoginId: `${meta.loginPrefix}_${formatLoginSuffix(idx)}`,
+      studentLoginId: `${meta.loginPrefix}${formatLoginSuffix(idx)}`,
       password: randomFourDigitPassword(),
       classId: meta.classId,
       sectionId: meta.sectionId,
@@ -218,7 +218,7 @@ export async function buildRowsFromUpload(
 
     out.push({
       fullName: r.name.trim(),
-      studentLoginId: `${meta.loginPrefix}_${formatLoginSuffix(next)}`,
+      studentLoginId: `${meta.loginPrefix}${formatLoginSuffix(next)}`,
       password: randomFourDigitPassword(),
       classId: meta.classId,
       sectionId: meta.sectionId,
