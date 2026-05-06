@@ -10,6 +10,17 @@ export type ParsedQuestion = {
   correctOption: number;
 };
 
+function normalizeMathText(input: string): string {
+  return input
+    .replace(/\$([^$]+)\$/g, "$1")
+    .replace(/\\sqrt\{([^}]+)\}/gi, "sqrt($1)")
+    .replace(/√\s*\(?([^)\s]+)\)?/g, "sqrt($1)")
+    .replace(/[²]/g, "^2")
+    .replace(/[³]/g, "^3")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Expected plain-text shape after mammoth conversion:
  *
@@ -31,7 +42,11 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
     const lines = block
       .split("\n")
       .map((l) => l.trim())
-      .filter(Boolean);
+      .filter((l) => {
+        if (!l) return false;
+        if (/^[_\-=\s]{5,}$/.test(l)) return false;
+        return true;
+      });
     if (lines.length < 6) continue;
 
     let stem = "";
@@ -39,29 +54,32 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
     let correct: number | null = null;
 
     for (const line of lines) {
-      const mStem = line.match(/^Q\d*[\.\)]\s*(.+)$/i) ?? line.match(/^Question\s*\d*[\.\)]\s*(.+)$/i);
+      const mStem =
+        line.match(/^Q\d*[\.\)]\s*(.+)$/i) ??
+        line.match(/^Question\s*\d*[\.\)]\s*(.+)$/i) ??
+        line.match(/^\d+[\.\)]\s*(.+)$/i);
       if (mStem && !stem) {
-        stem = mStem[1].trim();
+        stem = normalizeMathText(mStem[1].trim());
         continue;
       }
       const opt = line.match(/^([A-D])[\)\.\s]\s*(.+)$/i);
       if (opt) {
         const idx = opt[1].toUpperCase().charCodeAt(0) - 65;
-        if (idx >= 0 && idx < 4) options[idx] = opt[2].trim();
+        if (idx >= 0 && idx < 4) options[idx] = normalizeMathText(opt[2].trim());
         continue;
       }
-      const ans = line.match(/^Answer\s*:\s*([A-D])/i);
+      const ans = line.match(/^(?:Correct\s+)?Answer\s*:\s*([A-D])/i);
       if (ans) {
         correct = ans[1].toUpperCase().charCodeAt(0) - 65;
         continue;
       }
       if (!stem && !/^([A-D])[\)\.]/.test(line)) {
-        stem = line.replace(/^Q\d*[\.\)]\s*/i, "").trim();
+        stem = normalizeMathText(line.replace(/^Q\d*[\.\)]\s*/i, "").trim());
       }
     }
 
     if (!stem) {
-      const first = lines[0].replace(/^Q\d*[\.\)]\s*/i, "").trim();
+      const first = normalizeMathText(lines[0].replace(/^Q\d*[\.\)]\s*/i, "").trim());
       stem = first;
     }
 
@@ -69,13 +87,13 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
       const opt = lines[i].match(/^([A-D])[\)\.\s]\s*(.+)$/i);
       if (opt) {
         const idx = opt[1].toUpperCase().charCodeAt(0) - 65;
-        if (idx >= 0 && idx < 4) options[idx] = opt[2].trim();
+        if (idx >= 0 && idx < 4) options[idx] = normalizeMathText(opt[2].trim());
       }
     }
 
-    const ansLine = lines.find((l) => /^Answer\s*:/i.test(l));
+    const ansLine = lines.find((l) => /^(?:Correct\s+)?Answer\s*:/i.test(l));
     if (ansLine) {
-      const m = ansLine.match(/^Answer\s*:\s*([A-D])/i);
+      const m = ansLine.match(/^(?:Correct\s+)?Answer\s*:\s*([A-D])/i);
       if (m) correct = m[1].toUpperCase().charCodeAt(0) - 65;
     }
 

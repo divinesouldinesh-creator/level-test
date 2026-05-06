@@ -11,6 +11,8 @@ export function AdminLayout() {
       nav={[
         { to: "/admin", label: "Dashboard", end: true },
         { to: "/admin/curriculum", label: "Curriculum" },
+        { to: "/admin/coverage", label: "Coverage" },
+        { to: "/admin/question-bank", label: "Question Bank" },
         { to: "/admin/students", label: "Students" },
       ]}
     >

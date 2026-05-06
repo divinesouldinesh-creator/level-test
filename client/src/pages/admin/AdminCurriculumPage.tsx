@@ -37,7 +37,6 @@ type CurriculumSubject = {
   levels: CurriculumLevel[];
   topics: CurriculumTopic[];
 };
-
 const NO_TOPICS: CurriculumTopic[] = [];
 
 export function AdminCurriculumPage() {
@@ -90,7 +89,14 @@ export function AdminCurriculumPage() {
             setErr={setErr}
             onChanged={refresh}
           />
-          <SubjectsPanel subjects={subjects} busy={busy} setBusy={setBusy} setErr={setErr} onChanged={refresh} />
+          <SubjectsPanel
+            classes={classes}
+            subjects={subjects}
+            busy={busy}
+            setBusy={setBusy}
+            setErr={setErr}
+            onChanged={refresh}
+          />
         </div>
       )}
     </>
@@ -309,12 +315,14 @@ function ClassesPanel({
 }
 
 function SubjectsPanel({
+  classes,
   subjects,
   busy,
   setBusy,
   setErr,
   onChanged,
 }: {
+  classes: SchoolClassMeta[];
   subjects: CurriculumSubject[];
   busy: boolean;
   setBusy: (v: boolean) => void;
@@ -323,13 +331,14 @@ function SubjectsPanel({
 }) {
   const [subName, setSubName] = useState("");
   const [subCode, setSubCode] = useState("");
+  const [subClassId, setSubClassId] = useState("");
 
   async function addSubject(e: React.FormEvent) {
     e.preventDefault();
-    if (!subName.trim()) return;
+    if (!subName.trim() || !subClassId) return;
     setBusy(true);
     setErr(null);
-    const r = await api("/api/v1/admin/subjects", {
+    const r = await api(`/api/v1/admin/classes/${subClassId}/subjects/create`, {
       method: "POST",
       json: { name: subName.trim(), code: subCode.trim() || undefined },
     });
@@ -338,6 +347,7 @@ function SubjectsPanel({
     else {
       setSubName("");
       setSubCode("");
+      setSubClassId("");
       await onChanged();
     }
   }
@@ -346,6 +356,23 @@ function SubjectsPanel({
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <h2 className="font-semibold text-lg text-slate-900">Subjects, levels &amp; tests</h2>
       <form onSubmit={addSubject} className="mt-4 flex flex-wrap gap-2 items-end">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Class</span>
+          <select
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[170px]"
+            value={subClassId}
+            onChange={(e) => setSubClassId(e.target.value)}
+            disabled={busy}
+          >
+            <option value="">Select class</option>
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.grade ? ` (Grade ${c.grade})` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-slate-600">Subject name</span>
           <input
@@ -368,7 +395,7 @@ function SubjectsPanel({
         </label>
         <button
           type="submit"
-          disabled={busy || !subName.trim()}
+          disabled={busy || !subClassId || !subName.trim()}
           className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
         >
           Add subject
@@ -398,6 +425,8 @@ function SubjectCard({
   onChanged: () => Promise<void>;
 }) {
   const [levelName, setLevelName] = useState("");
+  const [editingLevelId, setEditingLevelId] = useState<string | null>(null);
+  const [editingLevelName, setEditingLevelName] = useState("");
   const [openLevelId, setOpenLevelId] = useState<string | null>(null);
 
   const topicsByLevelId = useMemo(() => {
@@ -428,6 +457,42 @@ function SubjectCard({
     }
   }
 
+  async function removeSubject(force = false) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subjects/${subject.id}${force ? "?force=1" : ""}`, { method: "DELETE" });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not delete subject");
+    else await onChanged();
+  }
+
+  async function removeLevel(levelId: string, force = false) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/levels/${levelId}${force ? "?force=1" : ""}`, { method: "DELETE" });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not delete level");
+    else await onChanged();
+  }
+
+  async function renameLevel(levelId: string) {
+    const nextName = editingLevelName.trim();
+    if (!nextName) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/levels/${levelId}`, {
+      method: "PATCH",
+      json: { name: nextName },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not rename level");
+    else {
+      setEditingLevelId(null);
+      setEditingLevelName("");
+      await onChanged();
+    }
+  }
+
   return (
     <details className="rounded-lg border border-slate-200 open:shadow-sm group">
       <summary className="cursor-pointer list-none px-4 py-3 font-medium text-slate-900 flex justify-between items-center hover:bg-slate-50 rounded-lg">
@@ -435,8 +500,35 @@ function SubjectCard({
           {subject.name}
           {subject.code ? <span className="text-slate-500 font-normal ml-2">({subject.code})</span> : null}
         </span>
-        <span className="text-slate-400 text-sm group-open:hidden">Expand</span>
-        <span className="text-slate-400 text-sm hidden group-open:inline">Collapse</span>
+        <span className="inline-flex items-center gap-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void removeSubject();
+            }}
+            className="text-xs rounded border border-rose-300 text-rose-700 px-2 py-1 disabled:opacity-50"
+          >
+            Delete subject
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!window.confirm("Hard delete this subject and all related data? This cannot be undone.")) return;
+              void removeSubject(true);
+            }}
+            className="text-xs rounded border border-rose-500 text-rose-800 px-2 py-1 disabled:opacity-50"
+          >
+            Hard delete
+          </button>
+          <span className="text-slate-400 text-sm group-open:hidden">Expand</span>
+          <span className="text-slate-400 text-sm hidden group-open:inline">Collapse</span>
+        </span>
       </summary>
       <div className="px-4 pb-4 pt-0 border-t border-slate-100">
         <form onSubmit={addLevel} className="mt-3 flex flex-wrap gap-2 items-end">
@@ -467,16 +559,79 @@ function SubjectCard({
               <li key={lvl.id} className="rounded-lg bg-slate-50 border border-slate-200 p-3">
                 <div className="flex flex-wrap gap-2 justify-between items-start">
                   <div>
-                    <span className="font-medium text-slate-800">{lvl.name}</span>
+                    {editingLevelId === lvl.id ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          className="rounded border border-slate-300 px-2 py-1 text-sm"
+                          value={editingLevelName}
+                          onChange={(e) => setEditingLevelName(e.target.value)}
+                          disabled={busy}
+                        />
+                        <button
+                          type="button"
+                          className="text-xs rounded border border-slate-300 px-2 py-1"
+                          disabled={busy || !editingLevelName.trim()}
+                          onClick={() => void renameLevel(lvl.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs rounded border border-slate-300 px-2 py-1"
+                          disabled={busy}
+                          onClick={() => {
+                            setEditingLevelId(null);
+                            setEditingLevelName("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="font-medium text-slate-800">{lvl.name}</span>
+                    )}
                     <span className="text-slate-500 text-sm ml-2">order {lvl.order}</span>
                   </div>
-                  <button
-                    type="button"
-                    className="text-sm text-indigo-700 font-medium"
-                    onClick={() => setOpenLevelId((id) => (id === lvl.id ? null : lvl.id))}
-                  >
-                    {openLevelId === lvl.id ? "Hide test setup" : "Chapters & test setup"}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {editingLevelId !== lvl.id ? (
+                      <button
+                        type="button"
+                        className="text-sm text-slate-700 font-medium underline"
+                        onClick={() => {
+                          setEditingLevelId(lvl.id);
+                          setEditingLevelName(lvl.name);
+                        }}
+                      >
+                        Rename
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="text-sm text-indigo-700 font-medium"
+                      onClick={() => setOpenLevelId((id) => (id === lvl.id ? null : lvl.id))}
+                    >
+                      {openLevelId === lvl.id ? "Hide test setup" : "Chapters & test setup"}
+                    </button>
+                    <button
+                      type="button"
+                      className="text-sm text-rose-700 font-medium"
+                      disabled={busy}
+                      onClick={() => void removeLevel(lvl.id)}
+                    >
+                      Delete level
+                    </button>
+                    <button
+                      type="button"
+                      className="text-sm text-rose-800 font-medium underline"
+                      disabled={busy}
+                      onClick={() => {
+                        if (!window.confirm("Hard delete this level and related data? This cannot be undone.")) return;
+                        void removeLevel(lvl.id, true);
+                      }}
+                    >
+                      Hard delete
+                    </button>
+                  </div>
                 </div>
                 {openLevelId === lvl.id ? (
                   <LevelDetail
@@ -520,9 +675,7 @@ function LevelDetail({
 }) {
   const [topicName, setTopicName] = useState("");
   const [qCount, setQCount] = useState(String(level.testConfig?.questionCount ?? 8));
-  const [partRows, setPartRows] = useState(() =>
-    buildPartRows(level, topicsInLevel)
-  );
+  const [partRows, setPartRows] = useState(() => buildPartRows(level, topicsInLevel));
 
   const partSig = level.levelTopicParticipations.map((p) => `${p.topicId}:${p.quota ?? ""}`).join("|");
   const topicIdsSig = topicsInLevel.map((t) => t.id).join(",");
@@ -547,6 +700,15 @@ function LevelDetail({
       setTopicName("");
       await onChanged();
     }
+  }
+
+  async function removeTopic(topicId: string, force = false) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/topics/${topicId}${force ? "?force=1" : ""}`, { method: "DELETE" });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not delete topic");
+    else await onChanged();
   }
 
   async function saveTestConfig() {
@@ -599,6 +761,7 @@ function LevelDetail({
     else await onChanged();
   }
 
+
   function toggleTopic(topicId: string, on: boolean) {
     setPartRows((rows) => rows.map((r) => (r.topicId === topicId ? { ...r, included: on } : r)));
   }
@@ -609,7 +772,32 @@ function LevelDetail({
         <p className="text-sm font-medium text-slate-700">Chapters in this level</p>
         <ul className="mt-1 text-sm text-slate-600 list-disc list-inside">
           {topicsInLevel.length ? (
-            topicsInLevel.map((t) => <li key={t.id}>{t.name}</li>)
+            topicsInLevel.map((t) => (
+              <li key={t.id} className="list-none">
+                <div className="inline-flex items-center gap-2">
+                  <span>{t.name}</span>
+                  <button
+                    type="button"
+                    className="text-xs rounded border border-rose-300 text-rose-700 px-2 py-0.5"
+                    disabled={busy}
+                    onClick={() => void removeTopic(t.id)}
+                  >
+                    Delete topic
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs rounded border border-rose-500 text-rose-800 px-2 py-0.5"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!window.confirm("Hard delete this topic and its related data? This cannot be undone.")) return;
+                      void removeTopic(t.id, true);
+                    }}
+                  >
+                    Hard delete
+                  </button>
+                </div>
+              </li>
+            ))
           ) : (
             <li className="list-none text-amber-800">No chapters yet — add one below.</li>
           )}

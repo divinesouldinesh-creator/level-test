@@ -8,6 +8,8 @@ import { StudentTest } from "./pages/student/StudentTest";
 import { AdminHome } from "./pages/admin/AdminHome";
 import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
 import { AdminCurriculumPage } from "./pages/admin/AdminCurriculumPage";
+import { AdminCoveragePage } from "./pages/admin/AdminCoveragePage";
+import { AdminQuestionBankPage } from "./pages/admin/AdminQuestionBankPage";
 import { TeacherDashboard } from "./pages/teacher/TeacherDashboard";
 
 function Guard({
@@ -77,6 +79,8 @@ function AppRoutes() {
       >
         <Route index element={<AdminHome />} />
         <Route path="curriculum" element={<AdminCurriculumPage />} />
+        <Route path="coverage" element={<AdminCoveragePage />} />
+        <Route path="question-bank" element={<AdminQuestionBankPage />} />
         <Route path="students" element={<AdminStudentsPage />} />
       </Route>
       <Route path="/" element={<Navigate to="/login" replace />} />
