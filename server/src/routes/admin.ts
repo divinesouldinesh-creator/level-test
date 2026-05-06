@@ -216,16 +216,15 @@ router.post("/classes/:classId/subjects", async (req, res) => {
   const schema = z.object({ subjectId: z.string() });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
-  const existingLink = await prisma.classSubject.findFirst({
-    where: { subjectId: p.data.subjectId },
-  });
-  if (existingLink && existingLink.classId !== req.params.classId) {
-    return res.status(400).json({
-      error: "This subject is already assigned to another class. Create a separate subject for each class.",
-    });
-  }
-  const cs = await prisma.classSubject.create({
-    data: { classId: req.params.classId, subjectId: p.data.subjectId },
+  const cs = await prisma.classSubject.upsert({
+    where: {
+      classId_subjectId: {
+        classId: req.params.classId,
+        subjectId: p.data.subjectId,
+      },
+    },
+    create: { classId: req.params.classId, subjectId: p.data.subjectId },
+    update: {},
   });
   res.json(cs);
 });
