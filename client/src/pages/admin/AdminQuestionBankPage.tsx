@@ -15,6 +15,7 @@ type SubjectRow = {
 type ClassRow = { id: string; name: string; grade: string | null };
 type QuestionRow = {
   id: string;
+  topicId: string;
   stem: string;
   optionA: string;
   optionB: string;
@@ -42,6 +43,7 @@ export function AdminQuestionBankPage() {
   const [levelId, setLevelId] = useState("");
   const [topicId, setTopicId] = useState("");
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
+  const [levelQuestions, setLevelQuestions] = useState<QuestionRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -83,6 +85,11 @@ export function AdminQuestionBankPage() {
     () => new Map((selectedSubject?.levels ?? []).map((l) => [l.id, l.name])),
     [selectedSubject]
   );
+  const topicQuestionCount = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const q of levelQuestions) map.set(q.topicId, (map.get(q.topicId) ?? 0) + 1);
+    return map;
+  }, [levelQuestions]);
 
   useEffect(() => {
     if (!selectedSubject || !selectedSubject.levels.some((l) => l.id === levelId)) {
@@ -103,6 +110,14 @@ export function AdminQuestionBankPage() {
     void loadQuestions(topicId, subjectId, levelId);
   }, [topicId, subjectId, levelId]);
 
+  useEffect(() => {
+    if (!subjectId || !levelId) {
+      setLevelQuestions([]);
+      return;
+    }
+    void loadLevelQuestionStatus(subjectId, levelId);
+  }, [subjectId, levelId]);
+
   async function loadQuestions(currentTopicId: string, currentSubjectId: string, currentLevelId: string) {
     const q = new URLSearchParams();
     q.set("topicId", currentTopicId);
@@ -111,6 +126,15 @@ export function AdminQuestionBankPage() {
     const r = await api<QuestionRow[]>(`/api/v1/admin/questions?${q.toString()}`);
     if (!r.ok) setErr(r.error ?? "Failed to load questions");
     else setQuestions(r.data ?? []);
+  }
+
+  async function loadLevelQuestionStatus(currentSubjectId: string, currentLevelId: string) {
+    const q = new URLSearchParams();
+    q.set("subjectId", currentSubjectId);
+    q.set("levelId", currentLevelId);
+    const r = await api<QuestionRow[]>(`/api/v1/admin/questions?${q.toString()}`);
+    if (!r.ok) setErr(r.error ?? "Failed to load topic question status");
+    else setLevelQuestions(r.data ?? []);
   }
 
   async function refreshSubjects() {
@@ -421,6 +445,38 @@ export function AdminQuestionBankPage() {
           </label>
         </div>
       </div>
+
+      {subjectId && levelId ? (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Topic-wise question status</h2>
+          <p className="mt-1 text-sm text-slate-600">See coverage instantly and open a topic with one click.</p>
+          {topicOptions.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-500">No topics found for selected level.</p>
+          ) : (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {topicOptions.map((t) => {
+                const count = topicQuestionCount.get(t.id) ?? 0;
+                const empty = count === 0;
+                return (
+                  <button
+                    type="button"
+                    key={t.id}
+                    onClick={() => setTopicId(t.id)}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                      empty ? "border-amber-300 bg-amber-50" : "border-emerald-200 bg-emerald-50"
+                    }`}
+                  >
+                    <span className="font-medium text-slate-900">{t.name}</span>
+                    <span className={`ml-2 ${empty ? "text-amber-800" : "text-emerald-800"}`}>
+                      {count} question{count === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
