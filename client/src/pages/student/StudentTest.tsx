@@ -44,6 +44,26 @@ export function StudentTest() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    function blockCopyHotkeys(e: KeyboardEvent) {
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && (key === "c" || key === "x" || key === "a" || key === "u" || key === "s" || key === "p")) {
+        e.preventDefault();
+      }
+    }
+    function blockContextMenu(e: MouseEvent) {
+      e.preventDefault();
+    }
+    if (!done) {
+      window.addEventListener("keydown", blockCopyHotkeys);
+      window.addEventListener("contextmenu", blockContextMenu);
+    }
+    return () => {
+      window.removeEventListener("keydown", blockCopyHotkeys);
+      window.removeEventListener("contextmenu", blockContextMenu);
+    };
+  }, [done]);
+
+  useEffect(() => {
     if (!testId || questions.length === 0) return;
     const key = progressKey(testId);
     if (!key) return;
@@ -242,7 +262,11 @@ export function StudentTest() {
           Question {idx + 1} of {questions.length}
         </p>
       </div>
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
+      <div
+        className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm select-none"
+        onCopy={(e) => e.preventDefault()}
+        onCut={(e) => e.preventDefault()}
+      >
         <p className="text-lg md:text-xl font-medium leading-relaxed">{current.stem}</p>
         <div className="mt-6 space-y-3">
           {current.options.map((opt, i) => (
