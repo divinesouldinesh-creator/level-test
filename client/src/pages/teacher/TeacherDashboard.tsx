@@ -4,6 +4,16 @@ import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 
 type ClassRow = { id: string; name: string; grade: string | null; studentCount: number };
+type SectionRow = { id: string; name: string };
+type ClassWithSections = ClassRow & { sections: SectionRow[] };
+type AttendanceStatus = "PRESENT" | "ABSENT" | "LATE" | "LEAVE";
+type AttendanceRow = {
+  id: string;
+  fullName: string;
+  studentLoginId: string | null;
+  status: AttendanceStatus;
+  remark: string;
+};
 type StudentRow = {
   id: string;
   studentLoginId: string | null;
@@ -39,7 +49,7 @@ type SearchStudent = {
 
 export function TeacherDashboard() {
   const { logout, auth } = useAuth();
-  const [classes, setClasses] = useState<ClassRow[]>([]);
+  const [classes, setClasses] = useState<ClassWithSections[]>([]);
   const [weak, setWeak] = useState<TopicWeak[]>([]);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [classId, setClassId] = useState<string>("ALL");
@@ -52,12 +62,18 @@ export function TeacherDashboard() {
   const [searchResults, setSearchResults] = useState<SearchStudent[]>([]);
   const [searching, setSearching] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [attendanceDate, setAttendanceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [attendanceSectionId, setAttendanceSectionId] = useState("");
+  const [attendanceNotes, setAttendanceNotes] = useState("");
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceRow[]>([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceSaving, setAttendanceSaving] = useState(false);
   const studentDetailRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     void (async () => {
       const [c] = await Promise.all([
-        api<ClassRow[]>("/api/v1/teacher/classes"),
+        api<ClassWithSections[]>("/api/v1/teacher/classes"),
       ]);
       if (!c.ok) setErr(c.error ?? "Failed classes");
       else {
@@ -70,9 +86,25 @@ export function TeacherDashboard() {
           const preferred = withStudents[0] ?? loaded[0];
           setClassId(preferred.id);
         }
+        if (!attendanceSectionId) {
+          const withSections = loaded.find((x) => x.sections.length > 0);
+          if (withSections) setAttendanceSectionId(withSections.sections[0]!.id);
+        }
       }
     })();
   }, []);
+
+  const selectedClassForAttendance = classes.find((c) => c.id === classId);
+  const attendanceSections = selectedClassForAttendance?.sections ?? [];
+  useEffect(() => {
+    if (attendanceSections.length === 0) {
+      setAttendanceSectionId("");
+      return;
+    }
+    if (!attendanceSections.some((s) => s.id === attendanceSectionId)) {
+      setAttendanceSectionId(attendanceSections[0]!.id);
+    }
+  }, [classId, attendanceSections.length]);
 
   useEffect(() => {
     void (async () => {
@@ -105,6 +137,28 @@ export function TeacherDashboard() {
     })();
   }, [classId, search]);
 
+  useEffect(() => {
+    void (async () => {
+      if (classId === "ALL" || !attendanceSectionId || !attendanceDate) {
+        setAttendanceRows([]);
+        return;
+      }
+      setAttendanceLoading(true);
+      const r = await api<{ notes: string; students: AttendanceRow[] }>(
+        `/api/v1/teacher/attendance?classId=${encodeURIComponent(classId)}&sectionId=${encodeURIComponent(
+          attendanceSectionId
+        )}&date=${encodeURIComponent(attendanceDate)}`
+      );
+      setAttendanceLoading(false);
+      if (!r.ok || !r.data) {
+        setErr(r.error ?? "Could not load attendance");
+        return;
+      }
+      setAttendanceNotes(r.data.notes ?? "");
+      setAttendanceRows(r.data.students);
+    })();
+  }, [classId, attendanceSectionId, attendanceDate]);
+
   const redCount = students.filter((s) => s.status === "RED").length;
   const yellowCount = students.filter((s) => s.status === "YELLOW").length;
   const greenCount = students.filter((s) => s.status === "GREEN").length;
@@ -131,6 +185,28 @@ export function TeacherDashboard() {
     if (r.ok && r.data) {
       setSelectedTopic({ name: topicName ?? "Topic", students: r.data.students });
     }
+  }
+
+  async function saveAttendance() {
+    if (classId === "ALL" || !attendanceSectionId || !attendanceDate) return;
+    setAttendanceSaving(true);
+    setErr(null);
+    const r = await api("/api/v1/teacher/attendance", {
+      method: "PUT",
+      json: {
+        classId,
+        sectionId: attendanceSectionId,
+        date: attendanceDate,
+        notes: attendanceNotes,
+        entries: attendanceRows.map((row) => ({
+          studentId: row.id,
+          status: row.status,
+          remark: row.remark,
+        })),
+      },
+    });
+    setAttendanceSaving(false);
+    if (!r.ok) setErr(r.error ?? "Could not save attendance");
   }
 
   return (
@@ -172,6 +248,113 @@ export function TeacherDashboard() {
         <Card title="Yellow Zone" value={String(yellowCount)} />
         <Card title="Green Zone" value={String(greenCount)} />
         <Card title="Most Difficult Topic" value={weak[0]?.topicName ?? "—"} />
+      </section>
+      <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
+        <h2 className="font-semibold text-lg">Attendance</h2>
+        <p className="text-sm text-slate-600 mt-1">Select class, section and date. Mark manually, then save.</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <select
+            className="rounded-lg border px-3 py-2"
+            value={classId}
+            onChange={(e) => setClassId(e.target.value)}
+          >
+            <option value="ALL">Select class</option>
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-lg border px-3 py-2"
+            value={attendanceSectionId}
+            onChange={(e) => setAttendanceSectionId(e.target.value)}
+            disabled={classId === "ALL" || attendanceSections.length === 0}
+          >
+            <option value="">Select section</option>
+            {attendanceSections.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            className="rounded-lg border px-3 py-2"
+            value={attendanceDate}
+            onChange={(e) => setAttendanceDate(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => void saveAttendance()}
+            disabled={
+              attendanceSaving || classId === "ALL" || !attendanceSectionId || !attendanceDate || attendanceRows.length === 0
+            }
+            className="rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {attendanceSaving ? "Saving..." : "Save attendance"}
+          </button>
+        </div>
+        <textarea
+          className="mt-3 w-full rounded-lg border px-3 py-2 text-sm"
+          rows={2}
+          value={attendanceNotes}
+          onChange={(e) => setAttendanceNotes(e.target.value)}
+          placeholder="Optional notes"
+        />
+        {attendanceLoading ? <p className="text-sm text-slate-500 mt-3">Loading attendance...</p> : null}
+        {classId !== "ALL" && attendanceSectionId && !attendanceLoading ? (
+          <div className="mt-3 rounded-xl border overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="text-left p-3">Student</th>
+                  <th className="text-left p-3">Login ID</th>
+                  <th className="text-left p-3">Status</th>
+                  <th className="text-left p-3">Remark</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attendanceRows.map((row) => (
+                  <tr key={row.id} className="border-t border-slate-100">
+                    <td className="p-3">{row.fullName}</td>
+                    <td className="p-3">{row.studentLoginId ?? "—"}</td>
+                    <td className="p-3">
+                      <select
+                        className="rounded border px-2 py-1"
+                        value={row.status}
+                        onChange={(e) =>
+                          setAttendanceRows((rows) =>
+                            rows.map((r) =>
+                              r.id === row.id ? { ...r, status: e.target.value as AttendanceStatus } : r
+                            )
+                          )
+                        }
+                      >
+                        <option value="PRESENT">Present</option>
+                        <option value="ABSENT">Absent</option>
+                        <option value="LATE">Late</option>
+                        <option value="LEAVE">Leave</option>
+                      </select>
+                    </td>
+                    <td className="p-3">
+                      <input
+                        className="rounded border px-2 py-1 w-full"
+                        value={row.remark ?? ""}
+                        onChange={(e) =>
+                          setAttendanceRows((rows) =>
+                            rows.map((r) => (r.id === row.id ? { ...r, remark: e.target.value } : r))
+                          )
+                        }
+                        placeholder="Optional"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
       <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
         <h2 className="font-semibold text-lg">Analyze single student</h2>

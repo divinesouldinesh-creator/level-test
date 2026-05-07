@@ -121,4 +121,37 @@ router.get("/me", authMiddleware, async (req, res) => {
   });
 });
 
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6).max(64),
+});
+
+router.patch("/change-password", authMiddleware, async (req, res) => {
+  const p = changePasswordSchema.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.flatten() });
+    return;
+  }
+  if (p.data.currentPassword === p.data.newPassword) {
+    res.status(400).json({ error: "New password must be different from current password" });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: req.user!.sub } });
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  const ok = await bcrypt.compare(p.data.currentPassword, user.passwordHash);
+  if (!ok) {
+    res.status(400).json({ error: "Current password is incorrect" });
+    return;
+  }
+  const passwordHash = await bcrypt.hash(p.data.newPassword, 10);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash },
+  });
+  res.json({ ok: true });
+});
+
 export default router;

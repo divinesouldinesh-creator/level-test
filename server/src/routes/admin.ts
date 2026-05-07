@@ -77,7 +77,9 @@ function parseQuestionSheetBuffer(buf: Buffer): SheetQuestion[] {
 
 // --- Dashboard ---
 router.get("/dashboard/summary", async (_req, res) => {
-  const [topicRows, classRows, students] = await Promise.all([
+  const activeWindowDays = 30;
+  const activeSince = new Date(Date.now() - activeWindowDays * 24 * 60 * 60 * 1000);
+  const [topicRows, classRows, students, studentsUsedRecently, activeClassRows] = await Promise.all([
     prisma.topicPerformance.groupBy({
       by: ["topicId"],
       _sum: { correctTotal: true, attemptedTotal: true },
@@ -91,11 +93,26 @@ router.get("/dashboard/summary", async (_req, res) => {
         studentProgress: { orderBy: { lastAttemptAt: "desc" }, take: 5 },
       },
     }),
+    prisma.test.findMany({
+      where: { startedAt: { gte: activeSince } },
+      distinct: ["studentId"],
+      select: { studentId: true },
+    }),
+    prisma.student.groupBy({
+      by: ["classId"],
+      where: {
+        tests: {
+          some: {
+            startedAt: { gte: activeSince },
+          },
+        },
+      },
+      _count: { _all: true },
+    }),
   ]);
 
   const topics = await prisma.topic.findMany({
     where: { id: { in: topicRows.map((t) => t.topicId) } },
-    include: { subject: true },
   });
   const topicMap = new Map(topics.map((t) => [t.id, t]));
 
@@ -108,7 +125,6 @@ router.get("/dashboard/summary", async (_req, res) => {
       return {
         topicId: r.topicId,
         name: t?.name,
-        subject: t?.subject.name,
         avgPercentage: Math.round(pct * 10) / 10,
       };
     })
@@ -122,12 +138,22 @@ router.get("/dashboard/summary", async (_req, res) => {
     className: classMap.get(c.classId),
     students: c._count._all,
   }));
+  const activeByClass = new Map(activeClassRows.map((c) => [c.classId, c._count._all]));
+  const classActivity = classAgg.map((c) => ({
+    classId: c.classId,
+    className: c.className,
+    students: c.students,
+    activeStudents: activeByClass.get(c.classId) ?? 0,
+  }));
 
   res.json({
     weakestTopics: topicStats.slice(0, 10),
     strongestTopics: [...topicStats].sort((a, b) => b.avgPercentage - a.avgPercentage).slice(0, 10),
     classSizes: classAgg,
     studentCount: students.length,
+    activeWindowDays,
+    studentsUsedRecentlyCount: studentsUsedRecently.length,
+    classActivity,
   });
 });
 
@@ -266,7 +292,6 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
           levelTopicParticipations: { include: { topic: true }, orderBy: { sortOrder: "asc" } },
         },
       },
-      topics: true,
       classSubjects: true,
     },
   });
@@ -312,15 +337,21 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
     }
 
     const topicIdMap = new Map<string, string>();
-    for (const topic of sourceSubject.topics) {
-      const createdTopic = await tx.topic.create({
-        data: {
-          subjectId: subject.id,
-          name: topic.name,
-          levelId: topic.levelId ? levelIdMap.get(topic.levelId) ?? null : null,
-        },
+    const uniqueTopicIds = new Set<string>();
+    for (const lvl of sourceSubject.levels) {
+      for (const part of lvl.levelTopicParticipations) uniqueTopicIds.add(part.topicId);
+    }
+    for (const oldTopicId of uniqueTopicIds) {
+      const sourceTopic = sourceSubject.levels
+        .flatMap((lvl) => lvl.levelTopicParticipations)
+        .find((part) => part.topicId === oldTopicId)?.topic;
+      if (!sourceTopic) continue;
+      const topic = await tx.topic.upsert({
+        where: { name: sourceTopic.name },
+        update: {},
+        create: { name: sourceTopic.name },
       });
-      topicIdMap.set(topic.id, createdTopic.id);
+      topicIdMap.set(oldTopicId, topic.id);
     }
 
     for (const lvl of sourceSubject.levels) {
@@ -370,7 +401,6 @@ router.get("/subjects", async (_req, res) => {
           },
         },
       },
-      topics: { orderBy: [{ levelId: "asc" }, { name: "asc" }] },
       levels: {
         orderBy: { order: "asc" },
         include: {
@@ -384,6 +414,14 @@ router.get("/subjects", async (_req, res) => {
     },
   });
   res.json(list);
+});
+
+router.get("/topics", async (_req, res) => {
+  const topics = await prisma.topic.findMany({
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+  });
+  res.json(topics);
 });
 
 router.post("/subjects", async (req, res) => {
@@ -428,23 +466,26 @@ router.post("/subjects/:subjectId/topics", async (req, res) => {
     });
     if (!lvl) return res.status(400).json({ error: "levelId must belong to this subject" });
   }
-  const duplicateTopic = await prisma.topic.findFirst({
-    where: {
-      subjectId,
-      levelId: p.data.levelId ?? null,
-      name: { equals: normalizedName, mode: "insensitive" },
-    },
+  const duplicateByName = await prisma.topic.findFirst({
+    where: { name: { equals: normalizedName, mode: "insensitive" } },
   });
-  if (duplicateTopic) {
-    return res.status(400).json({ error: "Topic name already exists in this level" });
+  const t = duplicateByName
+    ? duplicateByName
+    : await prisma.topic.create({
+        data: { name: normalizedName },
+      });
+  if (p.data.levelId) {
+    await prisma.levelTopicParticipation.upsert({
+      where: { levelId_topicId: { levelId: p.data.levelId, topicId: t.id } },
+      update: {},
+      create: {
+        levelId: p.data.levelId,
+        topicId: t.id,
+        quota: null,
+        sortOrder: 999,
+      },
+    });
   }
-  const t = await prisma.topic.create({
-    data: {
-      subjectId,
-      name: normalizedName,
-      levelId: p.data.levelId,
-    },
-  });
   res.json(t);
 });
 
@@ -482,19 +523,10 @@ router.patch("/topics/:topicId", async (req, res) => {
   if (!p.success) return res.status(400).json(p.error.flatten());
   const existing = await prisma.topic.findUnique({ where: { id: topicId } });
   if (!existing) return res.status(404).json({ error: "Topic not found" });
-  if (p.data.levelId !== undefined && p.data.levelId !== null) {
-    const lvl = await prisma.level.findFirst({
-      where: { id: p.data.levelId, subjectId: existing.subjectId },
-    });
-    if (!lvl) return res.status(400).json({ error: "levelId must belong to the same subject" });
-  }
   const nextName = p.data.name?.trim();
-  const nextLevelId = p.data.levelId !== undefined ? p.data.levelId : existing.levelId;
   if (nextName && nextName.toLowerCase() !== existing.name.toLowerCase()) {
     const duplicateTopic = await prisma.topic.findFirst({
       where: {
-        subjectId: existing.subjectId,
-        levelId: nextLevelId,
         name: { equals: nextName, mode: "insensitive" },
         id: { not: topicId },
       },
@@ -505,7 +537,6 @@ router.patch("/topics/:topicId", async (req, res) => {
     where: { id: topicId },
     data: {
       ...(p.data.name !== undefined ? { name: nextName } : {}),
-      ...(p.data.levelId !== undefined ? { levelId: p.data.levelId } : {}),
     },
   });
   res.json(t);
@@ -557,7 +588,6 @@ router.delete("/levels/:levelId", async (req, res) => {
   }
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.topic.deleteMany({ where: { levelId } });
       await tx.level.delete({ where: { id: levelId } });
     });
   } catch {
@@ -1023,7 +1053,7 @@ router.get("/students", async (req, res) => {
     include: {
       schoolClass: true,
       section: true,
-      user: { select: { studentLoginId: true } },
+      user: { select: { studentLoginId: true, passwordPlain: true } },
     },
     orderBy: [{ schoolClass: { name: "asc" } }, { section: { name: "asc" } }, { fullName: "asc" }],
   });
@@ -1039,6 +1069,7 @@ router.get("/students", async (req, res) => {
       classLabel: classLabelForDisplay(s.schoolClass),
       sectionName: s.section.name,
       username: s.user.studentLoginId ?? "",
+      password: s.user.passwordPlain ?? "",
     })),
   });
 });
@@ -1059,7 +1090,7 @@ router.patch("/students/:studentId/reset-password", async (req, res) => {
   const passwordHash = await bcrypt.hash(p.data.password, 10);
   await prisma.user.update({
     where: { id: student.userId },
-    data: { passwordHash },
+    data: { passwordHash, passwordPlain: p.data.password },
   });
   res.json({
     password: p.data.password,
@@ -1128,6 +1159,7 @@ router.post("/students", async (req, res) => {
     data: {
       studentLoginId: p.data.studentLoginId,
       passwordHash,
+      passwordPlain: p.data.password,
       role: "STUDENT",
     },
   });
@@ -1162,6 +1194,55 @@ router.post("/teachers", async (req, res) => {
     data: { userId: user.id, fullName: p.data.fullName },
   });
   res.json({ id: t.id });
+});
+
+router.get("/teachers", async (_req, res) => {
+  const teachers = await prisma.teacher.findMany({
+    include: {
+      user: { select: { email: true } },
+    },
+    orderBy: { fullName: "asc" },
+  });
+  res.json({
+    teachers: teachers.map((t) => ({
+      id: t.id,
+      userId: t.userId,
+      fullName: t.fullName,
+      email: t.user.email ?? "",
+    })),
+  });
+});
+
+router.patch("/teachers/:teacherId/reset-password", async (req, res) => {
+  const p = resetPasswordSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const teacherId = req.params.teacherId;
+  const teacher = await prisma.teacher.findUnique({
+    where: { id: teacherId },
+    include: { user: true },
+  });
+  if (!teacher) return res.status(404).json({ error: "Teacher not found" });
+  const passwordHash = await bcrypt.hash(p.data.password, 10);
+  await prisma.user.update({
+    where: { id: teacher.userId },
+    data: { passwordHash },
+  });
+  res.json({
+    password: p.data.password,
+    teacher: {
+      id: teacher.id,
+      fullName: teacher.fullName,
+      email: teacher.user.email,
+    },
+  });
+});
+
+router.delete("/teachers/:teacherId", async (req, res) => {
+  const teacherId = req.params.teacherId;
+  const teacher = await prisma.teacher.findUnique({ where: { id: teacherId } });
+  if (!teacher) return res.status(404).json({ error: "Teacher not found" });
+  await prisma.user.delete({ where: { id: teacher.userId } });
+  res.json({ ok: true });
 });
 
 export default router;

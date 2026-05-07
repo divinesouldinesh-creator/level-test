@@ -275,21 +275,17 @@ async function main() {
     create: { classId: class11.id, subjectId: basicMathSubject.id },
   });
 
-  // Keep Basic Mathematics only where explicitly needed; remove from classes 8-12.
+  // Keep Basic Mathematics only for Class 6; other classes can be linked manually.
   await prisma.classSubject.deleteMany({
     where: {
       subjectId: basicMathSubject.id,
-      classId: { in: [class11.id, class12.id] },
+      classId: { in: [class7.id, class8.id, class9.id, class10.id, class11.id, class12.id] },
     },
   });
 
   await prisma.level.updateMany({
     where: { id: legacyBasicMathLevel0Id },
     data: { subjectId: subject.id },
-  });
-  await prisma.topic.updateMany({
-    where: { levelId: legacyBasicMathLevel0Id },
-    data: { subjectId: subject.id, levelId: level0.id },
   });
   await prisma.question.updateMany({
     where: { levelId: legacyBasicMathLevel0Id },
@@ -566,79 +562,68 @@ async function main() {
     { id: "seed-l2-div", name: "Decimal Division" },
     { id: "seed-l2-between", name: "Decimal Between Two Numbers" },
   ];
-  const topicDefsClass7L0 = [
-    { id: "seed-c7-l0-table-recall", name: "Table Recall" },
-    { id: "seed-c7-l0-addition", name: "Addition" },
-    { id: "seed-c7-l0-subtraction", name: "Subtraction" },
-    { id: "seed-c7-l0-mul-single", name: "Single Digit Multiplication" },
-    { id: "seed-c7-l0-mul-double", name: "Double Digit Multiplication" },
-    { id: "seed-c7-l0-div-simple", name: "Simple Division" },
-    { id: "seed-c7-l0-div-double", name: "Double Digit Division" },
-    { id: "seed-c7-l0-bodmas", name: "Mixed Operation (BODMAS)" },
+  const legacyDuplicateTopicIds = [
+    "seed-c7-l0-table-recall",
+    "seed-c7-l0-addition",
+    "seed-c7-l0-subtraction",
+    "seed-c7-l0-mul-single",
+    "seed-c7-l0-mul-double",
+    "seed-c7-l0-div-simple",
+    "seed-c7-l0-div-double",
+    "seed-c7-l0-bodmas",
+    "seed-c8-l0-table-recall",
+    "seed-c8-l0-addition",
+    "seed-c8-l0-subtraction",
+    "seed-c8-l0-mul-single",
+    "seed-c8-l0-mul-double",
+    "seed-c8-l0-div-simple",
+    "seed-c8-l0-div-double",
+    "seed-c8-l0-bodmas",
+    "seed-c9-l0-table-recall",
+    "seed-c9-l0-addition",
+    "seed-c9-l0-subtraction",
+    "seed-c9-l0-mul-single",
+    "seed-c9-l0-mul-double",
+    "seed-c9-l0-div-simple",
+    "seed-c9-l0-div-double",
+    "seed-c9-l0-bodmas",
+    "seed-c10-l0-table-recall",
+    "seed-c10-l0-addition",
+    "seed-c10-l0-subtraction",
+    "seed-c10-l0-mul-single",
+    "seed-c10-l0-mul-double",
+    "seed-c10-l0-div-simple",
+    "seed-c10-l0-div-double",
+    "seed-c10-l0-bodmas",
+    "seed-c12-l0-table-recall",
+    "seed-c12-l0-addition",
+    "seed-c12-l0-subtraction",
+    "seed-c12-l0-mul-single",
+    "seed-c12-l0-mul-double",
+    "seed-c12-l0-div-simple",
+    "seed-c12-l0-div-double",
+    "seed-c12-l0-bodmas",
   ];
-  const topicDefsClass8L0 = [
-    { id: "seed-c8-l0-table-recall", name: "Table Recall" },
-    { id: "seed-c8-l0-addition", name: "Addition" },
-    { id: "seed-c8-l0-subtraction", name: "Subtraction" },
-    { id: "seed-c8-l0-mul-single", name: "Single Digit Multiplication" },
-    { id: "seed-c8-l0-mul-double", name: "Double Digit Multiplication" },
-    { id: "seed-c8-l0-div-simple", name: "Simple Division" },
-    { id: "seed-c8-l0-div-double", name: "Double Digit Division" },
-    { id: "seed-c8-l0-bodmas", name: "Mixed Operation (BODMAS)" },
-  ];
-  const topicDefsClass9L0 = [
-    { id: "seed-c9-l0-table-recall", name: "Table Recall" },
-    { id: "seed-c9-l0-addition", name: "Addition" },
-    { id: "seed-c9-l0-subtraction", name: "Subtraction" },
-    { id: "seed-c9-l0-mul-single", name: "Single Digit Multiplication" },
-    { id: "seed-c9-l0-mul-double", name: "Double Digit Multiplication" },
-    { id: "seed-c9-l0-div-simple", name: "Simple Division" },
-    { id: "seed-c9-l0-div-double", name: "Double Digit Division" },
-    { id: "seed-c9-l0-bodmas", name: "Mixed Operation (BODMAS)" },
-  ];
-  const topicDefsClass10L0 = [
-    { id: "seed-c10-l0-table-recall", name: "Table Recall" },
-    { id: "seed-c10-l0-addition", name: "Addition" },
-    { id: "seed-c10-l0-subtraction", name: "Subtraction" },
-    { id: "seed-c10-l0-mul-single", name: "Single Digit Multiplication" },
-    { id: "seed-c10-l0-mul-double", name: "Double Digit Multiplication" },
-    { id: "seed-c10-l0-div-simple", name: "Simple Division" },
-    { id: "seed-c10-l0-div-double", name: "Double Digit Division" },
-    { id: "seed-c10-l0-bodmas", name: "Mixed Operation (BODMAS)" },
-  ];
-  const topicDefsClass12L0 = [
-    { id: "seed-c12-l0-table-recall", name: "Table Recall" },
-    { id: "seed-c12-l0-addition", name: "Addition" },
-    { id: "seed-c12-l0-subtraction", name: "Subtraction" },
-    { id: "seed-c12-l0-mul-single", name: "Single Digit Multiplication" },
-    { id: "seed-c12-l0-mul-double", name: "Double Digit Multiplication" },
-    { id: "seed-c12-l0-div-simple", name: "Simple Division" },
-    { id: "seed-c12-l0-div-double", name: "Double Digit Division" },
-    { id: "seed-c12-l0-bodmas", name: "Mixed Operation (BODMAS)" },
-  ];
+  await prisma.levelTopicParticipation.deleteMany({
+    where: { topicId: { in: legacyDuplicateTopicIds } },
+  });
+  await prisma.topic.deleteMany({
+    where: { id: { in: legacyDuplicateTopicIds } },
+  });
   const allTopicDefs = [
     ...topicDefs.map((t) => ({ ...t, levelId: level0.id })),
     ...topicDefsL1.map((t) => ({ ...t, levelId: level1.id })),
     ...topicDefsL2.map((t) => ({ ...t, levelId: level2.id })),
-    ...topicDefsClass7L0.map((t) => ({ ...t, levelId: level0.id })),
-    ...topicDefsClass8L0.map((t) => ({ ...t, levelId: level0.id })),
-    ...topicDefsClass9L0.map((t) => ({ ...t, levelId: level0.id })),
-    ...topicDefsClass10L0.map((t) => ({ ...t, levelId: level0.id })),
-    ...topicDefsClass12L0.map((t) => ({ ...t, levelId: level0.id })),
   ];
   for (const t of allTopicDefs) {
     await prisma.topic.upsert({
       where: { id: t.id },
       update: {
         name: t.name,
-        subjectId: subject.id,
-        levelId: t.levelId,
       },
       create: {
         id: t.id,
         name: t.name,
-        subjectId: subject.id,
-        levelId: t.levelId,
       },
     });
   }
@@ -1040,7 +1025,7 @@ async function main() {
     students: "STU001 and STU002 / password123",
     class12Demo: "C12001 or C12002 / password123 (studentId login)",
     classMap:
-      "Class 6 (A) -> Basic Mathematics (Levels 0, 1, 2); Class 7 (A), Class 8 (A), Class 9 (A), Class 10 (A) and Class 12 (A) -> Basic Mathematics (Level 0) loaded",
+      "Class 6 (A) -> Basic Mathematics (Levels 0, 1, 2) loaded; chapter copies for other classes removed",
   });
 }
 

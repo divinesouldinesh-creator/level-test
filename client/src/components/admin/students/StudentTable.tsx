@@ -49,7 +49,7 @@ export function StudentTable({
       class: row.classLabel,
       section: row.sectionName,
       username: row.username,
-      password: passwordHints[row.id],
+      password: passwordHints[row.id] ?? row.password ?? "",
     };
   }
 
@@ -59,7 +59,7 @@ export function StudentTable({
       class: row.classLabel,
       section: row.sectionName,
       username: row.username,
-      password: passwordHints[row.id] ?? "",
+      password: passwordHints[row.id] ?? row.password ?? "",
     };
   }
 
@@ -154,8 +154,8 @@ export function StudentTable({
         </div>
       </div>
       <p className="text-xs text-slate-500">
-        Passwords are not stored in plain text—CSV/Excel password column is empty until you use &quot;Reset
-        password&quot; (then export or print). Allow pop-ups for Print. Use Download Excel/CSV for a spreadsheet.
+        Passwords are visible for admin support. For older accounts, password may be blank until reset once. Allow
+        pop-ups for Print. Use Download Excel/CSV for a spreadsheet.
       </p>
       <div className="overflow-x-auto rounded-lg border border-slate-100">
         <table className="min-w-full text-sm text-left">
@@ -177,13 +177,14 @@ export function StudentTable({
               <th className="p-3 font-medium">Class</th>
               <th className="p-3 font-medium">Section</th>
               <th className="p-3 font-medium">Username</th>
+              <th className="p-3 font-medium">Password</th>
               <th className="p-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-slate-500">
+                <td colSpan={7} className="p-6 text-center text-slate-500">
                   No students match the filters.
                 </td>
               </tr>
@@ -203,6 +204,7 @@ export function StudentTable({
                   <td className="p-3">{row.classLabel}</td>
                   <td className="p-3">{row.sectionName}</td>
                   <td className="p-3 font-mono text-xs">{row.username}</td>
+                  <td className="p-3 font-mono text-xs">{passwordHints[row.id] ?? row.password ?? "—"}</td>
                   <td className="p-3 text-right">
                     <div className="flex flex-wrap justify-end gap-2">
                       <button

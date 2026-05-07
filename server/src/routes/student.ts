@@ -124,6 +124,23 @@ router.post("/tests/start", async (req, res) => {
     return;
   }
 
+  const existing = await prisma.test.findFirst({
+    where: {
+      studentId: user.student.id,
+      subjectId,
+      levelId,
+      status: "IN_PROGRESS",
+    },
+    include: {
+      testQuestions: { select: { id: true } },
+    },
+    orderBy: { startedAt: "desc" },
+  });
+  if (existing && existing.testQuestions.length > 0) {
+    res.json({ testId: existing.id, questionCount: existing.testQuestions.length, warnings: [], resumed: true });
+    return;
+  }
+
   const { questionIds, warnings } = await pickQuestionsForTest(prisma, levelId);
   if (questionIds.length === 0) {
     res.status(400).json({ error: "No questions available for this level", warnings });
@@ -145,7 +162,7 @@ router.post("/tests/start", async (req, res) => {
     },
   });
 
-  res.json({ testId: test.id, questionCount: questionIds.length, warnings });
+  res.json({ testId: test.id, questionCount: questionIds.length, warnings, resumed: false });
 });
 
 function stripQuestion(q: {

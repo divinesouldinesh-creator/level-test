@@ -14,6 +14,14 @@ import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 
 type Q = { id: string; stem: string; options: string[]; topicId: string };
+type SavedTestProgress = {
+  answers: Record<string, number>;
+  idx: number;
+};
+
+function progressKey(testId?: string): string | null {
+  return testId ? `student-test-progress:${testId}` : null;
+}
 
 export function StudentTest() {
   const { testId } = useParams();
@@ -36,6 +44,37 @@ export function StudentTest() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    if (!testId || questions.length === 0) return;
+    const key = progressKey(testId);
+    if (!key) return;
+    const raw = localStorage.getItem(key);
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw) as SavedTestProgress;
+      const validIds = new Set(questions.map((q) => q.id));
+      const restoredAnswers: Record<string, number> = {};
+      for (const [qid, opt] of Object.entries(saved.answers ?? {})) {
+        if (validIds.has(qid) && Number.isInteger(opt) && opt >= 0 && opt <= 3) {
+          restoredAnswers[qid] = opt;
+        }
+      }
+      setAnswers(restoredAnswers);
+      const maxIdx = Math.max(0, questions.length - 1);
+      setIdx(Math.min(Math.max(saved.idx ?? 0, 0), maxIdx));
+    } catch {
+      localStorage.removeItem(key);
+    }
+  }, [testId, questions]);
+
+  useEffect(() => {
+    if (!testId || questions.length === 0 || done) return;
+    const key = progressKey(testId);
+    if (!key) return;
+    const payload: SavedTestProgress = { answers, idx };
+    localStorage.setItem(key, JSON.stringify(payload));
+  }, [testId, questions, answers, idx, done]);
+
+  useEffect(() => {
     void (async () => {
       const r = await api<unknown>(`/api/v1/student/tests/${testId}`);
       setLoading(false);
@@ -45,6 +84,8 @@ export function StudentTest() {
       }
       const data = r.data as Record<string, unknown>;
       if (data.status === "completed") {
+        const key = progressKey(testId);
+        if (key) localStorage.removeItem(key);
         setDone({
           score: data.score as number,
           maxScore: data.maxScore as number,
@@ -95,6 +136,8 @@ export function StudentTest() {
       setErr(r.error ?? "Submit failed");
       return;
     }
+    const key = progressKey(testId);
+    if (key) localStorage.removeItem(key);
     setDone(r.data);
   }
 

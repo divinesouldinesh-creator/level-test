@@ -10,7 +10,11 @@ import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
 import { AdminCurriculumPage } from "./pages/admin/AdminCurriculumPage";
 import { AdminCoveragePage } from "./pages/admin/AdminCoveragePage";
 import { AdminQuestionBankPage } from "./pages/admin/AdminQuestionBankPage";
-import { TeacherDashboard } from "./pages/teacher/TeacherDashboard";
+import { AdminTeachersPage } from "./pages/admin/AdminTeachersPage";
+import { AdminSecurityPage } from "./pages/admin/AdminSecurityPage";
+import { TeacherOverviewPage } from "./pages/teacher/TeacherOverviewPage";
+import { TeacherAttendancePage } from "./pages/teacher/TeacherAttendancePage";
+import { TeacherAnalyticsPage } from "./pages/teacher/TeacherAnalyticsPage";
 
 function Guard({
   role,
@@ -65,7 +69,23 @@ function AppRoutes() {
         path="/teacher"
         element={
           <Guard role="TEACHER">
-            <TeacherDashboard />
+            <TeacherOverviewPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/teacher/attendance"
+        element={
+          <Guard role="TEACHER">
+            <TeacherAttendancePage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/teacher/analytics"
+        element={
+          <Guard role="TEACHER">
+            <TeacherAnalyticsPage />
           </Guard>
         }
       />
@@ -82,6 +102,8 @@ function AppRoutes() {
         <Route path="coverage" element={<AdminCoveragePage />} />
         <Route path="question-bank" element={<AdminQuestionBankPage />} />
         <Route path="students" element={<AdminStudentsPage />} />
+        <Route path="teachers" element={<AdminTeachersPage />} />
+        <Route path="security" element={<AdminSecurityPage />} />
       </Route>
       <Route path="/" element={<Navigate to="/login" replace />} />
     </Routes>

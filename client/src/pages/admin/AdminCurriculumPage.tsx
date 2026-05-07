@@ -28,34 +28,36 @@ type CurriculumLevel = {
 type CurriculumTopic = {
   id: string;
   name: string;
-  levelId: string | null;
 };
 type CurriculumSubject = {
   id: string;
   name: string;
   code: string | null;
   levels: CurriculumLevel[];
-  topics: CurriculumTopic[];
 };
 const NO_TOPICS: CurriculumTopic[] = [];
 
 export function AdminCurriculumPage() {
   const [classes, setClasses] = useState<SchoolClassMeta[]>([]);
   const [subjects, setSubjects] = useState<CurriculumSubject[]>([]);
+  const [allTopics, setAllTopics] = useState<CurriculumTopic[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     setErr(null);
-    const [c, s] = await Promise.all([
+    const [c, s, t] = await Promise.all([
       api<SchoolClassMeta[]>("/api/v1/admin/classes"),
       api<CurriculumSubject[]>("/api/v1/admin/subjects"),
+      api<CurriculumTopic[]>("/api/v1/admin/topics"),
     ]);
     if (!c.ok) setErr(c.error ?? "Failed to load classes");
     else if (c.data) setClasses(c.data);
     if (!s.ok) setErr(s.error ?? "Failed to load subjects");
     else if (s.data) setSubjects(s.data);
+    if (!t.ok) setErr(t.error ?? "Failed to load chapters");
+    else if (t.data) setAllTopics(t.data);
   }, []);
 
   useEffect(() => {
@@ -92,6 +94,7 @@ export function AdminCurriculumPage() {
           <SubjectsPanel
             classes={classes}
             subjects={subjects}
+            allTopics={allTopics}
             busy={busy}
             setBusy={setBusy}
             setErr={setErr}
@@ -317,6 +320,7 @@ function ClassesPanel({
 function SubjectsPanel({
   classes,
   subjects,
+  allTopics,
   busy,
   setBusy,
   setErr,
@@ -324,6 +328,7 @@ function SubjectsPanel({
 }: {
   classes: SchoolClassMeta[];
   subjects: CurriculumSubject[];
+  allTopics: CurriculumTopic[];
   busy: boolean;
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
@@ -404,7 +409,15 @@ function SubjectsPanel({
 
       <div className="mt-6 space-y-4">
         {subjects.map((su) => (
-          <SubjectCard key={su.id} subject={su} busy={busy} setBusy={setBusy} setErr={setErr} onChanged={onChanged} />
+          <SubjectCard
+            key={su.id}
+            subject={su}
+            allTopics={allTopics}
+            busy={busy}
+            setBusy={setBusy}
+            setErr={setErr}
+            onChanged={onChanged}
+          />
         ))}
       </div>
     </div>
@@ -413,12 +426,14 @@ function SubjectsPanel({
 
 function SubjectCard({
   subject,
+  allTopics,
   busy,
   setBusy,
   setErr,
   onChanged,
 }: {
   subject: CurriculumSubject;
+  allTopics: CurriculumTopic[];
   busy: boolean;
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
@@ -431,14 +446,11 @@ function SubjectCard({
 
   const topicsByLevelId = useMemo(() => {
     const m = new Map<string, CurriculumTopic[]>();
-    for (const t of subject.topics) {
-      if (!t.levelId) continue;
-      const arr = m.get(t.levelId);
-      if (arr) arr.push(t);
-      else m.set(t.levelId, [t]);
+    for (const lvl of subject.levels) {
+      m.set(lvl.id, lvl.levelTopicParticipations.map((p) => p.topic));
     }
     return m;
-  }, [subject.topics]);
+  }, [subject.levels]);
 
   async function addLevel(e: React.FormEvent) {
     e.preventDefault();
@@ -636,7 +648,7 @@ function SubjectCard({
                 {openLevelId === lvl.id ? (
                   <LevelDetail
                     subjectId={subject.id}
-                    subjectTopics={subject.topics}
+                    allTopics={allTopics}
                     level={lvl}
                     topicsInLevel={topicsInLevel}
                     busy={busy}
@@ -656,7 +668,7 @@ function SubjectCard({
 
 function LevelDetail({
   subjectId,
-  subjectTopics,
+  allTopics,
   level,
   topicsInLevel,
   busy,
@@ -665,7 +677,7 @@ function LevelDetail({
   onChanged,
 }: {
   subjectId: string;
-  subjectTopics: CurriculumTopic[];
+  allTopics: CurriculumTopic[];
   level: CurriculumLevel;
   topicsInLevel: CurriculumTopic[];
   busy: boolean;
@@ -675,15 +687,15 @@ function LevelDetail({
 }) {
   const [topicName, setTopicName] = useState("");
   const [qCount, setQCount] = useState(String(level.testConfig?.questionCount ?? 8));
-  const [partRows, setPartRows] = useState(() => buildPartRows(level, topicsInLevel));
+  const [partRows, setPartRows] = useState(() => buildPartRows(level, allTopics));
 
   const partSig = level.levelTopicParticipations.map((p) => `${p.topicId}:${p.quota ?? ""}`).join("|");
-  const topicIdsSig = topicsInLevel.map((t) => t.id).join(",");
+  const topicIdsSig = allTopics.map((t) => t.id).join(",");
 
   useEffect(() => {
     setQCount(String(level.testConfig?.questionCount ?? 8));
-    setPartRows(buildPartRows(level, topicsInLevel));
-  }, [level, partSig, topicIdsSig, topicsInLevel]);
+    setPartRows(buildPartRows(level, allTopics));
+  }, [level, partSig, topicIdsSig, allTopics]);
 
   async function addTopic(e: React.FormEvent) {
     e.preventDefault();
@@ -700,15 +712,6 @@ function LevelDetail({
       setTopicName("");
       await onChanged();
     }
-  }
-
-  async function removeTopic(topicId: string, force = false) {
-    setBusy(true);
-    setErr(null);
-    const r = await api(`/api/v1/admin/topics/${topicId}${force ? "?force=1" : ""}`, { method: "DELETE" });
-    setBusy(false);
-    if (!r.ok) setErr(r.error ?? "Could not delete topic");
-    else await onChanged();
   }
 
   async function saveTestConfig() {
@@ -778,22 +781,11 @@ function LevelDetail({
                   <span>{t.name}</span>
                   <button
                     type="button"
-                    className="text-xs rounded border border-rose-300 text-rose-700 px-2 py-0.5"
+                    className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-0.5"
                     disabled={busy}
-                    onClick={() => void removeTopic(t.id)}
+                    onClick={() => toggleTopic(t.id, false)}
                   >
-                    Delete topic
-                  </button>
-                  <button
-                    type="button"
-                    className="text-xs rounded border border-rose-500 text-rose-800 px-2 py-0.5"
-                    disabled={busy}
-                    onClick={() => {
-                      if (!window.confirm("Hard delete this topic and its related data? This cannot be undone.")) return;
-                      void removeTopic(t.id, true);
-                    }}
-                  >
-                    Hard delete
+                    Remove from level
                   </button>
                 </div>
               </li>
@@ -853,7 +845,7 @@ function LevelDetail({
         </p>
         <ul className="mt-2 space-y-2">
           {partRows.map((row) => {
-            const t = subjectTopics.find((x) => x.id === row.topicId);
+            const t = allTopics.find((x) => x.id === row.topicId);
             return (
               <li key={row.topicId} className="flex flex-wrap items-center gap-2 text-sm">
                 <label className="inline-flex items-center gap-2">
@@ -923,5 +915,5 @@ function buildPartRows(level: CurriculumLevel, topicsInLevel: CurriculumTopic[])
     }
     return rows;
   }
-  return topicsInLevel.map((t) => ({ topicId: t.id, included: true, quota: "" as const }));
+  return topicsInLevel.map((t) => ({ topicId: t.id, included: false, quota: "" as const }));
 }

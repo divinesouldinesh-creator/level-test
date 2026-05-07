@@ -19,4 +19,5 @@ export type StudentListRow = {
   classLabel: string;
   sectionName: string;
   username: string;
+  password: string;
 };

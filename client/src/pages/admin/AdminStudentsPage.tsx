@@ -64,6 +64,16 @@ export function AdminStudentsPage() {
   }, [loadStudents]);
 
   useEffect(() => {
+    setPasswordHints((prev) => {
+      const next = { ...prev };
+      for (const s of allStudents) {
+        if (s.password) next[s.id] = s.password;
+      }
+      return next;
+    });
+  }, [allStudents]);
+
+  useEffect(() => {
     void (async () => {
       const r = await api<SchoolClassMeta[]>("/api/v1/admin/classes");
       if (r.ok && r.data) setClassMeta(r.data);

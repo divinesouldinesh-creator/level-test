@@ -32,9 +32,17 @@ enum PerformanceBand {
   STRONG
 }
 
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  LEAVE
+}
+
 model User {
   id           String   @id @default(cuid())
   passwordHash String
+  passwordPlain String? @map("password_plain")
   role         Role
   email        String?  @unique
   /// Login for students (e.g. admission number)
@@ -47,6 +55,7 @@ model User {
 
   questionsCreated Question[] @relation("QuestionCreatedBy")
   questionImports  QuestionImport[]
+  attendanceSessionsTaken AttendanceSession[] @relation("AttendanceTakenBy")
 }
 
 model Admin {
@@ -70,6 +79,7 @@ model SchoolClass {
   sections  Section[]
   students  Student[]
   subjects  ClassSubject[]
+  attendanceSessions AttendanceSession[]
 }
 
 model Section {
@@ -78,6 +88,7 @@ model Section {
   name      String
   schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
   students  Student[]
+  attendanceSessions AttendanceSession[]
 }
 
 model Student {
@@ -93,6 +104,7 @@ model Student {
   tests           Test[]
   studentProgress StudentProgress[]
   topicPerformance TopicPerformance[]
+  attendanceEntries AttendanceEntry[]
 }
 
 model Subject {
@@ -100,7 +112,6 @@ model Subject {
   name   String
   code   String?
   levels Level[]
-  topics Topic[]
   questions Question[]
   tests   Test[]
   classSubjects ClassSubject[]
@@ -125,7 +136,6 @@ model Level {
   order     Int
   name      String
   subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  topics    Topic[]
   questions Question[]
   tests     Test[]
   testConfig LevelTestConfig?
@@ -136,15 +146,13 @@ model Level {
 
 model Topic {
   id        String @id @default(cuid())
-  subjectId String @map("subject_id")
-  levelId   String? @map("level_id")
   name      String
-  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  level     Level?  @relation(fields: [levelId], references: [id], onDelete: SetNull)
 
   questions Question[]
   levelTopicParticipations LevelTopicParticipation[]
   topicPerformance TopicPerformance[]
+
+  @@unique([name])
 }
 
 /// Per-level: total questions in one test (e.g. 8 for level 0)
@@ -301,4 +309,40 @@ model QuestionImport {
   errorsJson         String?  @map("errors_json")
 
   uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+}
+
+model AttendanceSession {
+  id         String   @id @default(cuid())
+  classId    String   @map("class_id")
+  sectionId  String   @map("section_id")
+  date       DateTime
+  takenById  String?  @map("taken_by_id")
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+  section     Section     @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  entries     AttendanceEntry[]
+  takenBy     User? @relation("AttendanceTakenBy", fields: [takenById], references: [id], onDelete: SetNull)
+
+  @@unique([classId, sectionId, date])
+  @@index([date])
+  @@index([classId, sectionId])
+}
+
+model AttendanceEntry {
+  id          String           @id @default(cuid())
+  sessionId   String           @map("session_id")
+  studentId   String           @map("student_id")
+  status      AttendanceStatus @default(PRESENT)
+  remark      String?
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  session     AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student     Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
 }

@@ -14,6 +14,8 @@ export function AdminLayout() {
         { to: "/admin/coverage", label: "Coverage" },
         { to: "/admin/question-bank", label: "Question Bank" },
         { to: "/admin/students", label: "Students" },
+        { to: "/admin/teachers", label: "Teachers" },
+        { to: "/admin/security", label: "Security" },
       ]}
     >
       <Outlet />

@@ -15,6 +15,9 @@ type Summary = {
   strongestTopics: { name?: string; subject?: string; avgPercentage: number }[];
   classSizes: { className?: string; students: number }[];
   studentCount: number;
+  activeWindowDays: number;
+  studentsUsedRecentlyCount: number;
+  classActivity: { className?: string; students: number; activeStudents: number }[];
 };
 
 export function AdminHome() {
@@ -45,6 +48,9 @@ export function AdminHome() {
           <p className="mt-4 text-lg">
             Students: <strong>{data.studentCount}</strong>
           </p>
+          <p className="mt-1 text-lg">
+            Students active in last {data.activeWindowDays} days: <strong>{data.studentsUsedRecentlyCount}</strong>
+          </p>
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm overflow-x-auto">
               <h2 className="font-semibold mb-2">Weakest topics</h2>
@@ -61,12 +67,14 @@ export function AdminHome() {
               </div>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="font-semibold mb-2">Class sizes</h2>
+              <h2 className="font-semibold mb-2">Class-wise usage (last {data.activeWindowDays} days)</h2>
               <ul className="divide-y divide-slate-100">
-                {data.classSizes.map((c) => (
+                {data.classActivity.map((c) => (
                   <li key={c.className} className="py-3 flex justify-between text-base">
                     <span>{c.className}</span>
-                    <span className="font-medium">{c.students} students</span>
+                    <span className="font-medium">
+                      {c.activeStudents} active / {c.students} students
+                    </span>
                   </li>
                 ))}
               </ul>

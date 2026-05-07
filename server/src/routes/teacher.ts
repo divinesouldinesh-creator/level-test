@@ -1,9 +1,18 @@
 import { Router } from "express";
+import { AttendanceStatus } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("TEACHER"));
+
+function dateOnly(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
 
 router.get("/classes", async (_req, res) => {
   const classes = await prisma.schoolClass.findMany({
@@ -34,6 +43,106 @@ router.get("/sections/:sectionId/students", async (req, res) => {
       studentLoginId: s.user.studentLoginId,
     }))
   );
+});
+
+router.get("/attendance", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId : "";
+  const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
+  const dateInput = typeof req.query.date === "string" ? req.query.date : "";
+  if (!classId || !sectionId || !dateInput) {
+    res.status(400).json({ error: "classId, sectionId and date are required" });
+    return;
+  }
+  const date = dateOnly(dateInput);
+  if (!date) {
+    res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    return;
+  }
+
+  const students = await prisma.student.findMany({
+    where: { classId, sectionId },
+    include: { user: { select: { studentLoginId: true } } },
+    orderBy: { fullName: "asc" },
+  });
+  const session = await prisma.attendanceSession.findUnique({
+    where: { classId_sectionId_date: { classId, sectionId, date } },
+    include: { entries: true },
+  });
+  const statusMap = new Map(session?.entries.map((e) => [e.studentId, e]) ?? []);
+
+  res.json({
+    classId,
+    sectionId,
+    date: dateInput,
+    notes: session?.notes ?? "",
+    students: students.map((s) => ({
+      id: s.id,
+      fullName: s.fullName,
+      studentLoginId: s.user.studentLoginId,
+      status: statusMap.get(s.id)?.status ?? "PRESENT",
+      remark: statusMap.get(s.id)?.remark ?? "",
+    })),
+  });
+});
+
+const attendanceSaveSchema = z.object({
+  classId: z.string().min(1),
+  sectionId: z.string().min(1),
+  date: z.string().min(1),
+  notes: z.string().optional(),
+  entries: z.array(
+    z.object({
+      studentId: z.string().min(1),
+      status: z.nativeEnum(AttendanceStatus),
+      remark: z.string().optional(),
+    })
+  ),
+});
+
+router.put("/attendance", async (req, res) => {
+  const p = attendanceSaveSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const date = dateOnly(p.data.date);
+  if (!date) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+
+  const students = await prisma.student.findMany({
+    where: { classId: p.data.classId, sectionId: p.data.sectionId },
+    select: { id: true },
+  });
+  const allowedIds = new Set(students.map((s) => s.id));
+  const invalidId = p.data.entries.find((e) => !allowedIds.has(e.studentId));
+  if (invalidId) {
+    return res.status(400).json({ error: "All attendance entries must belong to selected class and section" });
+  }
+
+  const session = await prisma.attendanceSession.upsert({
+    where: { classId_sectionId_date: { classId: p.data.classId, sectionId: p.data.sectionId, date } },
+    update: {
+      notes: p.data.notes?.trim() || null,
+      takenById: req.user?.sub,
+    },
+    create: {
+      classId: p.data.classId,
+      sectionId: p.data.sectionId,
+      date,
+      notes: p.data.notes?.trim() || null,
+      takenById: req.user?.sub,
+    },
+  });
+
+  await prisma.$transaction([
+    prisma.attendanceEntry.deleteMany({ where: { sessionId: session.id } }),
+    prisma.attendanceEntry.createMany({
+      data: p.data.entries.map((e) => ({
+        sessionId: session.id,
+        studentId: e.studentId,
+        status: e.status,
+        remark: e.remark?.trim() || null,
+      })),
+    }),
+  ]);
+
+  res.json({ ok: true, sessionId: session.id, savedCount: p.data.entries.length });
 });
 
 router.get("/students/search", async (req, res) => {
@@ -85,7 +194,6 @@ router.get("/analytics/weak-topics", async (req, res) => {
 
   const topics = await prisma.topic.findMany({
     where: { id: { in: rows.map((r) => r.topicId) } },
-    include: { subject: true },
   });
   const topicMap = new Map(topics.map((t) => [t.id, t]));
 
@@ -98,7 +206,6 @@ router.get("/analytics/weak-topics", async (req, res) => {
       return {
         topicId: r.topicId,
         topicName: t?.name,
-        subjectName: t?.subject.name,
         avgPercentage: Math.round(pct * 10) / 10,
         students: r._count._all,
       };
@@ -178,7 +285,6 @@ router.get("/analytics/students", async (req, res) => {
   const perf = await prisma.topicPerformance.findMany({
     where: {
       studentId: { in: ids },
-      ...(subjectId ? { topic: { subjectId } } : {}),
     },
     include: { topic: true },
   });
@@ -281,7 +387,6 @@ router.get("/analytics/student/:studentId/detail", async (req, res) => {
   const topicPerf = await prisma.topicPerformance.findMany({
     where: {
       studentId: student.id,
-      ...(subjectId ? { topic: { subjectId } } : {}),
     },
     include: { topic: true },
   });
