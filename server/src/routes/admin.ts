@@ -413,7 +413,28 @@ router.get("/subjects", async (_req, res) => {
       },
     },
   });
-  res.json(list);
+  res.json(
+    list.map((subject) => {
+      const topicRows = subject.levels.flatMap((lvl) =>
+        lvl.levelTopicParticipations.map((part) => ({
+          id: part.topic.id,
+          name: part.topic.name,
+          levelId: lvl.id,
+        }))
+      );
+      const seen = new Set<string>();
+      const topics = topicRows.filter((t) => {
+        const key = `${t.id}:${t.levelId}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return {
+        ...subject,
+        topics,
+      };
+    })
+  );
 });
 
 router.get("/topics", async (_req, res) => {
