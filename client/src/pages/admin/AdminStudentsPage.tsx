@@ -31,6 +31,7 @@ export function AdminStudentsPage() {
   const [classMeta, setClassMeta] = useState<SchoolClassMeta[]>([]);
   const [filterClassId, setFilterClassId] = useState("");
   const [filterSectionId, setFilterSectionId] = useState("");
+  const [searchText, setSearchText] = useState("");
   const [passwordHints, setPasswordHints] = useState<Record<string, string>>({});
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
@@ -106,6 +107,21 @@ export function AdminStudentsPage() {
     return out;
   }, [classMeta, filterClassId]);
 
+  const visibleStudents = useMemo(() => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return allStudents;
+    return allStudents.filter((s) => {
+      const password = (passwordHints[s.id] ?? s.password ?? "").toLowerCase();
+      return (
+        s.fullName.toLowerCase().includes(q) ||
+        s.username.toLowerCase().includes(q) ||
+        s.classLabel.toLowerCase().includes(q) ||
+        s.sectionName.toLowerCase().includes(q) ||
+        password.includes(q)
+      );
+    });
+  }, [allStudents, passwordHints, searchText]);
+
   useEffect(() => {
     if (filterSectionId && !filterSectionOptions.find((o) => o.id === filterSectionId)) {
       setFilterSectionId("");
@@ -113,9 +129,9 @@ export function AdminStudentsPage() {
   }, [filterClassId, filterSectionId, filterSectionOptions]);
 
   useEffect(() => {
-    const visibleIds = new Set(allStudents.map((s) => s.id));
+    const visibleIds = new Set(visibleStudents.map((s) => s.id));
     setSelectedStudentIds((prev) => prev.filter((id) => visibleIds.has(id)));
-  }, [allStudents]);
+  }, [visibleStudents]);
 
   async function saveRows(rows: StudentPreviewRow[]) {
     if (!rows.length) return;
@@ -234,8 +250,7 @@ export function AdminStudentsPage() {
     });
   }
 
-  function toggleAllVisibleSelection(checked: boolean) {
-    const visibleIds = allStudents.map((s) => s.id);
+  function toggleAllVisibleSelection(checked: boolean, visibleIds: string[]) {
     setSelectedStudentIds((prev) => {
       if (checked) {
         return [...new Set([...prev, ...visibleIds])];
@@ -333,10 +348,12 @@ export function AdminStudentsPage() {
 
       {tab === "list" && (
         <StudentTable
-          rows={allStudents}
+          rows={visibleStudents}
           passwordHints={passwordHints}
+          searchText={searchText}
           filterClassId={filterClassId}
           filterSectionId={filterSectionId}
+          onSearchText={setSearchText}
           onFilterClass={(id) => {
             setFilterClassId(id);
             setFilterSectionId("");

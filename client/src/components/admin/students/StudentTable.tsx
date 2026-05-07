@@ -5,8 +5,10 @@ import { openPrintWindow } from "./PrintCards";
 export function StudentTable({
   rows,
   passwordHints,
+  searchText,
   filterClassId,
   filterSectionId,
+  onSearchText,
   onFilterClass,
   onFilterSection,
   classOptions,
@@ -23,8 +25,10 @@ export function StudentTable({
 }: {
   rows: StudentListRow[];
   passwordHints: Record<string, string>;
+  searchText: string;
   filterClassId: string;
   filterSectionId: string;
+  onSearchText: (value: string) => void;
   onFilterClass: (id: string) => void;
   onFilterSection: (id: string) => void;
   classOptions: { id: string; label: string }[];
@@ -33,7 +37,7 @@ export function StudentTable({
   bulkBusy: boolean;
   selectedIds: string[];
   onToggleRow: (id: string, checked: boolean) => void;
-  onToggleAllVisible: (checked: boolean) => void;
+  onToggleAllVisible: (checked: boolean, visibleIds: string[]) => void;
   onDeleteSelected: () => void;
   onResetPassword: (id: string) => void;
   onDelete: (id: string) => void;
@@ -90,6 +94,16 @@ export function StudentTable({
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
         <h2 className="text-lg font-semibold text-slate-900">All students</h2>
         <div className="flex flex-wrap gap-2 items-end">
+          <label className="text-sm">
+            <span className="block font-medium text-slate-700 mb-1">Search</span>
+            <input
+              type="text"
+              className="rounded-lg border border-slate-200 px-3 py-2 text-base min-h-[44px] min-w-[220px]"
+              placeholder="Name / username / password"
+              value={searchText}
+              onChange={(e) => onSearchText(e.target.value)}
+            />
+          </label>
           <label className="text-sm">
             <span className="block font-medium text-slate-700 mb-1">Class</span>
             <select
@@ -169,7 +183,7 @@ export function StudentTable({
                   ref={(el) => {
                     if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected;
                   }}
-                  onChange={(e) => onToggleAllVisible(e.target.checked)}
+                  onChange={(e) => onToggleAllVisible(e.target.checked, rows.map((row) => row.id))}
                   aria-label="Select all visible students"
                 />
               </th>
