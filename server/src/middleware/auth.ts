@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import type { Role } from "@prisma/client";
+import { prisma } from "../lib/prisma.js";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
 
@@ -13,7 +14,7 @@ export function signToken(userId: string, role: Role): string {
   return jwt.sign({ sub: userId, role }, JWT_SECRET, { expiresIn: "7d" });
 }
 
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) {
@@ -22,7 +23,15 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    req.user = decoded;
+    const dbUser = await prisma.user.findUnique({
+      where: { id: decoded.sub },
+      select: { role: true },
+    });
+    if (!dbUser) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    req.user = { sub: decoded.sub, role: dbUser.role };
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
