@@ -40,24 +40,20 @@ const NO_TOPICS: CurriculumTopic[] = [];
 export function AdminCurriculumPage() {
   const [classes, setClasses] = useState<SchoolClassMeta[]>([]);
   const [subjects, setSubjects] = useState<CurriculumSubject[]>([]);
-  const [allTopics, setAllTopics] = useState<CurriculumTopic[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     setErr(null);
-    const [c, s, t] = await Promise.all([
+    const [c, s] = await Promise.all([
       api<SchoolClassMeta[]>("/api/v1/admin/classes"),
       api<CurriculumSubject[]>("/api/v1/admin/subjects"),
-      api<CurriculumTopic[]>("/api/v1/admin/topics"),
     ]);
     if (!c.ok) setErr(c.error ?? "Failed to load classes");
     else if (c.data) setClasses(c.data);
     if (!s.ok) setErr(s.error ?? "Failed to load subjects");
     else if (s.data) setSubjects(s.data);
-    if (!t.ok) setErr(t.error ?? "Failed to load chapters");
-    else if (t.data) setAllTopics(t.data);
   }, []);
 
   useEffect(() => {
@@ -94,7 +90,6 @@ export function AdminCurriculumPage() {
           <SubjectsPanel
             classes={classes}
             subjects={subjects}
-            allTopics={allTopics}
             busy={busy}
             setBusy={setBusy}
             setErr={setErr}
@@ -320,7 +315,6 @@ function ClassesPanel({
 function SubjectsPanel({
   classes,
   subjects,
-  allTopics,
   busy,
   setBusy,
   setErr,
@@ -328,7 +322,6 @@ function SubjectsPanel({
 }: {
   classes: SchoolClassMeta[];
   subjects: CurriculumSubject[];
-  allTopics: CurriculumTopic[];
   busy: boolean;
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
@@ -412,7 +405,6 @@ function SubjectsPanel({
           <SubjectCard
             key={su.id}
             subject={su}
-            allTopics={allTopics}
             busy={busy}
             setBusy={setBusy}
             setErr={setErr}
@@ -426,14 +418,12 @@ function SubjectsPanel({
 
 function SubjectCard({
   subject,
-  allTopics,
   busy,
   setBusy,
   setErr,
   onChanged,
 }: {
   subject: CurriculumSubject;
-  allTopics: CurriculumTopic[];
   busy: boolean;
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
@@ -721,7 +711,6 @@ function SubjectCard({
                 {openLevelId === lvl.id ? (
                   <LevelDetail
                     subjectId={subject.id}
-                    allTopics={allTopics}
                     level={lvl}
                     topicsInLevel={topicsInLevel}
                     busy={busy}
@@ -741,7 +730,6 @@ function SubjectCard({
 
 function LevelDetail({
   subjectId,
-  allTopics,
   level,
   topicsInLevel,
   busy,
@@ -750,7 +738,6 @@ function LevelDetail({
   onChanged,
 }: {
   subjectId: string;
-  allTopics: CurriculumTopic[];
   level: CurriculumLevel;
   topicsInLevel: CurriculumTopic[];
   busy: boolean;
@@ -762,15 +749,15 @@ function LevelDetail({
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [editingTopicName, setEditingTopicName] = useState("");
   const [qCount, setQCount] = useState(String(level.testConfig?.questionCount ?? 8));
-  const [partRows, setPartRows] = useState(() => buildPartRows(level, allTopics));
+  const [partRows, setPartRows] = useState(() => buildPartRows(level, topicsInLevel));
 
   const partSig = level.levelTopicParticipations.map((p) => `${p.topicId}:${p.quota ?? ""}`).join("|");
-  const topicIdsSig = allTopics.map((t) => t.id).join(",");
+  const topicIdsSig = topicsInLevel.map((t) => t.id).join(",");
 
   useEffect(() => {
     setQCount(String(level.testConfig?.questionCount ?? 8));
-    setPartRows(buildPartRows(level, allTopics));
-  }, [level, partSig, topicIdsSig, allTopics]);
+    setPartRows(buildPartRows(level, topicsInLevel));
+  }, [level, partSig, topicIdsSig, topicsInLevel]);
 
   async function addTopic(e: React.FormEvent) {
     e.preventDefault();
@@ -976,12 +963,11 @@ function LevelDetail({
       <div>
         <p className="text-sm font-medium text-slate-700">Which chapters supply questions</p>
         <p className="text-xs text-slate-500 mt-0.5">
-          Leave quota blank to split questions evenly across selected chapters. Questions in the bank must match this
-          level and chapter.
+          Leave quota blank to split questions evenly across selected chapters. Questions in the bank must match this level and chapter.
         </p>
         <ul className="mt-2 space-y-2">
           {partRows.map((row) => {
-            const t = allTopics.find((x) => x.id === row.topicId);
+            const t = topicsInLevel.find((x) => x.id === row.topicId);
             return (
               <li key={row.topicId} className="flex flex-wrap items-center gap-2 text-sm">
                 <label className="inline-flex items-center gap-2">
