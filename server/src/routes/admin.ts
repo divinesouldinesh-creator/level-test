@@ -534,6 +534,42 @@ router.delete("/subjects/:subjectId", async (req, res) => {
   res.json({ ok: true });
 });
 
+router.patch("/subjects/:subjectId", async (req, res) => {
+  const subjectId = req.params.subjectId;
+  const schema = z.object({
+    name: z.string().optional(),
+    code: z.string().nullable().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const existing = await prisma.subject.findUnique({ where: { id: subjectId } });
+  if (!existing) return res.status(404).json({ error: "Subject not found" });
+
+  const nextName = p.data.name?.trim();
+  if (nextName && nextName.toLowerCase() !== existing.name.toLowerCase()) {
+    const duplicateSubject = await prisma.subject.findFirst({
+      where: {
+        name: { equals: nextName, mode: "insensitive" },
+        id: { not: subjectId },
+      },
+    });
+    if (duplicateSubject) return res.status(400).json({ error: "Subject name already exists" });
+  }
+
+  const nextCodeRaw = p.data.code;
+  const nextCode =
+    nextCodeRaw === undefined ? undefined : nextCodeRaw === null ? null : nextCodeRaw.trim() || null;
+  const s = await prisma.subject.update({
+    where: { id: subjectId },
+    data: {
+      ...(p.data.name !== undefined ? { name: nextName } : {}),
+      ...(p.data.code !== undefined ? { code: nextCode } : {}),
+    },
+  });
+  res.json(s);
+});
+
 router.patch("/topics/:topicId", async (req, res) => {
   const topicId = req.params.topicId;
   const schema = z.object({

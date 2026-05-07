@@ -440,6 +440,9 @@ function SubjectCard({
   onChanged: () => Promise<void>;
 }) {
   const [levelName, setLevelName] = useState("");
+  const [editingSubject, setEditingSubject] = useState(false);
+  const [editingSubjectName, setEditingSubjectName] = useState(subject.name);
+  const [editingSubjectCode, setEditingSubjectCode] = useState(subject.code ?? "");
   const [editingLevelId, setEditingLevelId] = useState<string | null>(null);
   const [editingLevelName, setEditingLevelName] = useState("");
   const [openLevelId, setOpenLevelId] = useState<string | null>(null);
@@ -505,14 +508,42 @@ function SubjectCard({
     }
   }
 
+  async function renameSubject() {
+    const nextName = editingSubjectName.trim();
+    if (!nextName) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subjects/${subject.id}`, {
+      method: "PATCH",
+      json: { name: nextName, code: editingSubjectCode.trim() || null },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not rename subject");
+    else {
+      setEditingSubject(false);
+      await onChanged();
+    }
+  }
+
   return (
     <details className="rounded-lg border border-slate-200 open:shadow-sm group">
       <summary className="cursor-pointer list-none px-4 py-3 font-medium text-slate-900 flex justify-between items-center hover:bg-slate-50 rounded-lg">
-        <span>
-          {subject.name}
-          {subject.code ? <span className="text-slate-500 font-normal ml-2">({subject.code})</span> : null}
-        </span>
+        <span>{subject.name}{subject.code ? <span className="text-slate-500 font-normal ml-2">({subject.code})</span> : null}</span>
         <span className="inline-flex items-center gap-3">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setEditingSubject(true);
+              setEditingSubjectName(subject.name);
+              setEditingSubjectCode(subject.code ?? "");
+            }}
+            className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-1 disabled:opacity-50"
+          >
+            Rename subject
+          </button>
           <button
             type="button"
             disabled={busy}
@@ -543,6 +574,48 @@ function SubjectCard({
         </span>
       </summary>
       <div className="px-4 pb-4 pt-0 border-t border-slate-100">
+        {editingSubject ? (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 flex flex-wrap gap-2 items-end">
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Subject name</span>
+              <input
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm min-w-[200px]"
+                value={editingSubjectName}
+                onChange={(e) => setEditingSubjectName(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Code</span>
+              <input
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm w-28"
+                value={editingSubjectCode}
+                onChange={(e) => setEditingSubjectCode(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={busy || !editingSubjectName.trim()}
+              onClick={() => void renameSubject()}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-50"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setEditingSubject(false);
+                setEditingSubjectName(subject.name);
+                setEditingSubjectCode(subject.code ?? "");
+              }}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
         <form onSubmit={addLevel} className="mt-3 flex flex-wrap gap-2 items-end">
           <input
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm flex-1 min-w-[200px]"
@@ -686,6 +759,8 @@ function LevelDetail({
   onChanged: () => Promise<void>;
 }) {
   const [topicName, setTopicName] = useState("");
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [editingTopicName, setEditingTopicName] = useState("");
   const [qCount, setQCount] = useState(String(level.testConfig?.questionCount ?? 8));
   const [partRows, setPartRows] = useState(() => buildPartRows(level, allTopics));
 
@@ -764,6 +839,24 @@ function LevelDetail({
     else await onChanged();
   }
 
+  async function renameTopic(topicId: string) {
+    const nextName = editingTopicName.trim();
+    if (!nextName) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/topics/${topicId}`, {
+      method: "PATCH",
+      json: { name: nextName },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not rename chapter");
+    else {
+      setEditingTopicId(null);
+      setEditingTopicName("");
+      await onChanged();
+    }
+  }
+
 
   function toggleTopic(topicId: string, on: boolean) {
     setPartRows((rows) => rows.map((r) => (r.topicId === topicId ? { ...r, included: on } : r)));
@@ -778,7 +871,50 @@ function LevelDetail({
             topicsInLevel.map((t) => (
               <li key={t.id} className="list-none">
                 <div className="inline-flex items-center gap-2">
-                  <span>{t.name}</span>
+                  {editingTopicId === t.id ? (
+                    <>
+                      <input
+                        className="rounded border border-slate-300 px-2 py-1 text-sm"
+                        value={editingTopicName}
+                        onChange={(e) => setEditingTopicName(e.target.value)}
+                        disabled={busy}
+                      />
+                      <button
+                        type="button"
+                        className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-0.5"
+                        disabled={busy || !editingTopicName.trim()}
+                        onClick={() => void renameTopic(t.id)}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-0.5"
+                        disabled={busy}
+                        onClick={() => {
+                          setEditingTopicId(null);
+                          setEditingTopicName("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span>{t.name}</span>
+                      <button
+                        type="button"
+                        className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-0.5"
+                        disabled={busy}
+                        onClick={() => {
+                          setEditingTopicId(t.id);
+                          setEditingTopicName(t.name);
+                        }}
+                      >
+                        Rename
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-0.5"
