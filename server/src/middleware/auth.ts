@@ -21,8 +21,15 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
+  let decoded: JwtPayload;
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+    return;
+  }
+
+  try {
     const dbUser = await prisma.user.findUnique({
       where: { id: decoded.sub },
       select: { role: true },
@@ -34,7 +41,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     req.user = { sub: decoded.sub, role: dbUser.role };
     next();
   } catch {
-    res.status(401).json({ error: "Invalid token" });
+    res.status(500).json({ error: "Auth check failed" });
   }
 }
 
