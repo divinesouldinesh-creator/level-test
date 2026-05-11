@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken } from "../../api";
 import * as XLSX from "xlsx";
+import { useConfirmDialog } from "../../components/ConfirmDialog";
 
 type TopicRow = { id: string; name: string; levelId: string | null };
 type LevelRow = { id: string; name: string; order: number };
@@ -35,6 +36,21 @@ type ImportResult = {
   errors: string[];
 };
 
+type ParsedQuestionPreview = {
+  stem: string;
+  optionA: string;
+  optionB: string;
+  optionC: string;
+  optionD: string;
+  correctOption: number;
+};
+
+type DryRunResult = {
+  dryRun: true;
+  parseCount: number;
+  questions: ParsedQuestionPreview[];
+};
+
 export function AdminQuestionBankPage() {
   const [subjects, setSubjects] = useState<SubjectRow[]>([]);
   const [classes, setClasses] = useState<ClassRow[]>([]);
@@ -64,6 +80,18 @@ export function AdminQuestionBankPage() {
   const [sheetFile, setSheetFile] = useState<File | null>(null);
   const [syncMode, setSyncMode] = useState(true);
   const [replaceMode, setReplaceMode] = useState(false);
+
+  const [pasteText, setPasteText] = useState("");
+  const [pasteDifficulty, setPasteDifficulty] = useState<"EASY" | "MEDIUM" | "HARD">("MEDIUM");
+  const [pastePreview, setPastePreview] = useState<ParsedQuestionPreview[] | null>(null);
+  const [pasteUnparsed, setPasteUnparsed] = useState(0);
+  const confirmDialog = useConfirmDialog();
+
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [editingTopicName, setEditingTopicName] = useState("");
+
+  const formRef = useRef<HTMLDivElement | null>(null);
+  const stemRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     void refreshSubjects();
@@ -213,10 +241,26 @@ export function AdminQuestionBankPage() {
       difficulty: q.difficulty,
       editId: q.id,
     });
+    setErr(null);
+    setImportMsg(null);
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      stemRef.current?.focus();
+    });
   }
 
-  async function removeQuestion(id: string) {
+  function removeQuestion(id: string, stem: string) {
     if (!topicId) return;
+    const preview = stem.length > 200 ? `${stem.slice(0, 200)}…` : stem;
+    confirmDialog.setRequest({
+      title: "Delete question",
+      message: `This will permanently delete the question shown below. This cannot be undone.\n\n"${preview}"`,
+      confirmLabel: "Delete question",
+      onConfirm: () => doRemoveQuestion(id),
+    });
+  }
+
+  async function doRemoveQuestion(id: string) {
     setBusy(true);
     setErr(null);
     const r = await api(`/api/v1/admin/questions/${id}`, { method: "DELETE" });
@@ -315,12 +359,142 @@ export function AdminQuestionBankPage() {
       );
       if (result.errors?.length) setImportErrors(result.errors);
       await loadQuestions(topicId, subjectId, levelId);
+      if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
     } catch {
       setErr("Sheet upload failed due to network/server error. Please try again.");
     } finally {
       setBusy(false);
       setImporting(false);
     }
+  }
+
+  function startEditTopic(t: TopicRow) {
+    setEditingTopicId(t.id);
+    setEditingTopicName(t.name);
+  }
+
+  function cancelEditTopic() {
+    setEditingTopicId(null);
+    setEditingTopicName("");
+  }
+
+  async function saveTopicRename(topicIdToRename: string) {
+    const next = editingTopicName.trim();
+    if (!next) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/topics/${topicIdToRename}`, {
+      method: "PATCH",
+      json: { name: next },
+    });
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Could not rename chapter");
+      return;
+    }
+    cancelEditTopic();
+    await refreshSubjects();
+  }
+
+  function removeTopic(t: TopicRow) {
+    confirmDialog.setRequest({
+      title: "Delete chapter permanently",
+      message: `This will permanently delete chapter "${t.name}" and all its questions. This cannot be undone.`,
+      requireTypedText: t.name,
+      confirmLabel: "Delete chapter",
+      onConfirm: () => doRemoveTopic(t),
+    });
+  }
+
+  async function doRemoveTopic(t: TopicRow) {
+    setBusy(true);
+    setErr(null);
+    // The user already typed the chapter name to confirm; if the soft delete
+    // hits a foreign-key wall we go straight to force delete instead of asking
+    // a second time.
+    let r = await api(`/api/v1/admin/topics/${t.id}`, { method: "DELETE" });
+    if (!r.ok && r.status === 400 && r.error && /history|usage|force/i.test(r.error)) {
+      r = await api(`/api/v1/admin/topics/${t.id}?force=1`, { method: "DELETE" });
+    }
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Could not delete chapter");
+      return;
+    }
+    if (topicId === t.id) setTopicId("");
+    await refreshSubjects();
+    if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
+  }
+
+  async function previewPaste() {
+    if (!pasteText.trim() || !subjectId || !levelId || !topicId) return;
+    setBusy(true);
+    setErr(null);
+    setImportMsg(null);
+    setImportErrors([]);
+    const r = await api<DryRunResult>("/api/v1/admin/questions/import-text", {
+      method: "POST",
+      json: {
+        subjectId,
+        levelId,
+        topicId,
+        text: pasteText,
+        dryRun: true,
+      },
+    });
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Could not parse pasted text");
+      setPastePreview(null);
+      return;
+    }
+    const data = r.data;
+    if (!data) {
+      setErr("Empty preview response");
+      setPastePreview(null);
+      return;
+    }
+    const blockCount = (pasteText.replace(/\r\n/g, "\n").trim().split(/\n\s*\n+/) || []).filter((b) => b.trim()).length;
+    setPastePreview(data.questions);
+    setPasteUnparsed(Math.max(0, blockCount - data.questions.length));
+  }
+
+  async function importPaste() {
+    if (!pasteText.trim() || !subjectId || !levelId || !topicId) return;
+    setBusy(true);
+    setImporting(true);
+    setErr(null);
+    setImportMsg(null);
+    setImportErrors([]);
+    const r = await api<ImportResult>("/api/v1/admin/questions/import-text", {
+      method: "POST",
+      json: {
+        subjectId,
+        levelId,
+        topicId,
+        text: pasteText,
+        mode: replaceMode ? "replace" : syncMode ? "sync" : "insert",
+        difficulty: pasteDifficulty,
+      },
+    });
+    setBusy(false);
+    setImporting(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Paste import failed");
+      return;
+    }
+    const result = r.data;
+    if (result) {
+      setImportMsg(
+        `Paste import completed. Mode ${result.mode}: imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} (parsed ${result.parseCount}).`
+      );
+      if (result.errors?.length) setImportErrors(result.errors);
+    }
+    setPasteText("");
+    setPastePreview(null);
+    setPasteUnparsed(0);
+    await loadQuestions(topicId, subjectId, levelId);
+    if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
   }
 
   function downloadQuestionTemplate() {
@@ -457,20 +631,77 @@ export function AdminQuestionBankPage() {
               {topicOptions.map((t) => {
                 const count = topicQuestionCount.get(t.id) ?? 0;
                 const empty = count === 0;
+                const isEditing = editingTopicId === t.id;
                 return (
-                  <button
-                    type="button"
+                  <div
                     key={t.id}
-                    onClick={() => setTopicId(t.id)}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
                       empty ? "border-amber-300 bg-amber-50" : "border-emerald-200 bg-emerald-50"
                     }`}
                   >
-                    <span className="font-medium text-slate-900">{t.name}</span>
-                    <span className={`ml-2 ${empty ? "text-amber-800" : "text-emerald-800"}`}>
-                      {count} question{count === 1 ? "" : "s"}
-                    </span>
-                  </button>
+                    {isEditing ? (
+                      <>
+                        <input
+                          autoFocus
+                          className="flex-1 min-w-0 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+                          value={editingTopicName}
+                          onChange={(e) => setEditingTopicName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void saveTopicRename(t.id);
+                            else if (e.key === "Escape") cancelEditTopic();
+                          }}
+                          disabled={busy}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void saveTopicRename(t.id)}
+                          disabled={busy || !editingTopicName.trim() || editingTopicName.trim() === t.name}
+                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEditTopic}
+                          disabled={busy}
+                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setTopicId(t.id)}
+                          className="flex-1 min-w-0 text-left"
+                        >
+                          <span className="font-medium text-slate-900">{t.name}</span>
+                          <span className={`ml-2 ${empty ? "text-amber-800" : "text-emerald-800"}`}>
+                            {count} question{count === 1 ? "" : "s"}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startEditTopic(t)}
+                          disabled={busy}
+                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-50"
+                          title="Rename chapter"
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeTopic(t)}
+                          disabled={busy}
+                          className="rounded border border-rose-300 bg-white text-rose-700 px-2 py-1 text-xs disabled:opacity-50"
+                          title="Delete chapter"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -478,11 +709,129 @@ export function AdminQuestionBankPage() {
         </div>
       ) : null}
 
+      <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 shadow-sm">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-lg font-semibold text-slate-900">Paste questions (fastest)</h2>
+          <span className="text-xs text-slate-500">English / Hindi / mixed math — Unicode preserved</span>
+        </div>
+        <p className="mt-1 text-sm text-slate-600">
+          Paste any number of MCQs separated by a blank line. Stems, options, and answers may be on separate lines or
+          options may be on a single line. Recognized labels: <code>Q1.</code> / <code>Question 1.</code> /{" "}
+          <code>प्रश्न १.</code> / <code>1.</code>; options <code>A) B) C) D)</code>, <code>(A) (B) (C) (D)</code>, or
+          Hindi <code>क/ख/ग/घ</code> / <code>अ/ब/स/द</code>; answers <code>Answer:</code> / <code>Ans:</code> /{" "}
+          <code>Correct:</code> / <code>उत्तर:</code> / <code>जवाब:</code>.
+        </p>
+        <textarea
+          className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono min-h-[200px]"
+          placeholder={`Q1. What is 2 + 2?\nA) 3   B) 4   C) 5   D) 6\nAnswer: B\n\nप्रश्न २. भारत की राजधानी क्या है?\nA) मुंबई\nB) कोलकाता\nC) नई दिल्ली\nD) चेन्नई\nउत्तर: C`}
+          value={pasteText}
+          onChange={(e) => {
+            setPasteText(e.target.value);
+            if (pastePreview) {
+              setPastePreview(null);
+              setPasteUnparsed(0);
+            }
+          }}
+          disabled={busy}
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="text-sm text-slate-700">
+            Default difficulty
+            <select
+              className="ml-2 rounded-lg border border-slate-300 px-2 py-1 text-sm"
+              value={pasteDifficulty}
+              onChange={(e) => setPasteDifficulty(e.target.value as "EASY" | "MEDIUM" | "HARD")}
+              disabled={busy}
+            >
+              <option value="EASY">Easy</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HARD">Hard</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void previewPaste()}
+            disabled={busy || !pasteText.trim() || !subjectId || !levelId || !topicId}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-50"
+          >
+            Preview parse
+          </button>
+          <button
+            type="button"
+            onClick={() => void importPaste()}
+            disabled={busy || !pasteText.trim() || !subjectId || !levelId || !topicId}
+            className="rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {importing ? "Saving…" : "Save all"}
+          </button>
+          {(!subjectId || !levelId || !topicId) && (
+            <span className="text-xs text-amber-700">Select subject, level, and topic above first.</span>
+          )}
+        </div>
+        {pastePreview ? (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+            <p className="text-sm font-medium text-slate-900">
+              Preview: {pastePreview.length} question{pastePreview.length === 1 ? "" : "s"} parsed
+              {pasteUnparsed > 0 && (
+                <span className="ml-2 text-amber-700">({pasteUnparsed} block{pasteUnparsed === 1 ? "" : "s"} could not be parsed)</span>
+              )}
+            </p>
+            {pastePreview.length === 0 ? (
+              <p className="mt-2 text-sm text-amber-800">
+                Nothing parsed. Make sure each question has 4 options and an answer line, separated from the next by a
+                blank line.
+              </p>
+            ) : (
+              <ol className="mt-2 space-y-3 text-sm">
+                {pastePreview.slice(0, 20).map((q, i) => (
+                  <li key={i} className="rounded border border-slate-200 px-3 py-2">
+                    <p className="font-medium text-slate-900 whitespace-pre-wrap">
+                      {i + 1}. {q.stem}
+                    </p>
+                    <ul className="mt-1 grid gap-0.5 text-slate-700 sm:grid-cols-2">
+                      {[q.optionA, q.optionB, q.optionC, q.optionD].map((opt, idx) => (
+                        <li
+                          key={idx}
+                          className={idx === q.correctOption ? "font-semibold text-emerald-700" : ""}
+                        >
+                          {String.fromCharCode(65 + idx)}) {opt}
+                          {idx === q.correctOption ? "  ✓" : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+                {pastePreview.length > 20 && (
+                  <li className="text-xs text-slate-500">… and {pastePreview.length - 20} more</li>
+                )}
+              </ol>
+            )}
+          </div>
+        ) : null}
+      </div>
+
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">{form.editId ? "Edit question" : "Add question"}</h2>
+        <div
+          ref={formRef}
+          className={`rounded-xl border bg-white p-4 shadow-sm transition ${
+            form.editId
+              ? "border-amber-400 ring-2 ring-amber-200 bg-amber-50/30"
+              : "border-slate-200"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {form.editId ? "Edit question" : "Add question"}
+            </h2>
+            {form.editId ? (
+              <span className="rounded-full bg-amber-100 text-amber-900 text-xs font-medium px-2 py-0.5">
+                Editing existing question
+              </span>
+            ) : null}
+          </div>
           <form onSubmit={saveQuestion} className="mt-3 space-y-2">
             <textarea
+              ref={stemRef}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm min-h-[88px]"
               placeholder="Question statement"
               value={form.stem}
@@ -555,7 +904,8 @@ export function AdminQuestionBankPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Import from Excel / CSV</h2>
           <p className="text-xs text-slate-500 mt-1">
-            Recommended format columns: question, optionA, optionB, optionC, optionD, answer (A/B/C/D), difficulty (optional).
+            Columns: <span className="font-mono">question, optionA-D, answer (A/B/C/D), difficulty</span>.
+            All rows go into the selected subject, level, and chapter.
           </p>
           <button
             type="button"
@@ -659,7 +1009,7 @@ export function AdminQuestionBankPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => void removeQuestion(q.id)}
+                    onClick={() => removeQuestion(q.id, q.stem)}
                     disabled={busy}
                     className="rounded border border-rose-300 text-rose-700 px-2 py-1 text-xs"
                   >
@@ -671,6 +1021,7 @@ export function AdminQuestionBankPage() {
           </ul>
         )}
       </div>
+      {confirmDialog.element}
     </>
   );
 }

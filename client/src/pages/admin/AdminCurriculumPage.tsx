@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
+import { useConfirmDialog, type ConfirmRequest } from "../../components/ConfirmDialog";
+
+type RequestConfirm = (req: ConfirmRequest) => void;
 
 type SectionRow = { id: string; name: string };
 type ClassSubjectLink = { subject: { id: string; name: string; code: string | null } };
@@ -43,6 +46,8 @@ export function AdminCurriculumPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const confirmDialog = useConfirmDialog();
+  const requestConfirm: RequestConfirm = (req) => confirmDialog.setRequest(req);
 
   const refresh = useCallback(async () => {
     setErr(null);
@@ -86,6 +91,7 @@ export function AdminCurriculumPage() {
             setBusy={setBusy}
             setErr={setErr}
             onChanged={refresh}
+            requestConfirm={requestConfirm}
           />
           <SubjectsPanel
             classes={classes}
@@ -94,9 +100,11 @@ export function AdminCurriculumPage() {
             setBusy={setBusy}
             setErr={setErr}
             onChanged={refresh}
+            requestConfirm={requestConfirm}
           />
         </div>
       )}
+      {confirmDialog.element}
     </>
   );
 }
@@ -108,6 +116,7 @@ function ClassesPanel({
   setBusy,
   setErr,
   onChanged,
+  requestConfirm,
 }: {
   classes: SchoolClassMeta[];
   subjectOptions: { id: string; label: string }[];
@@ -115,6 +124,7 @@ function ClassesPanel({
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
   onChanged: () => Promise<void>;
+  requestConfirm: RequestConfirm;
 }) {
   const [newName, setNewName] = useState("");
   const [newGrade, setNewGrade] = useState("");
@@ -172,13 +182,22 @@ function ClassesPanel({
     }
   }
 
-  async function unlinkSubject(classId: string, subjectId: string) {
-    setBusy(true);
-    setErr(null);
-    const r = await api(`/api/v1/admin/classes/${classId}/subjects/${subjectId}`, { method: "DELETE" });
-    setBusy(false);
-    if (!r.ok) setErr(r.error ?? "Could not remove subject");
-    else await onChanged();
+  function unlinkSubject(classId: string, subjectId: string, subjectName: string, className: string) {
+    requestConfirm({
+      title: "Remove subject from class",
+      message: `Remove subject "${subjectName}" from class "${className}"?\n\nThe subject and its content stay in the system, only this class loses access.`,
+      confirmLabel: "Remove",
+      onConfirm: async () => {
+        setBusy(true);
+        setErr(null);
+        const r = await api(`/api/v1/admin/classes/${classId}/subjects/${subjectId}`, {
+          method: "DELETE",
+        });
+        setBusy(false);
+        if (!r.ok) setErr(r.error ?? "Could not remove subject");
+        else await onChanged();
+      },
+    });
   }
 
   return (
@@ -267,7 +286,7 @@ function ClassesPanel({
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => void unlinkSubject(c.id, cs.subject.id)}
+                        onClick={() => unlinkSubject(c.id, cs.subject.id, cs.subject.name, c.name)}
                         className="rounded-full p-1 hover:bg-indigo-100 text-indigo-700"
                         aria-label={`Remove ${cs.subject.name}`}
                       >
@@ -319,6 +338,7 @@ function SubjectsPanel({
   setBusy,
   setErr,
   onChanged,
+  requestConfirm,
 }: {
   classes: SchoolClassMeta[];
   subjects: CurriculumSubject[];
@@ -326,6 +346,7 @@ function SubjectsPanel({
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
   onChanged: () => Promise<void>;
+  requestConfirm: RequestConfirm;
 }) {
   const [subName, setSubName] = useState("");
   const [subCode, setSubCode] = useState("");
@@ -409,6 +430,7 @@ function SubjectsPanel({
             setBusy={setBusy}
             setErr={setErr}
             onChanged={onChanged}
+            requestConfirm={requestConfirm}
           />
         ))}
       </div>
@@ -422,12 +444,14 @@ function SubjectCard({
   setBusy,
   setErr,
   onChanged,
+  requestConfirm,
 }: {
   subject: CurriculumSubject;
   busy: boolean;
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
   onChanged: () => Promise<void>;
+  requestConfirm: RequestConfirm;
 }) {
   const [levelName, setLevelName] = useState("");
   const [editingSubject, setEditingSubject] = useState(false);
@@ -540,24 +564,17 @@ function SubjectCard({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              void removeSubject();
+              requestConfirm({
+                title: "Delete subject permanently",
+                message: `This will permanently delete subject "${subject.name}" and all its levels, chapters, questions, and student history. This cannot be undone.`,
+                requireTypedText: subject.name,
+                confirmLabel: "Delete subject",
+                onConfirm: () => removeSubject(true),
+              });
             }}
-            className="text-xs rounded border border-rose-300 text-rose-700 px-2 py-1 disabled:opacity-50"
+            className="text-xs rounded border border-rose-500 bg-white text-rose-800 px-2 py-1 disabled:opacity-50"
           >
             Delete subject
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (!window.confirm("Hard delete this subject and all related data? This cannot be undone.")) return;
-              void removeSubject(true);
-            }}
-            className="text-xs rounded border border-rose-500 text-rose-800 px-2 py-1 disabled:opacity-50"
-          >
-            Hard delete
           </button>
           <span className="text-slate-400 text-sm group-open:hidden">Expand</span>
           <span className="text-slate-400 text-sm hidden group-open:inline">Collapse</span>
@@ -689,22 +706,19 @@ function SubjectCard({
                     </button>
                     <button
                       type="button"
-                      className="text-sm text-rose-700 font-medium"
-                      disabled={busy}
-                      onClick={() => void removeLevel(lvl.id)}
-                    >
-                      Delete level
-                    </button>
-                    <button
-                      type="button"
-                      className="text-sm text-rose-800 font-medium underline"
+                      className="text-sm text-rose-800 font-medium"
                       disabled={busy}
                       onClick={() => {
-                        if (!window.confirm("Hard delete this level and related data? This cannot be undone.")) return;
-                        void removeLevel(lvl.id, true);
+                        requestConfirm({
+                          title: "Delete level permanently",
+                          message: `This will permanently delete level "${lvl.name}" and all its chapters, questions, and student history. This cannot be undone.`,
+                          requireTypedText: lvl.name,
+                          confirmLabel: "Delete level",
+                          onConfirm: () => removeLevel(lvl.id, true),
+                        });
                       }}
                     >
-                      Hard delete
+                      Delete level
                     </button>
                   </div>
                 </div>
@@ -717,6 +731,7 @@ function SubjectCard({
                     setBusy={setBusy}
                     setErr={setErr}
                     onChanged={onChanged}
+                    requestConfirm={requestConfirm}
                   />
                 ) : null}
               </li>
@@ -736,6 +751,7 @@ function LevelDetail({
   setBusy,
   setErr,
   onChanged,
+  requestConfirm,
 }: {
   subjectId: string;
   level: CurriculumLevel;
@@ -744,6 +760,7 @@ function LevelDetail({
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
   onChanged: () => Promise<void>;
+  requestConfirm: RequestConfirm;
 }) {
   const [topicName, setTopicName] = useState("");
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
@@ -849,6 +866,23 @@ function LevelDetail({
     setPartRows((rows) => rows.map((r) => (r.topicId === topicId ? { ...r, included: on } : r)));
   }
 
+  function deleteTopic(topic: CurriculumTopic) {
+    requestConfirm({
+      title: "Delete chapter permanently",
+      message: `This will permanently delete chapter "${topic.name}" and all its questions plus any student history. This cannot be undone.`,
+      requireTypedText: topic.name,
+      confirmLabel: "Delete chapter",
+      onConfirm: async () => {
+        setBusy(true);
+        setErr(null);
+        const r = await api(`/api/v1/admin/topics/${topic.id}?force=1`, { method: "DELETE" });
+        setBusy(false);
+        if (!r.ok) setErr(r.error ?? "Could not delete chapter");
+        else await onChanged();
+      },
+    });
+  }
+
   return (
     <div className="mt-3 space-y-4 border-t border-slate-200 pt-3">
       <div>
@@ -909,6 +943,15 @@ function LevelDetail({
                     onClick={() => toggleTopic(t.id, false)}
                   >
                     Remove from level
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs rounded border border-rose-300 bg-white text-rose-700 px-2 py-0.5 disabled:opacity-50"
+                    disabled={busy}
+                    onClick={() => deleteTopic(t)}
+                    title="Delete chapter from the database"
+                  >
+                    Delete
                   </button>
                 </div>
               </li>

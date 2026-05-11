@@ -24,9 +24,20 @@ export function StudentSubjects() {
     <AppShell
       title={headerTitle}
       onLogout={logout}
-      nav={[{ to: "/student", label: "Subjects" }]}
+      nav={[
+        { to: "/student", label: "Skill subjects", end: true },
+        { to: "/student/syllabus", label: "Syllabus tests" },
+      ]}
     >
-      <h1 className="text-2xl font-bold text-slate-900">Your subjects</h1>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h1 className="text-2xl font-bold text-slate-900">Your skill subjects</h1>
+        <Link
+          to="/student/syllabus"
+          className="text-sm font-medium text-indigo-700 hover:text-indigo-900"
+        >
+          Syllabus tests →
+        </Link>
+      </div>
       <p className="text-slate-600 mt-1">Choose a subject to view levels and start a test.</p>
       {err && <p className="text-red-600 mt-4">{err}</p>}
       <ul className="mt-6 grid gap-4 sm:grid-cols-2">

@@ -261,6 +261,62 @@ router.get("/tests/:testId", async (req, res) => {
   });
 });
 
+router.get("/tests/:testId/review", async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.sub },
+    include: { student: true },
+  });
+  if (!user?.student) {
+    res.status(400).json({ error: "Not a student" });
+    return;
+  }
+
+  const test = await prisma.test.findFirst({
+    where: { id: req.params.testId, studentId: user.student.id },
+    include: {
+      attempts: { include: { studentAnswers: true } },
+      testQuestions: {
+        orderBy: { orderIndex: "asc" },
+        include: { question: { include: { topic: true } } },
+      },
+    },
+  });
+
+  if (!test) {
+    res.status(404).json({ error: "Test not found" });
+    return;
+  }
+  if (test.status !== "COMPLETED" || !test.attempts[0]) {
+    res.status(400).json({ error: "Test not yet submitted" });
+    return;
+  }
+
+  const attempt = test.attempts[0];
+  const answerByQ = new Map(attempt.studentAnswers.map((a) => [a.questionId, a]));
+
+  const questions = test.testQuestions.map((tq) => {
+    const q = tq.question;
+    const sa = answerByQ.get(q.id);
+    return {
+      id: q.id,
+      stem: q.stem,
+      options: [q.optionA, q.optionB, q.optionC, q.optionD],
+      selectedOption: sa?.selectedOption ?? null,
+      correctOption: q.correctOption,
+      isCorrect: sa?.isCorrect ?? false,
+      topicId: q.topicId,
+      topicName: q.topic.name,
+    };
+  });
+
+  res.json({
+    score: attempt.score,
+    maxScore: attempt.maxScore,
+    percentage: attempt.percentage,
+    questions,
+  });
+});
+
 const submitSchema = z.object({
   answers: z.array(
     z.object({

@@ -481,20 +481,24 @@ router.post("/subjects/:subjectId/topics", async (req, res) => {
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
   const normalizedName = p.data.name.trim();
-  if (p.data.levelId) {
-    const lvl = await prisma.level.findFirst({
-      where: { id: p.data.levelId, subjectId },
-    });
-    if (!lvl) return res.status(400).json({ error: "levelId must belong to this subject" });
-  }
-  const duplicateByName = await prisma.topic.findFirst({
-    where: { name: { equals: normalizedName, mode: "insensitive" } },
-  });
+  if (!normalizedName) return res.status(400).json({ error: "Name required" });
+
+  // Parallelize the level check and the duplicate-by-name lookup — both are
+  // independent reads, and on remote DBs the round-trip cost dominates.
+  const [lvl, duplicateByName] = await Promise.all([
+    p.data.levelId
+      ? prisma.level.findFirst({ where: { id: p.data.levelId, subjectId } })
+      : Promise.resolve(null),
+    prisma.topic.findFirst({
+      where: { name: { equals: normalizedName, mode: "insensitive" } },
+    }),
+  ]);
+  if (p.data.levelId && !lvl)
+    return res.status(400).json({ error: "levelId must belong to this subject" });
+
   const t = duplicateByName
     ? duplicateByName
-    : await prisma.topic.create({
-        data: { name: normalizedName },
-      });
+    : await prisma.topic.create({ data: { name: normalizedName } });
   if (p.data.levelId) {
     await prisma.levelTopicParticipation.upsert({
       where: { levelId_topicId: { levelId: p.data.levelId, topicId: t.id } },
@@ -912,6 +916,127 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
   });
 
   res.json({ batchId: batch.id, mode, imported, updated, skipped, parseCount: parsed.length, errors });
+});
+
+// --- Paste-text import ---
+router.post("/questions/import-text", async (req, res) => {
+  const schema = z.object({
+    subjectId: z.string(),
+    levelId: z.string(),
+    topicId: z.string(),
+    text: z.string(),
+    mode: z.enum(["insert", "sync", "replace"]).optional(),
+    difficulty: z.string().optional(),
+    dryRun: z.boolean().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const parsed = parseQuestionBlocks(p.data.text);
+  if (p.data.dryRun) {
+    res.json({
+      dryRun: true,
+      parseCount: parsed.length,
+      questions: parsed,
+    });
+    return;
+  }
+
+  const diff = parseDifficulty(p.data.difficulty);
+  const mode = p.data.mode ?? "insert";
+  if (mode === "replace") {
+    await prisma.question.deleteMany({
+      where: {
+        subjectId: p.data.subjectId,
+        levelId: p.data.levelId,
+        topicId: p.data.topicId,
+      },
+    });
+  }
+
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+  for (const pq of parsed) {
+    try {
+      const hash = questionContentHash(p.data.topicId, pq.stem, pq.correctOption);
+      if (mode === "sync") {
+        const existingByStem = await prisma.question.findFirst({
+          where: { topicId: p.data.topicId, stem: pq.stem },
+        });
+        if (existingByStem) {
+          const clash = await prisma.question.findUnique({ where: { contentHash: hash } });
+          if (clash && clash.id !== existingByStem.id) {
+            skipped++;
+            continue;
+          }
+          await prisma.question.update({
+            where: { id: existingByStem.id },
+            data: {
+              subjectId: p.data.subjectId,
+              levelId: p.data.levelId,
+              topicId: p.data.topicId,
+              stem: pq.stem,
+              optionA: pq.optionA,
+              optionB: pq.optionB,
+              optionC: pq.optionC,
+              optionD: pq.optionD,
+              correctOption: pq.correctOption,
+              difficulty: diff,
+              contentHash: hash,
+            },
+          });
+          updated++;
+          continue;
+        }
+      }
+      const exists = await prisma.question.findUnique({ where: { contentHash: hash } });
+      if (exists) {
+        skipped++;
+        continue;
+      }
+      await prisma.question.create({
+        data: {
+          subjectId: p.data.subjectId,
+          levelId: p.data.levelId,
+          topicId: p.data.topicId,
+          stem: pq.stem,
+          optionA: pq.optionA,
+          optionB: pq.optionB,
+          optionC: pq.optionC,
+          optionD: pq.optionD,
+          correctOption: pq.correctOption,
+          difficulty: diff,
+          contentHash: hash,
+          createdById: req.user!.sub,
+        },
+      });
+      imported++;
+    } catch (e) {
+      errors.push(String(e));
+    }
+  }
+
+  const batch = await prisma.questionImport.create({
+    data: {
+      filename: "paste-import",
+      uploadedById: req.user!.sub,
+      importedCount: imported + updated,
+      skippedDuplicates: skipped,
+      errorsJson: errors.length ? JSON.stringify(errors.slice(0, 20)) : null,
+    },
+  });
+
+  res.json({
+    batchId: batch.id,
+    mode,
+    imported,
+    updated,
+    skipped,
+    parseCount: parsed.length,
+    errors,
+  });
 });
 
 // --- Excel/CSV import ---

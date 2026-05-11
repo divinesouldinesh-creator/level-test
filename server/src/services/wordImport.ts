@@ -10,28 +10,109 @@ export type ParsedQuestion = {
   correctOption: number;
 };
 
-function normalizeMathText(input: string): string {
-  return input
-    .replace(/\$([^$]+)\$/g, "$1")
-    .replace(/\\sqrt\{([^}]+)\}/gi, "sqrt($1)")
-    .replace(/√\s*\(?([^)\s]+)\)?/g, "sqrt($1)")
-    .replace(/[²]/g, "^2")
-    .replace(/[³]/g, "^3")
-    .replace(/\s+/g, " ")
-    .trim();
+const DEVANAGARI_DIGIT_TO_ASCII: Record<string, string> = {
+  "०": "0",
+  "१": "1",
+  "२": "2",
+  "३": "3",
+  "४": "4",
+  "५": "5",
+  "६": "6",
+  "७": "7",
+  "८": "8",
+  "९": "9",
+};
+
+const HINDI_OPTION_LETTER_TO_LATIN: Record<string, "A" | "B" | "C" | "D"> = {
+  "क": "A",
+  "ख": "B",
+  "ग": "C",
+  "घ": "D",
+  "अ": "A",
+  "ब": "B",
+  "स": "C",
+  "द": "D",
+};
+
+function devanagariDigitsToAscii(input: string): string {
+  return input.replace(/[०-९]/g, (c) => DEVANAGARI_DIGIT_TO_ASCII[c] ?? c);
+}
+
+function optionLetterToIndex(token: string): number | null {
+  const ascii = HINDI_OPTION_LETTER_TO_LATIN[token];
+  if (ascii) return ascii.charCodeAt(0) - 65;
+  const u = token.toUpperCase();
+  if (u >= "A" && u <= "D") return u.charCodeAt(0) - 65;
+  return null;
+}
+
+const OPTION_TOKEN_CLASS = "[A-Da-dकखगघअबसद]";
+const ANSWER_LABEL_RE =
+  /^\s*(?:Correct\s+Answer|Correct\s+Ans|Answer|Ans|Correct|उत्तर|सही\s+उत्तर|जवाब)\s*[:=\-–]?\s*\(?\s*([A-Da-dकखगघअबसद])\)?/i;
+const STEM_PREFIX_RE =
+  /^\s*(?:Q\d+|Question\s*\d+|प्रश्न\s*\d+|प्र\.?\s*\d+|\d+)[\.\)\:\-–]\s+(.+)$/i;
+const OPTION_LINE_RE = new RegExp(
+  String.raw`^\s*\(?\s*(${OPTION_TOKEN_CLASS})\s*[\)\.\:\-–]\s+(.+)$`
+);
+
+/**
+ * Light text normalization that preserves Unicode characters (Devanagari,
+ * superscripts, math symbols, etc.) so the question renders identically to
+ * what the author typed. The previous implementation rewrote `²` → `^2`,
+ * `√x` → `sqrt(x)`, and stripped LaTeX `$...$` delimiters; that hurt math
+ * fidelity and prevented future KaTeX rendering.
+ */
+function normalizeWhitespace(input: string): string {
+  return input.replace(/\s+/g, " ").trim();
 }
 
 /**
- * Expected plain-text shape after mammoth conversion:
+ * If a line packs all options on one row (e.g. "A) 31 B) 32 C) 33 D) 34"),
+ * return them split into individual option strings. Returns null when the
+ * line has fewer than two markers, so multi-line layouts fall through.
+ */
+function splitInlineOptions(line: string): string[] | null {
+  const re = new RegExp(
+    String.raw`(^|\s)\(?\s*(${OPTION_TOKEN_CLASS})\s*[\)\.\:\-–]\s+`,
+    "g"
+  );
+  const matches: { start: number; markerEnd: number; letter: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line)) !== null) {
+    const leadingSpace = m[1].length;
+    const start = m.index + leadingSpace;
+    const markerEnd = m.index + m[0].length;
+    matches.push({ start, markerEnd, letter: m[2] });
+  }
+  if (matches.length < 2) return null;
+  // Require at least 2 distinct option letters before treating as inline.
+  const distinct = new Set(matches.map((x) => optionLetterToIndex(x.letter)));
+  distinct.delete(null as unknown as number);
+  if (distinct.size < 2) return null;
+  const out: string[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const segStart = matches[i].start;
+    const segEnd = i + 1 < matches.length ? matches[i + 1].start : line.length;
+    out.push(line.slice(segStart, segEnd).trim());
+  }
+  return out;
+}
+
+/**
+ * Parse a free-form text blob containing one or more multiple-choice
+ * questions into structured records.
  *
- * Q1. Question text here
- * A) option a
- * B) option b
- * C) option c
- * D) option d
- * Answer: A
+ * Recognized shapes (any combination, mixed languages OK):
  *
- * Blank line between questions.
+ *   Q1. <stem>           (also: Question 1., प्रश्न १., 1., 1))
+ *   A) <opt>             (also: A. / (A) / Hindi क/ख/ग/घ or अ/ब/स/द)
+ *   B) <opt>
+ *   C) <opt>
+ *   D) <opt>
+ *   Answer: B            (also: Ans, Correct, उत्तर, सही उत्तर, जवाब; A/B/C/D or Hindi letters)
+ *
+ * Inline option layouts ("A) 31 B) 32 C) 33 D) 34") are also supported.
+ * Blocks are separated by blank lines.
  */
 export function parseQuestionBlocks(text: string): ParsedQuestion[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
@@ -39,7 +120,7 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
   const out: ParsedQuestion[] = [];
 
   for (const block of blocks) {
-    const lines = block
+    const rawLines = block
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => {
@@ -47,55 +128,48 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
         if (/^[_\-=\s]{5,}$/.test(l)) return false;
         return true;
       });
-    if (lines.length < 6) continue;
+    if (rawLines.length < 2) continue;
+
+    // Expand any single-line option layout into individual option lines so
+    // the rest of the parser only has to handle one shape.
+    const lines: string[] = [];
+    for (const line of rawLines) {
+      const inline = splitInlineOptions(line);
+      if (inline) lines.push(...inline);
+      else lines.push(line);
+    }
 
     let stem = "";
     const options: string[] = ["", "", "", ""];
     let correct: number | null = null;
+    const stemFragments: string[] = [];
 
     for (const line of lines) {
-      const mStem =
-        line.match(/^Q\d*[\.\)]\s*(.+)$/i) ??
-        line.match(/^Question\s*\d*[\.\)]\s*(.+)$/i) ??
-        line.match(/^\d+[\.\)]\s*(.+)$/i);
-      if (mStem && !stem) {
-        stem = normalizeMathText(mStem[1].trim());
-        continue;
-      }
-      const opt = line.match(/^([A-D])[\)\.\s]\s*(.+)$/i);
-      if (opt) {
-        const idx = opt[1].toUpperCase().charCodeAt(0) - 65;
-        if (idx >= 0 && idx < 4) options[idx] = normalizeMathText(opt[2].trim());
-        continue;
-      }
-      const ans = line.match(/^(?:Correct\s+)?Answer\s*:\s*([A-D])/i);
+      const ans = line.match(ANSWER_LABEL_RE);
       if (ans) {
-        correct = ans[1].toUpperCase().charCodeAt(0) - 65;
+        const idx = optionLetterToIndex(ans[1]);
+        if (idx != null) correct = idx;
         continue;
       }
-      if (!stem && !/^([A-D])[\)\.]/.test(line)) {
-        stem = normalizeMathText(line.replace(/^Q\d*[\.\)]\s*/i, "").trim());
-      }
-    }
-
-    if (!stem) {
-      const first = normalizeMathText(lines[0].replace(/^Q\d*[\.\)]\s*/i, "").trim());
-      stem = first;
-    }
-
-    for (let i = 0; i < lines.length; i++) {
-      const opt = lines[i].match(/^([A-D])[\)\.\s]\s*(.+)$/i);
+      const opt = line.match(OPTION_LINE_RE);
       if (opt) {
-        const idx = opt[1].toUpperCase().charCodeAt(0) - 65;
-        if (idx >= 0 && idx < 4) options[idx] = normalizeMathText(opt[2].trim());
+        const idx = optionLetterToIndex(opt[1]);
+        if (idx != null && idx >= 0 && idx < 4) {
+          options[idx] = normalizeWhitespace(opt[2]);
+          continue;
+        }
       }
+      // Otherwise this is part of the stem. Honor numeric prefixes (English
+      // or Hindi) but keep the rest of the line intact.
+      const prefixed = devanagariDigitsToAscii(line).match(STEM_PREFIX_RE);
+      if (prefixed) {
+        stemFragments.push(prefixed[1].trim());
+        continue;
+      }
+      stemFragments.push(line);
     }
 
-    const ansLine = lines.find((l) => /^(?:Correct\s+)?Answer\s*:/i.test(l));
-    if (ansLine) {
-      const m = ansLine.match(/^(?:Correct\s+)?Answer\s*:\s*([A-D])/i);
-      if (m) correct = m[1].toUpperCase().charCodeAt(0) - 65;
-    }
+    if (stemFragments.length) stem = normalizeWhitespace(stemFragments.join(" "));
 
     if (stem && options.every(Boolean) && correct != null && correct >= 0 && correct < 4) {
       out.push({

@@ -13,11 +13,15 @@ import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 
-type Q = { id: string; stem: string; options: string[]; topicId: string };
-type SavedTestProgress = {
-  answers: Record<string, number>;
-  idx: number;
+type Q = {
+  id: string;
+  stem: string;
+  options: string[];
+  chapterId: string;
+  topicId: string;
 };
+
+type SavedProgress = { answers: Record<string, number>; idx: number };
 
 type ReviewItem = {
   id: string;
@@ -28,6 +32,8 @@ type ReviewItem = {
   isCorrect: boolean;
   topicId: string;
   topicName: string;
+  chapterId: string;
+  chapterName: string;
 };
 
 type ReviewPayload = {
@@ -39,27 +45,29 @@ type ReviewPayload = {
 
 type PracticeState = { picks: number[]; solved: boolean };
 
+type DoneState = {
+  score: number;
+  maxScore: number;
+  percentage: number;
+  subject?: string;
+  difficulty?: string;
+  chapters?: string[];
+  chapterWise: { chapterId: string; chapterName: string; correct: number; total: number; percentage: number }[];
+};
+
 function progressKey(testId?: string): string | null {
-  return testId ? `student-test-progress:${testId}` : null;
+  return testId ? `student-syllabus-progress:${testId}` : null;
 }
 
-export function StudentTest() {
+export function SyllabusTakeTest() {
   const { testId } = useParams();
   const { logout, auth } = useAuth();
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState<Q[]>([]);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [idx, setIdx] = useState(0);
-  const [done, setDone] = useState<null | {
-    score: number;
-    maxScore: number;
-    percentage: number;
-    band: string;
-    topicWise: { topicName: string; correct: number; total: number; percentage: number }[];
-    strongTopics: string[];
-    weakTopics: string[];
-    suggestedNextLevelId: string | null;
-  }>(null);
+  const [done, setDone] = useState<DoneState | null>(null);
+  const [meta, setMeta] = useState<{ subject?: string; difficulty?: string; chapters?: string[] }>({});
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -73,7 +81,10 @@ export function StudentTest() {
   useEffect(() => {
     function blockCopyHotkeys(e: KeyboardEvent) {
       const key = e.key.toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && (key === "c" || key === "x" || key === "a" || key === "u" || key === "s" || key === "p")) {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        (key === "c" || key === "x" || key === "a" || key === "u" || key === "s" || key === "p")
+      ) {
         e.preventDefault();
       }
     }
@@ -98,17 +109,16 @@ export function StudentTest() {
     const raw = localStorage.getItem(key);
     if (!raw) return;
     try {
-      const saved = JSON.parse(raw) as SavedTestProgress;
+      const saved = JSON.parse(raw) as SavedProgress;
       const validIds = new Set(questions.map((q) => q.id));
-      const restoredAnswers: Record<string, number> = {};
+      const restored: Record<string, number> = {};
       for (const [qid, opt] of Object.entries(saved.answers ?? {})) {
         if (validIds.has(qid) && Number.isInteger(opt) && opt >= 0 && opt <= 3) {
-          restoredAnswers[qid] = opt;
+          restored[qid] = opt;
         }
       }
-      setAnswers(restoredAnswers);
-      const maxIdx = Math.max(0, questions.length - 1);
-      setIdx(Math.min(Math.max(saved.idx ?? 0, 0), maxIdx));
+      setAnswers(restored);
+      setIdx(Math.min(Math.max(saved.idx ?? 0, 0), Math.max(0, questions.length - 1)));
     } catch {
       localStorage.removeItem(key);
     }
@@ -118,13 +128,12 @@ export function StudentTest() {
     if (!testId || questions.length === 0 || done) return;
     const key = progressKey(testId);
     if (!key) return;
-    const payload: SavedTestProgress = { answers, idx };
-    localStorage.setItem(key, JSON.stringify(payload));
+    localStorage.setItem(key, JSON.stringify({ answers, idx }));
   }, [testId, questions, answers, idx, done]);
 
   useEffect(() => {
     void (async () => {
-      const r = await api<unknown>(`/api/v1/student/tests/${testId}`);
+      const r = await api<unknown>(`/api/v1/student/syllabus/tests/${testId}`);
       setLoading(false);
       if (!r.ok) {
         setErr(r.error ?? "Failed");
@@ -138,29 +147,37 @@ export function StudentTest() {
           score: data.score as number,
           maxScore: data.maxScore as number,
           percentage: data.percentage as number,
-          band: data.band as string,
-          topicWise: (data.topicWise as { topicName: string; correct: number; total: number; percentage: number }[]) ?? [],
-          strongTopics: (data.strongTopics as string[]) ?? [],
-          weakTopics: (data.weakTopics as string[]) ?? [],
-          suggestedNextLevelId: (data.suggestedNextLevelId as string | null) ?? null,
+          subject: data.subject as string | undefined,
+          difficulty: data.difficulty as string | undefined,
+          chapters: data.chapters as string[] | undefined,
+          chapterWise:
+            (data.chapterWise as DoneState["chapterWise"]) ?? [],
         });
         return;
       }
-      const qs = (data.questions as Q[]) ?? [];
-      setQuestions(qs);
+      setMeta({
+        subject: data.subject as string | undefined,
+        difficulty: data.difficulty as string | undefined,
+        chapters: data.chapters as string[] | undefined,
+      });
+      setQuestions((data.questions as Q[]) ?? []);
       setIdx(0);
     })();
   }, [testId]);
 
   const current = questions[idx];
-  const progress = questions.length ? Math.round(((idx + (answers[current?.id ?? ""] !== undefined ? 1 : 0)) / questions.length) * 100) : 0;
+  const progress = questions.length
+    ? Math.round(
+        ((idx + (answers[current?.id ?? ""] !== undefined ? 1 : 0)) / questions.length) * 100
+      )
+    : 0;
 
   async function openReview() {
     setReviewOpen(true);
     if (reviewItems) return;
     setReviewLoading(true);
     setReviewErr(null);
-    const r = await api<ReviewPayload>(`/api/v1/student/tests/${testId}/review`);
+    const r = await api<ReviewPayload>(`/api/v1/student/syllabus/tests/${testId}/review`);
     setReviewLoading(false);
     if (!r.ok || !r.data) {
       setReviewErr(r.error ?? "Could not load review");
@@ -197,16 +214,7 @@ export function StudentTest() {
     }
     setSubmitting(true);
     setErr(null);
-    const r = await api<{
-      score: number;
-      maxScore: number;
-      percentage: number;
-      band: string;
-      topicWise: { topicName: string; correct: number; total: number; percentage: number }[];
-      strongTopics: string[];
-      weakTopics: string[];
-      suggestedNextLevelId: string | null;
-    }>(`/api/v1/student/tests/${testId}/submit`, {
+    const r = await api<DoneState>(`/api/v1/student/syllabus/tests/${testId}/submit`, {
       method: "POST",
       json: {
         answers: questions.map((q) => ({ questionId: q.id, selectedOption: answers[q.id]! })),
@@ -219,7 +227,7 @@ export function StudentTest() {
     }
     const key = progressKey(testId);
     if (key) localStorage.removeItem(key);
-    setDone(r.data);
+    setDone({ ...r.data, subject: meta.subject, difficulty: meta.difficulty, chapters: meta.chapters });
   }
 
   if (loading) {
@@ -231,67 +239,64 @@ export function StudentTest() {
   }
 
   if (done) {
-    const chartData = done.topicWise.map((t) => ({
-      name: t.topicName.length > 12 ? t.topicName.slice(0, 10) + "…" : t.topicName,
-      pct: t.percentage,
+    const chartData = done.chapterWise.map((c) => ({
+      name: c.chapterName.length > 14 ? c.chapterName.slice(0, 12) + "…" : c.chapterName,
+      pct: c.percentage,
     }));
     return (
       <AppShell
-        title="Results"
+        title="Syllabus result"
         onLogout={logout}
-        nav={[{ to: "/student", label: "Subjects" }]}
+        nav={[
+          { to: "/student", label: "Skill subjects" },
+          { to: "/student/syllabus", label: "Syllabus tests" },
+        ]}
       >
         <h1 className="text-2xl font-bold">Your result</h1>
+        <p className="mt-1 text-sm text-slate-600">
+          {done.subject}
+          {done.difficulty ? ` · ${done.difficulty}` : ""}
+          {done.chapters && done.chapters.length ? ` · ${done.chapters.join(", ")}` : ""}
+        </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div className="rounded-xl bg-white border p-4 shadow-sm">
             <p className="text-sm text-slate-500">Score</p>
-            <p className="text-3xl font-bold text-brand-800">
+            <p className="text-3xl font-bold text-indigo-800">
               {done.score}/{done.maxScore}
             </p>
           </div>
           <div className="rounded-xl bg-white border p-4 shadow-sm">
             <p className="text-sm text-slate-500">Percentage</p>
-            <p className="text-3xl font-bold text-brand-800">{done.percentage.toFixed(1)}%</p>
+            <p className="text-3xl font-bold text-indigo-800">{done.percentage.toFixed(1)}%</p>
           </div>
           <div className="rounded-xl bg-white border p-4 shadow-sm">
-            <p className="text-sm text-slate-500">Band</p>
-            <p className="text-2xl font-bold text-slate-800">{done.band}</p>
+            <p className="text-sm text-slate-500">Mode</p>
+            <p className="text-2xl font-bold text-slate-800">Practice</p>
           </div>
         </div>
-        <div className="mt-6 rounded-xl bg-white border p-4 overflow-x-auto">
-          <p className="font-semibold mb-2">Topic-wise</p>
-          <div className="h-64 min-w-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Bar dataKey="pct" fill="#0284c7" radius={[4, 4, 0, 0]} name="%" />
-              </BarChart>
-            </ResponsiveContainer>
+        {chartData.length > 0 && (
+          <div className="mt-6 rounded-xl bg-white border p-4 overflow-x-auto">
+            <p className="font-semibold mb-2">Chapter-wise</p>
+            <div className="h-64 min-w-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="pct" fill="#6366f1" radius={[4, 4, 0, 0]} name="%" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-        </div>
-        <div className="mt-4 grid sm:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <p className="font-semibold text-emerald-900">Strong topics</p>
-            <p className="text-emerald-800 mt-1">{done.strongTopics.length ? done.strongTopics.join(", ") : "—"}</p>
-          </div>
-          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
-            <p className="font-semibold text-rose-900">Weak topics</p>
-            <p className="text-rose-800 mt-1">{done.weakTopics.length ? done.weakTopics.join(", ") : "—"}</p>
-          </div>
-        </div>
-        {done.suggestedNextLevelId && (
-          <p className="mt-4 text-brand-800 font-medium">Next level unlocked — open Levels to continue.</p>
         )}
 
         {!reviewOpen ? (
           <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4">
             <p className="font-semibold text-slate-900">Learn from your mistakes</p>
             <p className="mt-1 text-sm text-slate-700">
-              Open the review to see the correct answer for every question. You can also re-attempt the questions you
-              missed — practice picks do not change your score.
+              Open the review to see the correct answer for every question. You can also re-attempt the questions
+              you missed — practice picks do not change your score.
             </p>
             <button
               type="button"
@@ -315,7 +320,9 @@ export function StudentTest() {
                     type="button"
                     onClick={() => setReviewFilter("wrong")}
                     className={`px-3 py-1.5 ${
-                      reviewFilter === "wrong" ? "bg-rose-100 text-rose-800 font-medium" : "bg-white text-slate-600"
+                      reviewFilter === "wrong"
+                        ? "bg-rose-100 text-rose-800 font-medium"
+                        : "bg-white text-slate-600"
                     }`}
                   >
                     Wrong only
@@ -324,7 +331,9 @@ export function StudentTest() {
                     type="button"
                     onClick={() => setReviewFilter("all")}
                     className={`px-3 py-1.5 ${
-                      reviewFilter === "all" ? "bg-slate-100 text-slate-900 font-medium" : "bg-white text-slate-600"
+                      reviewFilter === "all"
+                        ? "bg-slate-100 text-slate-900 font-medium"
+                        : "bg-white text-slate-600"
                     }`}
                   >
                     All
@@ -353,8 +362,8 @@ export function StudentTest() {
                 if (reviewFilter === "wrong" && filtered.length === 0) {
                   return (
                     <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                      Perfect score — nothing wrong to review. Switch to <span className="font-medium">All</span> to
-                      revisit your answers.
+                      Perfect score — nothing wrong to review. Switch to <span className="font-medium">All</span>{" "}
+                      to revisit your answers.
                     </p>
                   );
                 }
@@ -364,7 +373,7 @@ export function StudentTest() {
                     {filtered.map((q, i) => {
                       const ps = practice[q.id] ?? { picks: [], solved: false };
                       const wrongPicks = new Set(ps.picks.filter((p) => p !== q.correctOption));
-                      const showCorrectStatic = ps.picks.length === 0; // before any practice click
+                      const showCorrectStatic = ps.picks.length === 0;
                       return (
                         <li
                           key={q.id}
@@ -386,19 +395,23 @@ export function StudentTest() {
                               </span>
                             )}
                           </div>
-                          <p className="mt-1 text-xs text-slate-500">Chapter: {q.topicName}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {q.chapterName} · {q.topicName}
+                          </p>
                           {!q.isCorrect && q.selectedOption != null ? (
                             <p className="mt-1 text-xs text-slate-500">
                               Your original answer:{" "}
-                              <span className="font-medium text-rose-700">{labels[q.selectedOption]}</span>
+                              <span className="font-medium text-rose-700">
+                                {labels[q.selectedOption]}
+                              </span>
                             </p>
                           ) : null}
 
                           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                            {q.options.map((opt, idx) => {
-                              const isCorrect = idx === q.correctOption;
-                              const wasOriginal = idx === q.selectedOption;
-                              const isWrongPick = wrongPicks.has(idx);
+                            {q.options.map((opt, optIdx) => {
+                              const isCorrect = optIdx === q.correctOption;
+                              const wasOriginal = optIdx === q.selectedOption;
+                              const isWrongPick = wrongPicks.has(optIdx);
                               let cls =
                                 "w-full text-left rounded-lg border px-3 py-2 text-sm min-h-[44px] transition";
                               let suffix = "";
@@ -429,22 +442,23 @@ export function StudentTest() {
                                   cls += " border-slate-200 bg-white text-slate-700";
                                 }
                               } else if (isWrongPick) {
-                                cls += " border-rose-300 bg-rose-50 text-rose-700 opacity-70 cursor-not-allowed";
+                                cls +=
+                                  " border-rose-300 bg-rose-50 text-rose-700 opacity-70 cursor-not-allowed";
                                 suffix = "  ✗";
                               } else {
                                 cls += " border-slate-300 bg-white text-slate-800 hover:border-indigo-400";
                               }
-                              const disabled = q.isCorrect || ps.solved || showCorrectStatic === false ? !!isWrongPick : false;
-                              const clickable = !q.isCorrect && !showCorrectStatic && !ps.solved && !isWrongPick;
+                              const clickable =
+                                !q.isCorrect && !showCorrectStatic && !ps.solved && !isWrongPick;
                               return (
                                 <button
-                                  key={idx}
+                                  key={optIdx}
                                   type="button"
-                                  onClick={() => clickable && practicePick(q, idx)}
-                                  disabled={!clickable && !showCorrectStatic ? true : disabled}
+                                  onClick={() => clickable && practicePick(q, optIdx)}
+                                  disabled={!clickable && !showCorrectStatic ? true : isWrongPick}
                                   className={cls}
                                 >
-                                  <span className="font-semibold mr-2">{labels[idx]}.</span>
+                                  <span className="font-semibold mr-2">{labels[optIdx]}.</span>
                                   {opt}
                                   {suffix ? <span className="text-xs ml-2">{suffix}</span> : null}
                                 </button>
@@ -457,7 +471,9 @@ export function StudentTest() {
                               {showCorrectStatic ? (
                                 <button
                                   type="button"
-                                  onClick={() => setPractice((p) => ({ ...p, [q.id]: { picks: [], solved: false } }))}
+                                  onClick={() =>
+                                    setPractice((p) => ({ ...p, [q.id]: { picks: [], solved: false } }))
+                                  }
                                   className="rounded-lg border border-indigo-300 bg-white text-indigo-700 px-3 py-1.5"
                                 >
                                   Try this question again
@@ -502,10 +518,10 @@ export function StudentTest() {
         )}
 
         <Link
-          to="/student"
-          className="mt-8 inline-flex rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] items-center"
+          to="/student/syllabus"
+          className="mt-8 inline-flex rounded-xl bg-indigo-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] items-center"
         >
-          Back to subjects
+          Back to syllabus subjects
         </Link>
       </AppShell>
     );
@@ -513,14 +529,21 @@ export function StudentTest() {
 
   if (!current) {
     return (
-      <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[{ to: "/student", label: "Subjects" }]}>
+      <AppShell
+        title={auth.profile?.fullName ?? "Test"}
+        onLogout={logout}
+        nav={[
+          { to: "/student", label: "Skill subjects" },
+          { to: "/student/syllabus", label: "Syllabus tests" },
+        ]}
+      >
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-900">No questions available for this test.</p>
+          <p className="font-semibold text-amber-900">No questions in this test.</p>
           <p className="text-amber-800 text-sm mt-1">
-            {err ?? "This test does not have question rows yet. Please go back and start a new test."}
+            {err ?? "Please go back and start a new test."}
           </p>
-          <Link to="/student" className="mt-3 inline-block text-brand-700 font-medium">
-            Back to subjects
+          <Link to="/student/syllabus" className="mt-3 inline-block text-indigo-700 font-medium">
+            Back to syllabus
           </Link>
         </div>
       </AppShell>
@@ -530,10 +553,27 @@ export function StudentTest() {
   const labels = ["A", "B", "C", "D"];
 
   return (
-    <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[{ to: "/student", label: "Subjects" }]}>
+    <AppShell
+      title={auth.profile?.fullName ?? "Test"}
+      onLogout={logout}
+      nav={[
+        { to: "/student", label: "Skill subjects" },
+        { to: "/student/syllabus", label: "Syllabus tests" },
+      ]}
+    >
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-xs text-slate-500">
+          {meta.subject}
+          {meta.difficulty ? ` · ${meta.difficulty}` : ""}
+          {meta.chapters && meta.chapters.length ? ` · ${meta.chapters.join(", ")}` : ""}
+        </p>
+      </div>
       <div className="mb-4">
         <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
-          <div className="h-full bg-brand-500 transition-all" style={{ width: `${progress}%` }} />
+          <div
+            className="h-full bg-indigo-500 transition-all"
+            style={{ width: `${progress}%` }}
+          />
         </div>
         <p className="text-sm text-slate-600 mt-2">
           Question {idx + 1} of {questions.length}
@@ -550,16 +590,14 @@ export function StudentTest() {
             <button
               key={i}
               type="button"
-              onClick={() => {
-                setAnswers((a) => ({ ...a, [current.id]: i }));
-              }}
+              onClick={() => setAnswers((a) => ({ ...a, [current.id]: i }))}
               className={`w-full text-left rounded-xl border px-4 py-4 text-base min-h-[52px] transition ${
                 answers[current.id] === i
-                  ? "border-brand-600 bg-brand-50 ring-2 ring-brand-500"
-                  : "border-slate-200 hover:border-brand-300 bg-slate-50"
+                  ? "border-indigo-600 bg-indigo-50 ring-2 ring-indigo-500"
+                  : "border-slate-200 hover:border-indigo-300 bg-slate-50"
               }`}
             >
-              <span className="font-semibold text-brand-700 mr-2">{labels[i]}.</span>
+              <span className="font-semibold text-indigo-700 mr-2">{labels[i]}.</span>
               {opt}
             </button>
           ))}
@@ -578,7 +616,7 @@ export function StudentTest() {
           <button
             type="button"
             onClick={() => setIdx((i) => i + 1)}
-            className="rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] flex-1"
+            className="rounded-xl bg-indigo-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] flex-1"
           >
             Next
           </button>
@@ -593,7 +631,7 @@ export function StudentTest() {
           </button>
         )}
       </div>
-      {err && <p className="text-red-600 mt-4">{err}</p>}
+      {err && <p className="text-rose-700 mt-4">{err}</p>}
     </AppShell>
   );
 }

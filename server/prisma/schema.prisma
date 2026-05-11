@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -40,29 +40,31 @@ enum AttendanceStatus {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  passwordHash String
-  passwordPlain String? @map("password_plain")
-  role         Role
-  email        String?  @unique
+  id             String   @id @default(cuid())
+  passwordHash   String
+  passwordPlain  String?  @map("password_plain")
+  role           Role
+  email          String?  @unique
   /// Login for students (e.g. admission number)
-  studentLoginId String? @unique @map("student_login_id")
-  createdAt    DateTime @default(now()) @map("created_at")
+  studentLoginId String?  @unique @map("student_login_id")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   student Student?
   teacher Teacher?
   admin   Admin?
 
-  questionsCreated Question[] @relation("QuestionCreatedBy")
-  questionImports  QuestionImport[]
-  attendanceSessionsTaken AttendanceSession[] @relation("AttendanceTakenBy")
+  questionsCreated         Question[]               @relation("QuestionCreatedBy")
+  questionImports          QuestionImport[]
+  attendanceSessionsTaken  AttendanceSession[]      @relation("AttendanceTakenBy")
+  syllabusQuestionsCreated SyllabusQuestion[]       @relation("SyllabusQuestionCreatedBy")
+  syllabusQuestionImports  SyllabusQuestionImport[]
 }
 
 model Admin {
-  id        String @id @default(cuid())
-  userId    String @unique @map("user_id")
-  fullName  String @map("full_name")
-  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  userId   String @unique @map("user_id")
+  fullName String @map("full_name")
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Teacher {
@@ -73,56 +75,58 @@ model Teacher {
 }
 
 model SchoolClass {
-  id        String    @id @default(cuid())
-  name      String
-  grade     String?
-  sections  Section[]
-  students  Student[]
-  subjects  ClassSubject[]
+  id                 String              @id @default(cuid())
+  name               String
+  grade              String?
+  sections           Section[]
+  students           Student[]
+  subjects           ClassSubject[]
   attendanceSessions AttendanceSession[]
+  syllabusSubjects   SyllabusSubject[]
 }
 
 model Section {
-  id        String @id @default(cuid())
-  classId   String @map("class_id")
-  name      String
-  schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
-  students  Student[]
+  id                 String              @id @default(cuid())
+  classId            String              @map("class_id")
+  name               String
+  schoolClass        SchoolClass         @relation(fields: [classId], references: [id], onDelete: Cascade)
+  students           Student[]
   attendanceSessions AttendanceSession[]
 }
 
 model Student {
-  id         String   @id @default(cuid())
-  userId     String   @unique @map("user_id")
-  classId    String   @map("class_id")
-  sectionId  String   @map("section_id")
-  fullName   String   @map("full_name")
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String      @id @default(cuid())
+  userId      String      @unique @map("user_id")
+  classId     String      @map("class_id")
+  sectionId   String      @map("section_id")
+  fullName    String      @map("full_name")
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
-  section    Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  section     Section     @relation(fields: [sectionId], references: [id], onDelete: Cascade)
 
-  tests           Test[]
-  studentProgress StudentProgress[]
-  topicPerformance TopicPerformance[]
+  tests             Test[]
+  studentProgress   StudentProgress[]
+  topicPerformance  TopicPerformance[]
   attendanceEntries AttendanceEntry[]
+  syllabusTests     SyllabusTest[]
 }
 
 model Subject {
-  id     String @id @default(cuid())
-  name   String
-  code   String?
-  levels Level[]
-  questions Question[]
-  tests   Test[]
-  classSubjects ClassSubject[]
+  id              String            @id @default(cuid())
+  name            String
+  code            String?
+  levels          Level[]
+  questions       Question[]
+  tests           Test[]
+  classSubjects   ClassSubject[]
   studentProgress StudentProgress[]
 }
 
 /// Join: which subjects a class studies (students see these subjects)
 model ClassSubject {
-  id        String @id @default(cuid())
-  classId   String @map("class_id")
-  subjectId String @map("subject_id")
+  id          String      @id @default(cuid())
+  classId     String      @map("class_id")
+  subjectId   String      @map("subject_id")
   schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
   subject     Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
@@ -131,36 +135,36 @@ model ClassSubject {
 }
 
 model Level {
-  id        String   @id @default(cuid())
-  subjectId String   @map("subject_id")
-  order     Int
-  name      String
-  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  questions Question[]
-  tests     Test[]
-  testConfig LevelTestConfig?
+  id                       String                    @id @default(cuid())
+  subjectId                String                    @map("subject_id")
+  order                    Int
+  name                     String
+  subject                  Subject                   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  questions                Question[]
+  tests                    Test[]
+  testConfig               LevelTestConfig?
   levelTopicParticipations LevelTopicParticipation[]
-  studentProgress StudentProgress[]
-  suggestedNextInAttempts TestAttempt[] @relation("SuggestedNextLevel")
+  studentProgress          StudentProgress[]
+  suggestedNextInAttempts  TestAttempt[]             @relation("SuggestedNextLevel")
 }
 
 model Topic {
-  id        String @id @default(cuid())
-  name      String
+  id   String @id @default(cuid())
+  name String
 
-  questions Question[]
+  questions                Question[]
   levelTopicParticipations LevelTopicParticipation[]
-  topicPerformance TopicPerformance[]
+  topicPerformance         TopicPerformance[]
 
   @@unique([name])
 }
 
 /// Per-level: total questions in one test (e.g. 8 for level 0)
 model LevelTestConfig {
-  id             String @id @default(cuid())
-  levelId        String @unique @map("level_id")
-  questionCount  Int    @map("question_count")
-  level          Level  @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  id            String @id @default(cuid())
+  levelId       String @unique @map("level_id")
+  questionCount Int    @map("question_count")
+  level         Level  @relation(fields: [levelId], references: [id], onDelete: Cascade)
 }
 
 /// Which topics supply questions for a level test; quota null = split remaining evenly
@@ -178,31 +182,31 @@ model LevelTopicParticipation {
 }
 
 model Question {
-  id             String     @id @default(cuid())
-  subjectId      String     @map("subject_id")
-  levelId        String     @map("level_id")
-  topicId        String     @map("topic_id")
-  stem           String
-  optionA        String     @map("option_a")
-  optionB        String     @map("option_b")
-  optionC        String     @map("option_c")
-  optionD        String     @map("option_d")
+  id               String     @id @default(cuid())
+  subjectId        String     @map("subject_id")
+  levelId          String     @map("level_id")
+  topicId          String     @map("topic_id")
+  stem             String
+  optionA          String     @map("option_a")
+  optionB          String     @map("option_b")
+  optionC          String     @map("option_c")
+  optionD          String     @map("option_d")
   /// 0=A, 1=B, 2=C, 3=D
-  correctOption  Int        @map("correct_option")
-  difficulty     Difficulty @default(MEDIUM)
-  contentHash    String     @map("content_hash")
-  parentQuestionId String?  @map("parent_question_id")
-  createdById    String?    @map("created_by_id")
-  createdAt      DateTime   @default(now()) @map("created_at")
+  correctOption    Int        @map("correct_option")
+  difficulty       Difficulty @default(MEDIUM)
+  contentHash      String     @map("content_hash")
+  parentQuestionId String?    @map("parent_question_id")
+  createdById      String?    @map("created_by_id")
+  createdAt        DateTime   @default(now()) @map("created_at")
 
-  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  level   Level   @relation(fields: [levelId], references: [id], onDelete: Cascade)
-  topic   Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
-  parent  Question? @relation("QuestionVariations", fields: [parentQuestionId], references: [id], onDelete: SetNull)
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  level      Level      @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  topic      Topic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  parent     Question?  @relation("QuestionVariations", fields: [parentQuestionId], references: [id], onDelete: SetNull)
   variations Question[] @relation("QuestionVariations")
-  createdBy User? @relation("QuestionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy  User?      @relation("QuestionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  testQuestions TestQuestion[]
+  testQuestions  TestQuestion[]
   studentAnswers StudentAnswer[]
 
   @@unique([contentHash])
@@ -211,13 +215,13 @@ model Question {
 }
 
 model Test {
-  id         String     @id @default(cuid())
-  studentId  String     @map("student_id")
-  subjectId  String     @map("subject_id")
-  levelId    String     @map("level_id")
-  status     TestStatus @default(IN_PROGRESS)
-  startedAt  DateTime   @default(now()) @map("started_at")
-  completedAt DateTime? @map("completed_at")
+  id          String     @id @default(cuid())
+  studentId   String     @map("student_id")
+  subjectId   String     @map("subject_id")
+  levelId     String     @map("level_id")
+  status      TestStatus @default(IN_PROGRESS)
+  startedAt   DateTime   @default(now()) @map("started_at")
+  completedAt DateTime?  @map("completed_at")
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
@@ -228,11 +232,11 @@ model Test {
 }
 
 model TestQuestion {
-  id         String @id @default(cuid())
-  testId     String @map("test_id")
-  questionId String @map("question_id")
-  orderIndex Int    @map("order_index")
-  test       Test   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  testId     String   @map("test_id")
+  questionId String   @map("question_id")
+  orderIndex Int      @map("order_index")
+  test       Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   @@unique([testId, orderIndex])
@@ -249,17 +253,17 @@ model TestAttempt {
   suggestedNextLevelId String?         @map("suggested_next_level_id")
   completedAt          DateTime        @default(now()) @map("completed_at")
 
-  test                 Test            @relation(fields: [testId], references: [id], onDelete: Cascade)
+  test               Test            @relation(fields: [testId], references: [id], onDelete: Cascade)
   suggestedNextLevel Level?          @relation("SuggestedNextLevel", fields: [suggestedNextLevelId], references: [id], onDelete: SetNull)
   studentAnswers     StudentAnswer[]
 }
 
 model StudentAnswer {
-  id              String @id @default(cuid())
-  testAttemptId   String @map("test_attempt_id")
-  questionId      String @map("question_id")
-  selectedOption  Int?   @map("selected_option")
-  isCorrect       Boolean @map("is_correct")
+  id             String  @id @default(cuid())
+  testAttemptId  String  @map("test_attempt_id")
+  questionId     String  @map("question_id")
+  selectedOption Int?    @map("selected_option")
+  isCorrect      Boolean @map("is_correct")
 
   testAttempt TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
   question    Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
@@ -268,13 +272,13 @@ model StudentAnswer {
 }
 
 model StudentProgress {
-  id            String   @id @default(cuid())
-  studentId     String   @map("student_id")
-  subjectId     String   @map("subject_id")
-  levelId       String   @map("level_id")
-  unlocked      Boolean  @default(false)
-  lastPercentage Float?  @map("last_percentage")
-  lastAttemptAt DateTime? @map("last_attempt_at")
+  id             String    @id @default(cuid())
+  studentId      String    @map("student_id")
+  subjectId      String    @map("subject_id")
+  levelId        String    @map("level_id")
+  unlocked       Boolean   @default(false)
+  lastPercentage Float?    @map("last_percentage")
+  lastAttemptAt  DateTime? @map("last_attempt_at")
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
@@ -285,12 +289,12 @@ model StudentProgress {
 }
 
 model TopicPerformance {
-  id              String   @id @default(cuid())
-  studentId       String   @map("student_id")
-  topicId         String   @map("topic_id")
-  correctTotal    Int      @default(0) @map("correct_total")
-  attemptedTotal  Int      @default(0) @map("attempted_total")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(cuid())
+  studentId      String   @map("student_id")
+  topicId        String   @map("topic_id")
+  correctTotal   Int      @default(0) @map("correct_total")
+  attemptedTotal Int      @default(0) @map("attempted_total")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
   topic   Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
@@ -300,31 +304,31 @@ model TopicPerformance {
 }
 
 model QuestionImport {
-  id                 String   @id @default(cuid())
-  filename           String
-  uploadedById       String   @map("uploaded_by_id")
-  createdAt          DateTime @default(now()) @map("created_at")
-  importedCount      Int      @default(0) @map("imported_count")
-  skippedDuplicates  Int      @default(0) @map("skipped_duplicates")
-  errorsJson         String?  @map("errors_json")
+  id                String   @id @default(cuid())
+  filename          String
+  uploadedById      String   @map("uploaded_by_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  importedCount     Int      @default(0) @map("imported_count")
+  skippedDuplicates Int      @default(0) @map("skipped_duplicates")
+  errorsJson        String?  @map("errors_json")
 
   uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
 }
 
 model AttendanceSession {
-  id         String   @id @default(cuid())
-  classId    String   @map("class_id")
-  sectionId  String   @map("section_id")
-  date       DateTime
-  takenById  String?  @map("taken_by_id")
-  notes      String?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  id        String   @id @default(cuid())
+  classId   String   @map("class_id")
+  sectionId String   @map("section_id")
+  date      DateTime
+  takenById String?  @map("taken_by_id")
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
-  section     Section     @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  schoolClass SchoolClass       @relation(fields: [classId], references: [id], onDelete: Cascade)
+  section     Section           @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   entries     AttendanceEntry[]
-  takenBy     User? @relation("AttendanceTakenBy", fields: [takenById], references: [id], onDelete: SetNull)
+  takenBy     User?             @relation("AttendanceTakenBy", fields: [takenById], references: [id], onDelete: SetNull)
 
   @@unique([classId, sectionId, date])
   @@index([date])
@@ -332,17 +336,188 @@ model AttendanceSession {
 }
 
 model AttendanceEntry {
-  id          String           @id @default(cuid())
-  sessionId   String           @map("session_id")
-  studentId   String           @map("student_id")
-  status      AttendanceStatus @default(PRESENT)
-  remark      String?
-  createdAt   DateTime         @default(now()) @map("created_at")
-  updatedAt   DateTime         @updatedAt @map("updated_at")
+  id        String           @id @default(cuid())
+  sessionId String           @map("session_id")
+  studentId String           @map("student_id")
+  status    AttendanceStatus @default(PRESENT)
+  remark    String?
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
 
-  session     AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  student     Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  session AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, studentId])
   @@index([studentId])
+}
+
+// =====================================================================
+// Model 2 — Syllabus / Chapter-based testing.
+//
+// Lives entirely in its own tables so the existing Model 1 (Subject ->
+// Level -> Topic -> Question with gated progression) is untouched.
+// Removing Model 2 = drop these tables; nothing in Model 1 references
+// them.
+// =====================================================================
+
+model SyllabusSubject {
+  id            String   @id @default(cuid())
+  name          String
+  code          String?
+  schoolClassId String   @map("school_class_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  schoolClass SchoolClass    @relation(fields: [schoolClassId], references: [id], onDelete: Cascade)
+  chapters    Chapter[]
+  tests       SyllabusTest[]
+
+  @@unique([schoolClassId, name])
+  @@index([schoolClassId])
+}
+
+model Chapter {
+  id                String   @id @default(cuid())
+  syllabusSubjectId String   @map("syllabus_subject_id")
+  name              String
+  order             Int      @default(0)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  syllabusSubject     SyllabusSubject             @relation(fields: [syllabusSubjectId], references: [id], onDelete: Cascade)
+  topicParticipations ChapterTopicParticipation[]
+  questions           SyllabusQuestion[]
+  testChapters        SyllabusTestChapter[]
+
+  @@unique([syllabusSubjectId, name])
+  @@index([syllabusSubjectId])
+}
+
+model SyllabusTopic {
+  id   String @id @default(cuid())
+  name String
+
+  participations ChapterTopicParticipation[]
+  questions      SyllabusQuestion[]
+
+  @@unique([name])
+}
+
+model ChapterTopicParticipation {
+  chapterId String @map("chapter_id")
+  topicId   String @map("topic_id")
+  weightPct Int    @default(0) @map("weight_pct")
+  sortOrder Int    @default(0) @map("sort_order")
+
+  chapter Chapter       @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  topic   SyllabusTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([chapterId, topicId])
+  @@index([chapterId])
+}
+
+model SyllabusQuestion {
+  id            String     @id @default(cuid())
+  chapterId     String     @map("chapter_id")
+  topicId       String     @map("topic_id")
+  difficulty    Difficulty @default(MEDIUM)
+  stem          String
+  optionA       String     @map("option_a")
+  optionB       String     @map("option_b")
+  optionC       String     @map("option_c")
+  optionD       String     @map("option_d")
+  correctOption Int        @map("correct_option")
+  contentHash   String     @unique @map("content_hash")
+  createdById   String?    @map("created_by_id")
+  createdAt     DateTime   @default(now()) @map("created_at")
+
+  chapter   Chapter       @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  topic     SyllabusTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  createdBy User?         @relation("SyllabusQuestionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  testQuestions  SyllabusTestQuestion[]
+  studentAnswers SyllabusStudentAnswer[]
+
+  @@index([chapterId, difficulty])
+  @@index([chapterId, topicId, difficulty])
+}
+
+model SyllabusTest {
+  id                String     @id @default(cuid())
+  studentId         String     @map("student_id")
+  syllabusSubjectId String     @map("syllabus_subject_id")
+  difficulty        Difficulty
+  questionCount     Int        @map("question_count")
+  status            TestStatus @default(IN_PROGRESS)
+  startedAt         DateTime   @default(now()) @map("started_at")
+  completedAt       DateTime?  @map("completed_at")
+
+  student         Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  syllabusSubject SyllabusSubject @relation(fields: [syllabusSubjectId], references: [id], onDelete: Cascade)
+
+  testChapters  SyllabusTestChapter[]
+  testQuestions SyllabusTestQuestion[]
+  attempts      SyllabusTestAttempt[]
+
+  @@index([studentId, syllabusSubjectId])
+}
+
+model SyllabusTestChapter {
+  testId    String @map("test_id")
+  chapterId String @map("chapter_id")
+
+  test    SyllabusTest @relation(fields: [testId], references: [id], onDelete: Cascade)
+  chapter Chapter      @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@id([testId, chapterId])
+  @@index([testId])
+}
+
+model SyllabusTestQuestion {
+  id                 String @id @default(cuid())
+  testId             String @map("test_id")
+  syllabusQuestionId String @map("syllabus_question_id")
+  orderIndex         Int    @map("order_index")
+
+  test             SyllabusTest     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  syllabusQuestion SyllabusQuestion @relation(fields: [syllabusQuestionId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, orderIndex])
+  @@unique([testId, syllabusQuestionId])
+  @@index([testId])
+}
+
+model SyllabusTestAttempt {
+  id          String   @id @default(cuid())
+  testId      String   @unique @map("test_id")
+  score       Int
+  maxScore    Int      @map("max_score")
+  percentage  Float
+  completedAt DateTime @default(now()) @map("completed_at")
+
+  test           SyllabusTest            @relation(fields: [testId], references: [id], onDelete: Cascade)
+  studentAnswers SyllabusStudentAnswer[]
+}
+
+model SyllabusStudentAnswer {
+  id                 String  @id @default(cuid())
+  attemptId          String  @map("attempt_id")
+  syllabusQuestionId String  @map("syllabus_question_id")
+  selectedOption     Int?    @map("selected_option")
+  isCorrect          Boolean @map("is_correct")
+
+  attempt          SyllabusTestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  syllabusQuestion SyllabusQuestion    @relation(fields: [syllabusQuestionId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, syllabusQuestionId])
+}
+
+model SyllabusQuestionImport {
+  id                String   @id @default(cuid())
+  filename          String
+  uploadedById      String   @map("uploaded_by_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  importedCount     Int      @default(0) @map("imported_count")
+  skippedDuplicates Int      @default(0) @map("skipped_duplicates")
+  errorsJson        String?  @map("errors_json")
+
+  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
 }

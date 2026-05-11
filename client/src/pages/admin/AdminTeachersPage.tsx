@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
+import { useConfirmDialog } from "../../components/ConfirmDialog";
 
 type TeacherRow = {
   id: string;
@@ -18,6 +19,7 @@ export function AdminTeachersPage() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const confirmDialog = useConfirmDialog();
   const [toast, setToast] = useState<Toast | null>(null);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
 
@@ -63,8 +65,16 @@ export function AdminTeachersPage() {
     await loadTeachers();
   }
 
-  async function deleteTeacher(teacher: TeacherRow) {
-    if (!window.confirm(`Delete ${teacher.fullName} permanently?`)) return;
+  function deleteTeacher(teacher: TeacherRow) {
+    confirmDialog.setRequest({
+      title: "Delete teacher account",
+      message: `This will permanently delete the teacher account for "${teacher.fullName}" (${teacher.email}). This cannot be undone.`,
+      confirmLabel: "Delete teacher",
+      onConfirm: () => doDeleteTeacher(teacher),
+    });
+  }
+
+  async function doDeleteTeacher(teacher: TeacherRow) {
     setBusyId(teacher.id);
     const r = await api(`/api/v1/admin/teachers/${teacher.id}`, { method: "DELETE" });
     setBusyId(null);
@@ -179,7 +189,7 @@ export function AdminTeachersPage() {
                       type="button"
                       className="rounded border border-rose-300 text-rose-700 px-2 py-1 text-xs"
                       disabled={busyId === t.id}
-                      onClick={() => void deleteTeacher(t)}
+                      onClick={() => deleteTeacher(t)}
                     >
                       Delete
                     </button>
@@ -248,6 +258,7 @@ export function AdminTeachersPage() {
           </div>
         </div>
       )}
+      {confirmDialog.element}
     </div>
   );
 }

@@ -5,11 +5,16 @@ import { LoginPage } from "./pages/LoginPage";
 import { StudentSubjects } from "./pages/student/StudentSubjects";
 import { StudentLevels } from "./pages/student/StudentLevels";
 import { StudentTest } from "./pages/student/StudentTest";
+import { SyllabusSubjects } from "./pages/student/SyllabusSubjects";
+import { SyllabusStartTest } from "./pages/student/SyllabusStartTest";
+import { SyllabusTakeTest } from "./pages/student/SyllabusTakeTest";
 import { AdminHome } from "./pages/admin/AdminHome";
 import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
 import { AdminCurriculumPage } from "./pages/admin/AdminCurriculumPage";
 import { AdminCoveragePage } from "./pages/admin/AdminCoveragePage";
 import { AdminQuestionBankPage } from "./pages/admin/AdminQuestionBankPage";
+import { SyllabusCurriculumPage } from "./pages/admin/SyllabusCurriculumPage";
+import { SyllabusQuestionBankPage } from "./pages/admin/SyllabusQuestionBankPage";
 import { AdminTeachersPage } from "./pages/admin/AdminTeachersPage";
 import { AdminSecurityPage } from "./pages/admin/AdminSecurityPage";
 import { TeacherOverviewPage } from "./pages/teacher/TeacherOverviewPage";
@@ -66,6 +71,30 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/student/syllabus"
+        element={
+          <Guard role="STUDENT">
+            <SyllabusSubjects />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/syllabus/subject/:subjectId"
+        element={
+          <Guard role="STUDENT">
+            <SyllabusStartTest />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/syllabus/test/:testId"
+        element={
+          <Guard role="STUDENT">
+            <SyllabusTakeTest />
+          </Guard>
+        }
+      />
+      <Route
         path="/teacher"
         element={
           <Guard role="TEACHER">
@@ -101,6 +130,8 @@ function AppRoutes() {
         <Route path="curriculum" element={<AdminCurriculumPage />} />
         <Route path="coverage" element={<AdminCoveragePage />} />
         <Route path="question-bank" element={<AdminQuestionBankPage />} />
+        <Route path="syllabus/curriculum" element={<SyllabusCurriculumPage />} />
+        <Route path="syllabus/question-bank" element={<SyllabusQuestionBankPage />} />
         <Route path="students" element={<AdminStudentsPage />} />
         <Route path="teachers" element={<AdminTeachersPage />} />
         <Route path="security" element={<AdminSecurityPage />} />
