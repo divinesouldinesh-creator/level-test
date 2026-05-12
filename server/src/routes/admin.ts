@@ -6,6 +6,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { attendanceReportForStudent } from "../services/attendanceReport.js";
 import { questionContentHash } from "../utils/questionHash.js";
 import { extractTextFromDocx, parseQuestionBlocks, parseDifficulty } from "../services/wordImport.js";
 import {
@@ -18,6 +19,12 @@ import {
 
 const router = Router();
 router.use(authMiddleware, requireRole("ADMIN"));
+
+const attendanceReportQuerySchema = z.object({
+  studentId: z.string().min(1),
+  range: z.enum(["daily", "weekly", "monthly"]).default("daily"),
+  date: z.string().optional(),
+});
 
 const uploadDir = process.env.UPLOAD_DIR ?? "./uploads";
 if (!fs.existsSync(uploadDir)) {
@@ -218,6 +225,19 @@ router.get("/classes", async (_req, res) => {
     include: { sections: true, subjects: { include: { subject: true } } },
   });
   res.json(list);
+});
+
+router.get("/attendance/report", async (req, res) => {
+  const parsed = attendanceReportQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const report = await attendanceReportForStudent(
+    prisma,
+    parsed.data.studentId,
+    parsed.data.range,
+    parsed.data.date
+  );
+  if (!report) return res.status(404).json({ error: "Student not found" });
+  res.json(report);
 });
 
 router.post("/classes", async (req, res) => {

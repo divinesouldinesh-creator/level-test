@@ -5,9 +5,15 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { pickQuestionsForTest } from "../services/testGenerator.js";
 import { bandFromPercentage, applyAttemptResults } from "../services/resultAnalysis.js";
+import { attendanceReportForStudent } from "../services/attendanceReport.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("STUDENT"));
+
+const attendanceReportQuerySchema = z.object({
+  range: z.enum(["daily", "weekly", "monthly"]).default("daily"),
+  date: z.string().optional(),
+});
 
 router.get("/subjects", async (req, res) => {
   const user = await prisma.user.findUnique({
@@ -29,6 +35,24 @@ router.get("/subjects", async (req, res) => {
       code: cs.subject.code,
     }))
   );
+});
+
+router.get("/attendance/report", async (req, res) => {
+  const parsed = attendanceReportQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.sub },
+    include: { student: true },
+  });
+  if (!user?.student) return res.status(400).json({ error: "Not a student" });
+  const report = await attendanceReportForStudent(
+    prisma,
+    user.student.id,
+    parsed.data.range,
+    parsed.data.date
+  );
+  if (!report) return res.status(404).json({ error: "Student not found" });
+  res.json(report);
 });
 
 router.get("/subjects/:subjectId/levels", async (req, res) => {

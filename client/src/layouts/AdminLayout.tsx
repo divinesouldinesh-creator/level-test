@@ -16,6 +16,7 @@ export function AdminLayout() {
         { to: "/admin/syllabus/question-bank", label: "Syllabus Question Bank" },
         { to: "/admin/coverage", label: "Coverage" },
         { to: "/admin/students", label: "Students" },
+        { to: "/admin/attendance", label: "Attendance" },
         { to: "/admin/teachers", label: "Teachers" },
         { to: "/admin/security", label: "Security" },
       ]}

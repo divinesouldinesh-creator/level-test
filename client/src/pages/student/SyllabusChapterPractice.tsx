@@ -13,16 +13,12 @@ type ChapterRow = {
 
 type Difficulty = "EASY" | "MEDIUM" | "HARD";
 
-const MAX_QUESTIONS = 100;
-const DEFAULT_QUESTIONS = 10;
-
-export function SyllabusStartTest() {
+export function SyllabusChapterPractice() {
   const { subjectId } = useParams();
   const navigate = useNavigate();
   const { logout, auth } = useAuth();
   const [chapters, setChapters] = useState<ChapterRow[]>([]);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [count, setCount] = useState<number>(DEFAULT_QUESTIONS);
   const [difficulty, setDifficulty] = useState<Difficulty>("MEDIUM");
   const [err, setErr] = useState<string | null>(null);
   const [warning, setWarning] = useState<string[]>([]);
@@ -55,7 +51,7 @@ export function SyllabusStartTest() {
     });
   }
 
-  async function startTest() {
+  async function startPractice() {
     if (picked.size === 0) {
       setErr("Pick at least one chapter.");
       return;
@@ -74,16 +70,15 @@ export function SyllabusStartTest() {
         syllabusSubjectId: subjectId,
         chapterIds: [...picked],
         difficulty,
-        questionCount: Math.max(1, Math.min(MAX_QUESTIONS, Math.floor(count))),
       },
     });
     setStarting(false);
     if (!r.ok || !r.data?.testId) {
-      setErr(r.error ?? "Could not start test");
+      setErr(r.error ?? "Could not start");
       return;
     }
     if (r.data.warnings?.length) setWarning(r.data.warnings);
-    navigate(`/student/syllabus/test/${r.data.testId}`);
+    navigate(`/student/syllabus/practice/${r.data.testId}`);
   }
 
   return (
@@ -92,15 +87,16 @@ export function SyllabusStartTest() {
       onLogout={logout}
       nav={[
         { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus tests" },
+        { to: "/student/syllabus", label: "Syllabus" },
       ]}
     >
       <Link to="/student/syllabus" className="text-brand-600 text-sm font-medium">
         ← Subjects
       </Link>
-      <h1 className="mt-2 text-2xl font-bold text-slate-900">Build your syllabus test</h1>
+      <h1 className="mt-2 text-2xl font-bold text-slate-900">Choose chapters</h1>
       <p className="mt-1 text-slate-600">
-        Pick the chapters you want to practice, set how many questions, and choose a difficulty.
+        Select one or more chapters, pick Easy / Medium / Hard, then start. Questions match that
+        difficulty (with nearby levels if the bank is short).
       </p>
       {err && <p className="mt-3 text-rose-700">{err}</p>}
       {warning.length > 0 && (
@@ -161,57 +157,37 @@ export function SyllabusStartTest() {
           </div>
 
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="font-semibold text-slate-900">Test settings</p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="text-sm">
-                <span className="block text-slate-700 mb-1">Number of questions</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_QUESTIONS}
-                  step={1}
-                  className="w-32 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                  value={count}
-                  onChange={(e) => setCount(Number(e.target.value) || 0)}
-                />
-                <span className="ml-2 text-xs text-slate-500">
-                  default 10, max {MAX_QUESTIONS}
-                </span>
-              </label>
-              <div>
-                <span className="block text-slate-700 mb-1 text-sm">Difficulty</span>
-                <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
-                  {(["EASY", "MEDIUM", "HARD"] as Difficulty[]).map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setDifficulty(d)}
-                      className={`px-4 py-2 text-sm font-medium ${
-                        difficulty === d
-                          ? d === "EASY"
-                            ? "bg-emerald-100 text-emerald-900"
-                            : d === "MEDIUM"
-                            ? "bg-amber-100 text-amber-900"
-                            : "bg-rose-100 text-rose-900"
-                          : "bg-white text-slate-700"
-                      }`}
-                    >
-                      {d.charAt(0) + d.slice(1).toLowerCase()}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <p className="font-semibold text-slate-900">Difficulty</p>
+            <div className="mt-3 inline-flex rounded-lg border border-slate-300 overflow-hidden">
+              {(["EASY", "MEDIUM", "HARD"] as Difficulty[]).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDifficulty(d)}
+                  className={`px-4 py-2 text-sm font-medium ${
+                    difficulty === d
+                      ? d === "EASY"
+                        ? "bg-emerald-100 text-emerald-900"
+                        : d === "MEDIUM"
+                          ? "bg-amber-100 text-amber-900"
+                          : "bg-rose-100 text-rose-900"
+                      : "bg-white text-slate-700"
+                  }`}
+                >
+                  {d.charAt(0) + d.slice(1).toLowerCase()}
+                </button>
+              ))}
             </div>
           </div>
 
           <div className="mt-4">
             <button
               type="button"
-              onClick={() => void startTest()}
+              onClick={() => void startPractice()}
               disabled={starting || picked.size === 0}
               className="rounded-xl bg-indigo-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-50"
             >
-              {starting ? "Starting…" : "Start test"}
+              {starting ? "Starting…" : "Start"}
             </button>
           </div>
         </>

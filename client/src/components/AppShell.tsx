@@ -1,18 +1,21 @@
 import React, { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 
-type NavItem = { to: string; label: string; end?: boolean };
+export type AppShellNavItem = { to: string; label: string; end?: boolean };
 
 export function AppShell({
   title,
   nav,
   children,
   onLogout,
+  sidebarKicker = "Teacher portal",
 }: {
   title: string;
-  nav: NavItem[];
+  nav: AppShellNavItem[];
   children: React.ReactNode;
   onLogout: () => void;
+  /** Small label above the user name (e.g. distinguish skill vs syllabus area). */
+  sidebarKicker?: string;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -50,7 +53,7 @@ export function AppShell({
         }`}
       >
         <div className="p-4 border-b border-slate-100 hidden md:block">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Level Test</p>
+          <p className="text-xs uppercase tracking-wide text-slate-500">{sidebarKicker}</p>
           <p className="font-semibold text-brand-900">{title}</p>
         </div>
         <nav className="p-3 flex-1 space-y-1 overflow-y-auto">

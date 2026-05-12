@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { AdminLayout } from "./layouts/AdminLayout";
 import { LoginPage } from "./pages/LoginPage";
@@ -6,8 +6,9 @@ import { StudentSubjects } from "./pages/student/StudentSubjects";
 import { StudentLevels } from "./pages/student/StudentLevels";
 import { StudentTest } from "./pages/student/StudentTest";
 import { SyllabusSubjects } from "./pages/student/SyllabusSubjects";
-import { SyllabusStartTest } from "./pages/student/SyllabusStartTest";
+import { SyllabusChapterPractice } from "./pages/student/SyllabusChapterPractice";
 import { SyllabusTakeTest } from "./pages/student/SyllabusTakeTest";
+import { StudentAttendancePage } from "./pages/student/StudentAttendancePage";
 import { AdminHome } from "./pages/admin/AdminHome";
 import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
 import { AdminCurriculumPage } from "./pages/admin/AdminCurriculumPage";
@@ -17,9 +18,17 @@ import { SyllabusCurriculumPage } from "./pages/admin/SyllabusCurriculumPage";
 import { SyllabusQuestionBankPage } from "./pages/admin/SyllabusQuestionBankPage";
 import { AdminTeachersPage } from "./pages/admin/AdminTeachersPage";
 import { AdminSecurityPage } from "./pages/admin/AdminSecurityPage";
+import { AdminAttendancePage } from "./pages/admin/AdminAttendancePage";
 import { TeacherOverviewPage } from "./pages/teacher/TeacherOverviewPage";
 import { TeacherAttendancePage } from "./pages/teacher/TeacherAttendancePage";
 import { TeacherAnalyticsPage } from "./pages/teacher/TeacherAnalyticsPage";
+import { TeacherSyllabusPage } from "./pages/teacher/TeacherSyllabusPage";
+
+function LegacySyllabusTestUrlRedirect() {
+  const { testId } = useParams();
+  if (!testId) return <Navigate to="/student/syllabus" replace />;
+  return <Navigate to={`/student/syllabus/practice/${testId}`} replace />;
+}
 
 function Guard({
   role,
@@ -71,6 +80,14 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/student/attendance"
+        element={
+          <Guard role="STUDENT">
+            <StudentAttendancePage />
+          </Guard>
+        }
+      />
+      <Route
         path="/student/syllabus"
         element={
           <Guard role="STUDENT">
@@ -82,7 +99,15 @@ function AppRoutes() {
         path="/student/syllabus/subject/:subjectId"
         element={
           <Guard role="STUDENT">
-            <SyllabusStartTest />
+            <SyllabusChapterPractice />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/syllabus/practice/:testId"
+        element={
+          <Guard role="STUDENT">
+            <SyllabusTakeTest />
           </Guard>
         }
       />
@@ -90,7 +115,7 @@ function AppRoutes() {
         path="/student/syllabus/test/:testId"
         element={
           <Guard role="STUDENT">
-            <SyllabusTakeTest />
+            <LegacySyllabusTestUrlRedirect />
           </Guard>
         }
       />
@@ -110,11 +135,20 @@ function AppRoutes() {
           </Guard>
         }
       />
+      <Route path="/teacher/analytics" element={<Navigate to="/teacher/skill/analytics" replace />} />
       <Route
-        path="/teacher/analytics"
+        path="/teacher/skill/analytics"
         element={
           <Guard role="TEACHER">
             <TeacherAnalyticsPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/teacher/syllabus"
+        element={
+          <Guard role="TEACHER">
+            <TeacherSyllabusPage />
           </Guard>
         }
       />
@@ -133,6 +167,7 @@ function AppRoutes() {
         <Route path="syllabus/curriculum" element={<SyllabusCurriculumPage />} />
         <Route path="syllabus/question-bank" element={<SyllabusQuestionBankPage />} />
         <Route path="students" element={<AdminStudentsPage />} />
+        <Route path="attendance" element={<AdminAttendancePage />} />
         <Route path="teachers" element={<AdminTeachersPage />} />
         <Route path="security" element={<AdminSecurityPage />} />
       </Route>

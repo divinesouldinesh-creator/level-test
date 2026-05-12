@@ -4,6 +4,7 @@ import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import teacherRoutes from "./routes/teacher.js";
+import teacherSyllabusRoutes from "./routes/teacherSyllabus.js";
 import studentRoutes from "./routes/student.js";
 import syllabusAdminRoutes from "./routes/syllabusAdmin.js";
 import syllabusStudentRoutes from "./routes/syllabusStudent.js";
@@ -46,6 +47,7 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/admin/syllabus", syllabusAdminRoutes);
 app.use("/api/v1/teacher", teacherRoutes);
+app.use("/api/v1/teacher/syllabus", teacherSyllabusRoutes);
 app.use("/api/v1/student", studentRoutes);
 app.use("/api/v1/student/syllabus", syllabusStudentRoutes);
 

@@ -117,8 +117,8 @@ export function SyllabusCurriculumPage() {
       </div>
       <p className="mt-1 text-slate-600">
         Build chapter-based syllabus content for class-specific subjects (e.g. Physics — Class 11). Students pick
-        any chapters, set difficulty (Easy / Medium / Hard), and practice. This is fully separate from the Skill
-        curriculum.
+        chapters and question count; questions are drawn from the bank across difficulties. This is fully separate from
+        the Skill curriculum.
       </p>
       {err && <p className="mt-4 text-rose-700">{err}</p>}
       {info && <p className="mt-4 text-emerald-700">{info}</p>}

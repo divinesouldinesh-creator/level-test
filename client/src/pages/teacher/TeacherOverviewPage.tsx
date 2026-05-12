@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { useAuth } from "../../auth";
 import { api } from "../../api";
+import { teacherPortalNav } from "./teacherPortalNav";
 
 type ClassRow = {
   id: string;
@@ -33,11 +34,7 @@ export function TeacherOverviewPage() {
     <AppShell
       title={auth.profile?.fullName ?? "Teacher"}
       onLogout={logout}
-      nav={[
-        { to: "/teacher", label: "Overview", end: true },
-        { to: "/teacher/attendance", label: "Attendance" },
-        { to: "/teacher/analytics", label: "Analytics" },
-      ]}
+      nav={[...teacherPortalNav]}
     >
       <h1 className="text-2xl font-bold text-slate-900">Teacher overview</h1>
       <p className="text-slate-600 mt-1">Simple daily workflow for phone use.</p>
@@ -54,7 +51,7 @@ export function TeacherOverviewPage() {
         </div>
       </section>
 
-      <section className="mt-5 grid gap-3 sm:grid-cols-2">
+      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Link
           to="/teacher/attendance"
           className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-sm block"
@@ -63,11 +60,20 @@ export function TeacherOverviewPage() {
           <p className="text-sm text-indigo-700 mt-1">Mark and save class attendance by date.</p>
         </Link>
         <Link
-          to="/teacher/analytics"
+          to="/teacher/skill/analytics"
           className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm block"
         >
-          <p className="font-semibold text-slate-900">View performance</p>
-          <p className="text-sm text-slate-600 mt-1">See weak topics and student status.</p>
+          <p className="font-semibold text-slate-900">Skill tests</p>
+          <p className="text-sm text-slate-600 mt-1">Level tests: analytics, weak topics, and scores.</p>
+        </Link>
+        <Link
+          to="/teacher/syllabus"
+          className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm block lg:col-span-1"
+        >
+          <p className="font-semibold text-emerald-900">Syllabus tests</p>
+          <p className="text-sm text-emerald-800 mt-1">
+            Chapter-based practice: who took tests and their marks.
+          </p>
         </Link>
       </section>
 

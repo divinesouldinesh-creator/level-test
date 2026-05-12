@@ -29,16 +29,17 @@ export function SyllabusSubjects() {
       onLogout={logout}
       nav={[
         { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus tests" },
+        { to: "/student/syllabus", label: "Syllabus" },
+        { to: "/student/attendance", label: "Attendance" },
       ]}
     >
       <Link to="/student" className="text-brand-600 text-sm font-medium">
         ← Skill subjects
       </Link>
-      <h1 className="mt-2 text-2xl font-bold text-slate-900">Syllabus tests</h1>
+      <h1 className="mt-2 text-2xl font-bold text-slate-900">Syllabus</h1>
       <p className="mt-1 text-slate-600">
-        Pick a subject from your class syllabus, choose any chapters, and practice at your own
-        difficulty level. Practice attempts don't affect your skill scores.
+        Open a subject, select the chapters you want, then answer questions from the bank. This does
+        not affect your skill scores.
       </p>
       {err && <p className="mt-3 text-rose-700">{err}</p>}
       {loading ? (

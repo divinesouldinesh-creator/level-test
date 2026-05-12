@@ -441,11 +441,12 @@ model SyllabusQuestion {
 }
 
 model SyllabusTest {
-  id                String     @id @default(cuid())
-  studentId         String     @map("student_id")
-  syllabusSubjectId String     @map("syllabus_subject_id")
-  difficulty        Difficulty
-  questionCount     Int        @map("question_count")
+  id                String      @id @default(cuid())
+  studentId         String      @map("student_id")
+  syllabusSubjectId String      @map("syllabus_subject_id")
+  /// Null = mixed difficulty (chapter practice); legacy rows may still be EASY/MEDIUM/HARD.
+  difficulty        Difficulty?
+  questionCount     Int         @map("question_count")
   status            TestStatus @default(IN_PROGRESS)
   startedAt         DateTime   @default(now()) @map("started_at")
   completedAt       DateTime?  @map("completed_at")

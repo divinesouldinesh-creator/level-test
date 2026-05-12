@@ -26,7 +26,8 @@ export function StudentSubjects() {
       onLogout={logout}
       nav={[
         { to: "/student", label: "Skill subjects", end: true },
-        { to: "/student/syllabus", label: "Syllabus tests" },
+        { to: "/student/syllabus", label: "Syllabus" },
+        { to: "/student/attendance", label: "Attendance" },
       ]}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -35,7 +36,7 @@ export function StudentSubjects() {
           to="/student/syllabus"
           className="text-sm font-medium text-indigo-700 hover:text-indigo-900"
         >
-          Syllabus tests →
+          Syllabus →
         </Link>
       </div>
       <p className="text-slate-600 mt-1">Choose a subject to view levels and start a test.</p>

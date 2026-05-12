@@ -2,16 +2,30 @@ import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { useAuth } from "../../auth";
 import { api } from "../../api";
+import { teacherPortalNav } from "./teacherPortalNav";
 
 type SectionRow = { id: string; name: string };
 type ClassRow = { id: string; name: string; grade: string | null; studentCount: number; sections: SectionRow[] };
 type AttendanceStatus = "PRESENT" | "ABSENT" | "LATE" | "LEAVE";
+type AttendanceRange = "daily" | "weekly" | "monthly";
 type AttendanceRow = {
   id: string;
   fullName: string;
   studentLoginId: string | null;
   status: AttendanceStatus;
   remark: string;
+};
+type AttendanceReport = {
+  student: {
+    id: string;
+    fullName: string;
+    studentLoginId: string | null;
+    className: string;
+    sectionName: string;
+  };
+  from: string;
+  to: string;
+  summary: { totalDays: number; present: number; absent: number; late: number; leave: number; attendancePct: number | null };
 };
 
 export function TeacherAttendancePage() {
@@ -26,6 +40,12 @@ export function TeacherAttendancePage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reportStudentId, setReportStudentId] = useState("");
+  const [reportRange, setReportRange] = useState<AttendanceRange>("weekly");
+  const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [report, setReport] = useState<AttendanceReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -80,6 +100,33 @@ export function TeacherAttendancePage() {
     })();
   }, [classId, sectionId, date]);
 
+  useEffect(() => {
+    setReportStudentId((prev) => (prev && rows.some((r) => r.id === prev) ? prev : rows[0]?.id ?? ""));
+  }, [rows]);
+
+  useEffect(() => {
+    void (async () => {
+      if (!reportStudentId) {
+        setReport(null);
+        return;
+      }
+      setReportLoading(true);
+      setReportError(null);
+      const r = await api<AttendanceReport>(
+        `/api/v1/teacher/attendance/report?studentId=${encodeURIComponent(reportStudentId)}&range=${encodeURIComponent(
+          reportRange
+        )}&date=${encodeURIComponent(reportDate)}`
+      );
+      setReportLoading(false);
+      if (!r.ok || !r.data) {
+        setReportError(r.error ?? "Could not load report");
+        setReport(null);
+        return;
+      }
+      setReport(r.data);
+    })();
+  }, [reportStudentId, reportRange, reportDate]);
+
   async function saveAttendance() {
     if (!classId || !sectionId || !date || rows.length === 0) return;
     setSaving(true);
@@ -111,11 +158,7 @@ export function TeacherAttendancePage() {
     <AppShell
       title={auth.profile?.fullName ?? "Teacher"}
       onLogout={logout}
-      nav={[
-        { to: "/teacher", label: "Overview", end: true },
-        { to: "/teacher/attendance", label: "Attendance" },
-        { to: "/teacher/analytics", label: "Analytics" },
-      ]}
+      nav={[...teacherPortalNav]}
     >
       <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
       <p className="text-slate-600 mt-1">Mark attendance quickly by class, section and date.</p>
@@ -213,6 +256,70 @@ export function TeacherAttendancePage() {
           </table>
         </section>
       ) : null}
+
+      <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Student attendance report</h2>
+        <p className="mt-1 text-sm text-slate-600">Daily, weekly, or monthly report for a selected student.</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <select
+            className="rounded-lg border px-3 py-2"
+            value={reportStudentId}
+            onChange={(e) => setReportStudentId(e.target.value)}
+            disabled={rows.length === 0}
+          >
+            {rows.length === 0 ? <option value="">No students</option> : null}
+            {rows.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.fullName}
+              </option>
+            ))}
+          </select>
+          <select
+            className="rounded-lg border px-3 py-2"
+            value={reportRange}
+            onChange={(e) => setReportRange(e.target.value as AttendanceRange)}
+          >
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+          <input
+            type="date"
+            className="rounded-lg border px-3 py-2"
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
+          />
+        </div>
+        {reportLoading ? <p className="mt-3 text-sm text-slate-500">Loading report…</p> : null}
+        {reportError ? <p className="mt-3 text-sm text-rose-700">{reportError}</p> : null}
+        {report ? (
+          <>
+            <p className="mt-3 text-sm text-slate-600">
+              {report.student.fullName} ({report.student.studentLoginId ?? "—"}) • {report.from} to {report.to}
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <MiniCard label="Total" value={String(report.summary.totalDays)} />
+              <MiniCard label="Present" value={String(report.summary.present)} />
+              <MiniCard label="Late" value={String(report.summary.late)} />
+              <MiniCard label="Absent" value={String(report.summary.absent)} />
+              <MiniCard label="Leave" value={String(report.summary.leave)} />
+              <MiniCard
+                label="Attendance %"
+                value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"}
+              />
+            </div>
+          </>
+        ) : null}
+      </section>
     </AppShell>
+  );
+}
+
+function MiniCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-[11px] uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-base font-semibold text-slate-900 mt-1">{value}</p>
+    </div>
   );
 }

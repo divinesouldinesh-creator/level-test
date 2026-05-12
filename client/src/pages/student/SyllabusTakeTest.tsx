@@ -233,7 +233,7 @@ export function SyllabusTakeTest() {
   if (loading) {
     return (
       <div className="min-h-dvh flex items-center justify-center text-slate-600 p-4">
-        Loading test…
+        Loading…
       </div>
     );
   }
@@ -245,11 +245,11 @@ export function SyllabusTakeTest() {
     }));
     return (
       <AppShell
-        title="Syllabus result"
+        title="Syllabus"
         onLogout={logout}
         nav={[
           { to: "/student", label: "Skill subjects" },
-          { to: "/student/syllabus", label: "Syllabus tests" },
+          { to: "/student/syllabus", label: "Syllabus" },
         ]}
       >
         <h1 className="text-2xl font-bold">Your result</h1>
@@ -521,7 +521,7 @@ export function SyllabusTakeTest() {
           to="/student/syllabus"
           className="mt-8 inline-flex rounded-xl bg-indigo-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] items-center"
         >
-          Back to syllabus subjects
+          Back to syllabus
         </Link>
       </AppShell>
     );
@@ -530,17 +530,17 @@ export function SyllabusTakeTest() {
   if (!current) {
     return (
       <AppShell
-        title={auth.profile?.fullName ?? "Test"}
+        title={auth.profile?.fullName ?? "Practice"}
         onLogout={logout}
         nav={[
           { to: "/student", label: "Skill subjects" },
-          { to: "/student/syllabus", label: "Syllabus tests" },
+          { to: "/student/syllabus", label: "Syllabus" },
         ]}
       >
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-900">No questions in this test.</p>
+          <p className="font-semibold text-amber-900">No questions available.</p>
           <p className="text-amber-800 text-sm mt-1">
-            {err ?? "Please go back and start a new test."}
+            {err ?? "Go back to your subject and choose chapters again."}
           </p>
           <Link to="/student/syllabus" className="mt-3 inline-block text-indigo-700 font-medium">
             Back to syllabus
@@ -554,11 +554,11 @@ export function SyllabusTakeTest() {
 
   return (
     <AppShell
-      title={auth.profile?.fullName ?? "Test"}
+      title={auth.profile?.fullName ?? "Practice"}
       onLogout={logout}
       nav={[
         { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus tests" },
+        { to: "/student/syllabus", label: "Syllabus" },
       ]}
     >
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
@@ -627,7 +627,7 @@ export function SyllabusTakeTest() {
             onClick={() => void submitAll()}
             className="rounded-xl bg-emerald-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] flex-1 disabled:opacity-60"
           >
-            {submitting ? "Submitting…" : "Submit test"}
+            {submitting ? "Submitting…" : "Submit"}
           </button>
         )}
       </div>
