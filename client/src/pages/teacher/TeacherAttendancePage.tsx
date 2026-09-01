@@ -3,11 +3,18 @@ import { AppShell } from "../../components/AppShell";
 import { useAuth } from "../../auth";
 import { api } from "../../api";
 import { teacherPortalNav } from "./teacherPortalNav";
+import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters";
+import { ClassAttendanceSummaryPanel } from "../../components/ClassAttendanceSummaryPanel";
+import {
+  type AttendanceRange,
+  academicYearStartIso,
+  buildAttendanceReportQuery,
+  todayIso,
+} from "../../attendanceReport";
 
 type SectionRow = { id: string; name: string };
 type ClassRow = { id: string; name: string; grade: string | null; studentCount: number; sections: SectionRow[] };
-type AttendanceStatus = "PRESENT" | "ABSENT" | "LATE" | "LEAVE";
-type AttendanceRange = "daily" | "weekly" | "monthly";
+type AttendanceStatus = "PRESENT" | "ABSENT";
 type AttendanceRow = {
   id: string;
   fullName: string;
@@ -25,7 +32,7 @@ type AttendanceReport = {
   };
   from: string;
   to: string;
-  summary: { totalDays: number; present: number; absent: number; late: number; leave: number; attendancePct: number | null };
+  summary: { totalDays: number; present: number; absent: number; attendancePct: number | null };
 };
 
 export function TeacherAttendancePage() {
@@ -42,10 +49,25 @@ export function TeacherAttendancePage() {
   const [error, setError] = useState<string | null>(null);
   const [reportStudentId, setReportStudentId] = useState("");
   const [reportRange, setReportRange] = useState<AttendanceRange>("weekly");
-  const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [reportDate, setReportDate] = useState(() => todayIso());
+  const [reportCustomFrom, setReportCustomFrom] = useState(() => academicYearStartIso(todayIso()));
+  const [reportCustomTo, setReportCustomTo] = useState(() => todayIso());
   const [report, setReport] = useState<AttendanceReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [newStudentName, setNewStudentName] = useState("");
+  const [addingStudent, setAddingStudent] = useState(false);
+  const [createdStudent, setCreatedStudent] = useState<{
+    fullName: string;
+    studentLoginId: string;
+    password: string;
+    className: string;
+    sectionName: string;
+  } | null>(null);
+  const [attendanceRefresh, setAttendanceRefresh] = useState(0);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -98,11 +120,20 @@ export function TeacherAttendancePage() {
       setNotes(r.data.notes ?? "");
       setRows(r.data.students ?? []);
     })();
-  }, [classId, sectionId, date]);
+  }, [classId, sectionId, date, attendanceRefresh]);
 
   useEffect(() => {
     setReportStudentId((prev) => (prev && rows.some((r) => r.id === prev) ? prev : rows[0]?.id ?? ""));
   }, [rows]);
+
+  function handleReportRangeChange(next: AttendanceRange) {
+    setReportRange(next);
+    if (next === "custom") {
+      const today = todayIso();
+      setReportCustomFrom(academicYearStartIso(today));
+      setReportCustomTo(today);
+    }
+  }
 
   useEffect(() => {
     void (async () => {
@@ -110,13 +141,17 @@ export function TeacherAttendancePage() {
         setReport(null);
         return;
       }
+      if (reportRange === "custom" && (!reportCustomFrom || !reportCustomTo)) return;
       setReportLoading(true);
       setReportError(null);
-      const r = await api<AttendanceReport>(
-        `/api/v1/teacher/attendance/report?studentId=${encodeURIComponent(reportStudentId)}&range=${encodeURIComponent(
-          reportRange
-        )}&date=${encodeURIComponent(reportDate)}`
-      );
+      const qs = buildAttendanceReportQuery({
+        studentId: reportStudentId,
+        range: reportRange,
+        date: reportDate,
+        from: reportCustomFrom,
+        to: reportCustomTo,
+      });
+      const r = await api<AttendanceReport>(`/api/v1/teacher/attendance/report?${qs}`);
       setReportLoading(false);
       if (!r.ok || !r.data) {
         setReportError(r.error ?? "Could not load report");
@@ -125,7 +160,7 @@ export function TeacherAttendancePage() {
       }
       setReport(r.data);
     })();
-  }, [reportStudentId, reportRange, reportDate]);
+  }, [reportStudentId, reportRange, reportDate, reportCustomFrom, reportCustomTo]);
 
   async function saveAttendance() {
     if (!classId || !sectionId || !date || rows.length === 0) return;
@@ -152,6 +187,73 @@ export function TeacherAttendancePage() {
       return;
     }
     setMessage("Attendance saved.");
+  }
+
+  async function addStudent(e: React.FormEvent) {
+    e.preventDefault();
+    if (!classId || !sectionId || !newStudentName.trim()) return;
+    setAddingStudent(true);
+    setError(null);
+    setCreatedStudent(null);
+    const r = await api<{
+      fullName: string;
+      studentLoginId: string;
+      password: string;
+      className: string;
+      sectionName: string;
+    }>("/api/v1/teacher/students", {
+      method: "POST",
+      json: {
+        fullName: newStudentName.trim(),
+        classId,
+        sectionId,
+      },
+    });
+    setAddingStudent(false);
+    if (!r.ok || !r.data) {
+      setError(r.error ?? "Could not add student");
+      return;
+    }
+    setCreatedStudent(r.data);
+    setNewStudentName("");
+    setMessage(`${r.data.fullName} added. Share the login details below with the student.`);
+    setAttendanceRefresh((n) => n + 1);
+  }
+
+  function startRename(row: AttendanceRow) {
+    setRenamingId(row.id);
+    setRenameValue(row.fullName);
+    setError(null);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameValue("");
+  }
+
+  async function saveRename(studentId: string) {
+    const fullName = renameValue.trim();
+    if (!fullName) {
+      setError("Name cannot be empty.");
+      return;
+    }
+    setRenameSaving(true);
+    setError(null);
+    const r = await api<{ fullName: string }>(`/api/v1/teacher/students/${studentId}`, {
+      method: "PATCH",
+      json: { fullName },
+    });
+    setRenameSaving(false);
+    if (!r.ok) {
+      setError(r.error ?? "Could not rename student");
+      return;
+    }
+    const updated = r.data?.fullName ?? fullName;
+    setRows((prev) => prev.map((row) => (row.id === studentId ? { ...row, fullName: updated } : row)));
+    setRenamingId(null);
+    setRenameValue("");
+    setMessage(`Student renamed to “${updated}”.`);
+    setAttendanceRefresh((n) => n + 1);
   }
 
   return (
@@ -206,6 +308,40 @@ export function TeacherAttendancePage() {
         {loading ? <p className="mt-3 text-sm text-slate-500">Loading students...</p> : null}
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
         {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+
+        <form onSubmit={addStudent} className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+          <p className="text-sm font-medium text-slate-900">Add a new student to this class</p>
+          <p className="mt-1 text-xs text-slate-600">
+            Uses the selected class and section. Login ID and password are generated automatically.
+          </p>
+          <div className="mt-3 flex flex-col sm:flex-row gap-2">
+            <input
+              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              placeholder="Student full name"
+              value={newStudentName}
+              onChange={(e) => setNewStudentName(e.target.value)}
+              disabled={addingStudent || !classId || !sectionId}
+            />
+            <button
+              type="submit"
+              disabled={addingStudent || !classId || !sectionId || !newStudentName.trim()}
+              className="rounded-lg border border-indigo-600 bg-white text-indigo-700 px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
+              {addingStudent ? "Adding…" : "Add student"}
+            </button>
+          </div>
+          {createdStudent ? (
+            <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+              <p className="font-medium">{createdStudent.fullName}</p>
+              <p className="mt-1">
+                Class: {createdStudent.className} · Section: {createdStudent.sectionName}
+              </p>
+              <p className="mt-1 font-mono">
+                Login: {createdStudent.studentLoginId} · Password: {createdStudent.password}
+              </p>
+            </div>
+          ) : null}
+        </form>
       </section>
 
       {rows.length > 0 ? (
@@ -222,7 +358,48 @@ export function TeacherAttendancePage() {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100">
-                  <td className="p-3">{row.fullName}</td>
+                  <td className="p-3">
+                    {renamingId === row.id ? (
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          className="rounded border px-2 py-1 flex-1 min-w-[140px]"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          disabled={renameSaving}
+                          autoFocus
+                        />
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            className="rounded border border-indigo-600 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-800 disabled:opacity-50"
+                            disabled={renameSaving || !renameValue.trim()}
+                            onClick={() => void saveRename(row.id)}
+                          >
+                            {renameSaving ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded border px-2 py-1 text-xs font-medium text-slate-600"
+                            disabled={renameSaving}
+                            onClick={cancelRename}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span>{row.fullName}</span>
+                        <button
+                          type="button"
+                          className="rounded border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+                          onClick={() => startRename(row)}
+                        >
+                          Rename
+                        </button>
+                      </div>
+                    )}
+                  </td>
                   <td className="p-3">{row.studentLoginId ?? "—"}</td>
                   <td className="p-3">
                     <select
@@ -236,8 +413,6 @@ export function TeacherAttendancePage() {
                     >
                       <option value="PRESENT">Present</option>
                       <option value="ABSENT">Absent</option>
-                      <option value="LATE">Late</option>
-                      <option value="LEAVE">Leave</option>
                     </select>
                   </td>
                   <td className="p-3">
@@ -258,11 +433,27 @@ export function TeacherAttendancePage() {
       ) : null}
 
       <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Class attendance summary</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Attendance percentages for all students in the selected class and section, with filters.
+        </p>
+        <div className="mt-4">
+          <ClassAttendanceSummaryPanel
+            apiPrefix="/api/v1/teacher"
+            classId={classId}
+            sectionId={sectionId}
+          />
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Student attendance report</h2>
-        <p className="mt-1 text-sm text-slate-600">Daily, weekly, or monthly report for a selected student.</p>
-        <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <p className="mt-1 text-sm text-slate-600">
+          Daily, weekly, monthly, academic-year, or custom-range report for a selected student.
+        </p>
+        <div className="mt-3 space-y-3">
           <select
-            className="rounded-lg border px-3 py-2"
+            className="rounded-lg border px-3 py-2 w-full md:max-w-md"
             value={reportStudentId}
             onChange={(e) => setReportStudentId(e.target.value)}
             disabled={rows.length === 0}
@@ -274,20 +465,16 @@ export function TeacherAttendancePage() {
               </option>
             ))}
           </select>
-          <select
-            className="rounded-lg border px-3 py-2"
-            value={reportRange}
-            onChange={(e) => setReportRange(e.target.value as AttendanceRange)}
-          >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-          <input
-            type="date"
-            className="rounded-lg border px-3 py-2"
-            value={reportDate}
-            onChange={(e) => setReportDate(e.target.value)}
+          <AttendanceRangeFilters
+            range={reportRange}
+            onRangeChange={handleReportRangeChange}
+            date={reportDate}
+            onDateChange={setReportDate}
+            customFrom={reportCustomFrom}
+            onCustomFromChange={setReportCustomFrom}
+            customTo={reportCustomTo}
+            onCustomToChange={setReportCustomTo}
+            rangeHint={report ? `${report.from} to ${report.to}` : undefined}
           />
         </div>
         {reportLoading ? <p className="mt-3 text-sm text-slate-500">Loading report…</p> : null}
@@ -297,12 +484,10 @@ export function TeacherAttendancePage() {
             <p className="mt-3 text-sm text-slate-600">
               {report.student.fullName} ({report.student.studentLoginId ?? "—"}) • {report.from} to {report.to}
             </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <MiniCard label="Total" value={String(report.summary.totalDays)} />
               <MiniCard label="Present" value={String(report.summary.present)} />
-              <MiniCard label="Late" value={String(report.summary.late)} />
               <MiniCard label="Absent" value={String(report.summary.absent)} />
-              <MiniCard label="Leave" value={String(report.summary.leave)} />
               <MiniCard
                 label="Attendance %"
                 value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"}

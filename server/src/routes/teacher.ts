@@ -3,7 +3,16 @@ import { AttendanceStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
-import { attendanceReportForStudent } from "../services/attendanceReport.js";
+import { attendanceReportForStudent, attendanceSummaryForClassSection } from "../services/attendanceReport.js";
+import {
+  attendanceReportQuerySchemaWithStudent,
+  attendanceSummaryQuerySchema,
+} from "../schemas/attendanceReportQuery.js";
+import {
+  generateSingleStudentRow,
+  saveStudentAccounts,
+} from "../services/studentAccounts.js";
+import { updateStudentNameSchema } from "../schemas/student.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("TEACHER"));
@@ -74,6 +83,71 @@ router.get("/sections/:sectionId/students", async (req, res) => {
   );
 });
 
+const createStudentSchema = z.object({
+  fullName: z.string().trim().min(1).max(200),
+  classId: z.string().min(1),
+  sectionId: z.string().min(1),
+});
+
+router.post("/students", async (req, res) => {
+  const p = createStudentSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const section = await prisma.section.findFirst({
+    where: { id: p.data.sectionId, classId: p.data.classId },
+    include: { schoolClass: true },
+  });
+  if (!section) {
+    return res.status(400).json({ error: "Invalid class and section" });
+  }
+
+  try {
+    const row = await generateSingleStudentRow(prisma, p.data);
+    const result = await saveStudentAccounts(prisma, [row]);
+    if (result.created === 0) {
+      return res.status(409).json({
+        error: result.errors[0] ?? "Could not create student (login ID may already exist)",
+      });
+    }
+    res.status(201).json({
+      fullName: row.fullName,
+      studentLoginId: row.studentLoginId,
+      password: row.password,
+      className: section.schoolClass.name,
+      sectionName: section.name,
+    });
+  } catch (e) {
+    res.status(400).json({ error: String(e) });
+  }
+});
+
+router.patch("/students/:studentId", async (req, res) => {
+  const p = updateStudentNameSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const studentId = req.params.studentId;
+  const existing = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!existing) return res.status(404).json({ error: "Student not found" });
+
+  const student = await prisma.student.update({
+    where: { id: studentId },
+    data: { fullName: p.data.fullName },
+    include: {
+      schoolClass: { select: { name: true } },
+      section: { select: { name: true } },
+      user: { select: { studentLoginId: true } },
+    },
+  });
+
+  res.json({
+    id: student.id,
+    fullName: student.fullName,
+    studentLoginId: student.user.studentLoginId,
+    className: student.schoolClass.name,
+    sectionName: student.section.name,
+  });
+});
+
 router.get("/attendance", async (req, res) => {
   const classId = typeof req.query.classId === "string" ? req.query.classId : "";
   const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
@@ -128,12 +202,6 @@ const attendanceSaveSchema = z.object({
   ),
 });
 
-const attendanceReportQuerySchema = z.object({
-  studentId: z.string().min(1),
-  range: z.enum(["daily", "weekly", "monthly"]).default("daily"),
-  date: z.string().optional(),
-});
-
 router.put("/attendance", async (req, res) => {
   const p = attendanceSaveSchema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -181,22 +249,54 @@ router.put("/attendance", async (req, res) => {
 });
 
 router.get("/attendance/report", async (req, res) => {
-  const parsed = attendanceReportQuerySchema.safeParse(req.query);
+  const parsed = attendanceReportQuerySchemaWithStudent.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json(parsed.error.flatten());
     return;
   }
-  const report = await attendanceReportForStudent(
-    prisma,
-    parsed.data.studentId,
-    parsed.data.range,
-    parsed.data.date
-  );
+  const report = await attendanceReportForStudent(prisma, parsed.data.studentId, {
+    range: parsed.data.range,
+    anchorDate: parsed.data.date,
+    from: parsed.data.from,
+    to: parsed.data.to,
+  });
   if (!report) {
     res.status(404).json({ error: "Student not found" });
     return;
   }
+  if ("error" in report) {
+    res.status(400).json({ error: report.error });
+    return;
+  }
   res.json(report);
+});
+
+router.get("/attendance/summary", async (req, res) => {
+  const parsed = attendanceSummaryQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json(parsed.error.flatten());
+    return;
+  }
+  const summary = await attendanceSummaryForClassSection(
+    prisma,
+    parsed.data.classId,
+    parsed.data.sectionId,
+    {
+      range: parsed.data.range,
+      anchorDate: parsed.data.date,
+      from: parsed.data.from,
+      to: parsed.data.to,
+    }
+  );
+  if (!summary) {
+    res.status(404).json({ error: "Class or section not found" });
+    return;
+  }
+  if ("error" in summary) {
+    res.status(400).json({ error: summary.error });
+    return;
+  }
+  res.json(summary);
 });
 
 router.get("/students/search", async (req, res) => {

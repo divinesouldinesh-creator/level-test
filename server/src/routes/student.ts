@@ -6,14 +6,10 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { pickQuestionsForTest } from "../services/testGenerator.js";
 import { bandFromPercentage, applyAttemptResults } from "../services/resultAnalysis.js";
 import { attendanceReportForStudent } from "../services/attendanceReport.js";
+import { attendanceReportQuerySchema } from "../schemas/attendanceReportQuery.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("STUDENT"));
-
-const attendanceReportQuerySchema = z.object({
-  range: z.enum(["daily", "weekly", "monthly"]).default("daily"),
-  date: z.string().optional(),
-});
 
 router.get("/subjects", async (req, res) => {
   const user = await prisma.user.findUnique({
@@ -45,13 +41,14 @@ router.get("/attendance/report", async (req, res) => {
     include: { student: true },
   });
   if (!user?.student) return res.status(400).json({ error: "Not a student" });
-  const report = await attendanceReportForStudent(
-    prisma,
-    user.student.id,
-    parsed.data.range,
-    parsed.data.date
-  );
+  const report = await attendanceReportForStudent(prisma, user.student.id, {
+    range: parsed.data.range,
+    anchorDate: parsed.data.date,
+    from: parsed.data.from,
+    to: parsed.data.to,
+  });
   if (!report) return res.status(404).json({ error: "Student not found" });
+  if ("error" in report) return res.status(400).json({ error: report.error });
   res.json(report);
 });
 
@@ -192,6 +189,7 @@ router.post("/tests/start", async (req, res) => {
 function stripQuestion(q: {
   id: string;
   stem: string;
+  stemImageUrl?: string | null;
   optionA: string;
   optionB: string;
   optionC: string;
@@ -201,6 +199,7 @@ function stripQuestion(q: {
   return {
     id: q.id,
     stem: q.stem,
+    stemImageUrl: q.stemImageUrl ?? null,
     options: [q.optionA, q.optionB, q.optionC, q.optionD],
     topicId: q.topicId,
   };
@@ -324,6 +323,7 @@ router.get("/tests/:testId/review", async (req, res) => {
     return {
       id: q.id,
       stem: q.stem,
+      stemImageUrl: q.stemImageUrl ?? null,
       options: [q.optionA, q.optionB, q.optionC, q.optionD],
       selectedOption: sa?.selectedOption ?? null,
       correctOption: q.correctOption,

@@ -18,6 +18,7 @@ export function AdminLayout() {
         { to: "/admin/students", label: "Students" },
         { to: "/admin/attendance", label: "Attendance" },
         { to: "/admin/teachers", label: "Teachers" },
+        { to: "/admin/branding", label: "School branding" },
         { to: "/admin/security", label: "Security" },
       ]}
     >

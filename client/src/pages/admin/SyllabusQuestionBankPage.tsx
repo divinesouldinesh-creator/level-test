@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { api, getToken } from "../../api";
+import { api, getToken, mediaUrl } from "../../api";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 
 type ChapterTopicPart = {
@@ -35,6 +35,7 @@ type QuestionRow = {
   chapterId: string;
   topicId: string;
   stem: string;
+  stemImageUrl?: string | null;
   optionA: string;
   optionB: string;
   optionC: string;
@@ -86,6 +87,7 @@ export function SyllabusQuestionBankPage() {
 
   const [form, setForm] = useState({
     stem: "",
+    stemImageUrl: "" as string,
     optionA: "",
     optionB: "",
     optionC: "",
@@ -94,6 +96,7 @@ export function SyllabusQuestionBankPage() {
     difficulty: "MEDIUM" as Difficulty,
     editId: "",
   });
+  const [imageUploading, setImageUploading] = useState(false);
 
   const [docxFile, setDocxFile] = useState<File | null>(null);
   const [sheetFile, setSheetFile] = useState<File | null>(null);
@@ -108,6 +111,7 @@ export function SyllabusQuestionBankPage() {
 
   const formRef = useRef<HTMLDivElement | null>(null);
   const stemRef = useRef<HTMLTextAreaElement | null>(null);
+  const stemImageInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     void refresh();
@@ -191,6 +195,7 @@ export function SyllabusQuestionBankPage() {
   function resetForm() {
     setForm({
       stem: "",
+      stemImageUrl: "",
       optionA: "",
       optionB: "",
       optionC: "",
@@ -199,6 +204,33 @@ export function SyllabusQuestionBankPage() {
       difficulty: "MEDIUM",
       editId: "",
     });
+    if (stemImageInputRef.current) stemImageInputRef.current.value = "";
+  }
+
+  async function uploadStemImage(file: File) {
+    setImageUploading(true);
+    setErr(null);
+    try {
+      const fd = new FormData();
+      fd.set("file", file);
+      const token = getToken();
+      const base = import.meta.env.VITE_API_URL ?? "";
+      const res = await fetch(`${base}/api/v1/admin/question-images`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        setErr(data.error ?? "Image upload failed");
+        return;
+      }
+      setForm((f) => ({ ...f, stemImageUrl: data.url! }));
+    } catch {
+      setErr("Image upload failed");
+    } finally {
+      setImageUploading(false);
+    }
   }
 
   async function saveQuestion(e: React.FormEvent) {
@@ -216,6 +248,7 @@ export function SyllabusQuestionBankPage() {
       optionD: form.optionD.trim(),
       correctOption: parseInt(form.correctOption, 10),
       difficulty: form.difficulty,
+      stemImageUrl: form.stemImageUrl || null,
     };
     const r = form.editId
       ? await api(`/api/v1/admin/syllabus/questions/${form.editId}`, {
@@ -228,6 +261,7 @@ export function SyllabusQuestionBankPage() {
             optionD: payload.optionD,
             correctOption: payload.correctOption,
             difficulty: payload.difficulty,
+            stemImageUrl: payload.stemImageUrl,
           },
         })
       : await api("/api/v1/admin/syllabus/questions", { method: "POST", json: payload });
@@ -244,6 +278,7 @@ export function SyllabusQuestionBankPage() {
   function startEdit(q: QuestionRow) {
     setForm({
       stem: q.stem,
+      stemImageUrl: q.stemImageUrl ?? "",
       optionA: q.optionA,
       optionB: q.optionB,
       optionC: q.optionC,
@@ -252,6 +287,7 @@ export function SyllabusQuestionBankPage() {
       difficulty: q.difficulty,
       editId: q.id,
     });
+    if (stemImageInputRef.current) stemImageInputRef.current.value = "";
     setErr(null);
     setImportMsg(null);
     requestAnimationFrame(() => {
@@ -813,6 +849,13 @@ export function SyllabusQuestionBankPage() {
                         </span>
                       </div>
                     </div>
+                    {q.stemImageUrl ? (
+                      <img
+                        src={mediaUrl(q.stemImageUrl)}
+                        alt=""
+                        className="mt-2 max-h-28 rounded border border-slate-200 object-contain bg-white"
+                      />
+                    ) : null}
                     <ul className="mt-1 grid gap-1 sm:grid-cols-2 text-xs text-slate-700">
                       {[q.optionA, q.optionB, q.optionC, q.optionD].map((opt, i) => (
                         <li
@@ -1012,6 +1055,43 @@ export function SyllabusQuestionBankPage() {
                 onChange={(e) => setForm((f) => ({ ...f, stem: e.target.value }))}
                 required
               />
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-medium text-slate-700">Stem image (optional)</p>
+                <input
+                  ref={stemImageInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
+                  className="mt-1 block w-full text-xs text-slate-600"
+                  disabled={busy || imageUploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadStemImage(file);
+                  }}
+                />
+                {imageUploading ? (
+                  <p className="mt-1 text-xs text-slate-500">Uploading…</p>
+                ) : null}
+                {form.stemImageUrl ? (
+                  <div className="mt-2 flex flex-wrap items-start gap-2">
+                    <img
+                      src={mediaUrl(form.stemImageUrl)}
+                      alt="Stem preview"
+                      className="max-h-40 max-w-full rounded border border-slate-200 object-contain bg-white"
+                    />
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setForm((f) => ({ ...f, stemImageUrl: "" }));
+                        if (stemImageInputRef.current) stemImageInputRef.current.value = "";
+                      }}
+                      className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                    >
+                      Remove image
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {(["optionA", "optionB", "optionC", "optionD"] as const).map((k, i) => (
                   <input

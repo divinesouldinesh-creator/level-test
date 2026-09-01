@@ -1,6 +1,13 @@
 import { AttendanceStatus, PrismaClient } from "@prisma/client";
 
-export type AttendanceRange = "daily" | "weekly" | "monthly";
+export type AttendanceRange = "daily" | "weekly" | "monthly" | "academic_year" | "custom";
+
+export type AttendanceReportBoundsInput = {
+  range: AttendanceRange;
+  anchorDate?: string;
+  from?: string;
+  to?: string;
+};
 
 export function parseAnchorDate(value?: string): Date {
   const v = value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : new Date().toISOString().slice(0, 10);
@@ -23,12 +30,43 @@ function addDaysUtc(d: Date, days: number): Date {
   return out;
 }
 
-function rangeBounds(anchor: Date, range: AttendanceRange): { from: Date; toExclusive: Date } {
-  if (range === "daily") {
-    const from = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), anchor.getUTCDate()));
+function startOfDayUtc(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+/** Academic session starts 1 April. If anchor is before April, use previous year's April 1. */
+export function academicYearStartUtc(anchor: Date): Date {
+  const year = anchor.getUTCFullYear();
+  const startYear = anchor.getUTCMonth() >= 3 ? year : year - 1;
+  return new Date(Date.UTC(startYear, 3, 1));
+}
+
+export function resolveReportBounds(
+  input: AttendanceReportBoundsInput
+): { from: Date; toExclusive: Date } | { error: string } {
+  const anchor = parseAnchorDate(input.anchorDate);
+
+  if (input.range === "custom") {
+    if (!input.from || !input.to || !/^\d{4}-\d{2}-\d{2}$/.test(input.from) || !/^\d{4}-\d{2}-\d{2}$/.test(input.to)) {
+      return { error: "Custom range requires from and to (YYYY-MM-DD)" };
+    }
+    const from = parseAnchorDate(input.from);
+    const to = parseAnchorDate(input.to);
+    if (from > to) return { error: "from must be on or before to" };
+    return { from, toExclusive: addDaysUtc(to, 1) };
+  }
+
+  if (input.range === "academic_year") {
+    const from = academicYearStartUtc(anchor);
+    const toExclusive = addDaysUtc(startOfDayUtc(anchor), 1);
+    return { from, toExclusive };
+  }
+
+  if (input.range === "daily") {
+    const from = startOfDayUtc(anchor);
     return { from, toExclusive: addDaysUtc(from, 1) };
   }
-  if (range === "weekly") {
+  if (input.range === "weekly") {
     const from = startOfWeekUtc(anchor);
     return { from, toExclusive: addDaysUtc(from, 7) };
   }
@@ -40,11 +78,12 @@ function rangeBounds(anchor: Date, range: AttendanceRange): { from: Date; toExcl
 export async function attendanceReportForStudent(
   prisma: PrismaClient,
   studentId: string,
-  range: AttendanceRange,
-  anchorDate?: string
+  input: AttendanceReportBoundsInput
 ) {
-  const anchor = parseAnchorDate(anchorDate);
-  const { from, toExclusive } = rangeBounds(anchor, range);
+  const bounds = resolveReportBounds(input);
+  if ("error" in bounds) return { error: bounds.error as string };
+
+  const { from, toExclusive } = bounds;
 
   const student = await prisma.student.findUnique({
     where: { id: studentId },
@@ -78,16 +117,12 @@ export async function attendanceReportForStudent(
 
   let present = 0;
   let absent = 0;
-  let late = 0;
-  let leave = 0;
   for (const e of entries) {
     if (e.status === AttendanceStatus.PRESENT) present += 1;
     else if (e.status === AttendanceStatus.ABSENT) absent += 1;
-    else if (e.status === AttendanceStatus.LATE) late += 1;
-    else if (e.status === AttendanceStatus.LEAVE) leave += 1;
   }
   const total = entries.length;
-  const attendancePct = total > 0 ? Math.round(((present + late) * 1000) / total) / 10 : null;
+  const attendancePct = total > 0 ? Math.round((present * 1000) / total) / 10 : null;
 
   return {
     student: {
@@ -99,15 +134,13 @@ export async function attendanceReportForStudent(
       sectionId: student.section.id,
       sectionName: student.section.name,
     },
-    range,
+    range: input.range,
     from: from.toISOString().slice(0, 10),
     to: addDaysUtc(toExclusive, -1).toISOString().slice(0, 10),
     summary: {
       totalDays: total,
       present,
       absent,
-      late,
-      leave,
       attendancePct,
     },
     records: entries.map((e) => ({
@@ -116,5 +149,96 @@ export async function attendanceReportForStudent(
       remark: e.remark ?? "",
       notes: e.session.notes ?? "",
     })),
+  };
+}
+
+export type ClassAttendanceSummaryRow = {
+  id: string;
+  fullName: string;
+  studentLoginId: string | null;
+  present: number;
+  absent: number;
+  totalDays: number;
+  attendancePct: number | null;
+};
+
+export async function attendanceSummaryForClassSection(
+  prisma: PrismaClient,
+  classId: string,
+  sectionId: string,
+  input: AttendanceReportBoundsInput
+) {
+  const bounds = resolveReportBounds(input);
+  if ("error" in bounds) return { error: bounds.error as string };
+
+  const { from, toExclusive } = bounds;
+
+  const section = await prisma.section.findFirst({
+    where: { id: sectionId, classId },
+    include: { schoolClass: true },
+  });
+  if (!section) return null;
+
+  const students = await prisma.student.findMany({
+    where: { classId, sectionId },
+    include: { user: { select: { studentLoginId: true } } },
+    orderBy: { fullName: "asc" },
+  });
+
+  const entries = await prisma.attendanceEntry.findMany({
+    where: {
+      studentId: { in: students.map((s) => s.id) },
+      session: {
+        classId,
+        sectionId,
+        date: { gte: from, lt: toExclusive },
+      },
+    },
+    select: { studentId: true, status: true },
+  });
+
+  const counts = new Map<string, { present: number; absent: number }>();
+  for (const e of entries) {
+    const cur = counts.get(e.studentId) ?? { present: 0, absent: 0 };
+    if (e.status === AttendanceStatus.PRESENT) cur.present += 1;
+    else if (e.status === AttendanceStatus.ABSENT) cur.absent += 1;
+    counts.set(e.studentId, cur);
+  }
+
+  const rows: ClassAttendanceSummaryRow[] = students.map((s) => {
+    const c = counts.get(s.id) ?? { present: 0, absent: 0 };
+    const totalDays = c.present + c.absent;
+    const attendancePct =
+      totalDays > 0 ? Math.round((c.present * 1000) / totalDays) / 10 : null;
+    return {
+      id: s.id,
+      fullName: s.fullName,
+      studentLoginId: s.user.studentLoginId,
+      present: c.present,
+      absent: c.absent,
+      totalDays,
+      attendancePct,
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (a.attendancePct == null && b.attendancePct == null) {
+      return a.fullName.localeCompare(b.fullName);
+    }
+    if (a.attendancePct == null) return 1;
+    if (b.attendancePct == null) return -1;
+    if (a.attendancePct !== b.attendancePct) return a.attendancePct - b.attendancePct;
+    return a.fullName.localeCompare(b.fullName);
+  });
+
+  return {
+    range: input.range,
+    classId,
+    sectionId,
+    className: section.schoolClass.name,
+    sectionName: section.name,
+    from: from.toISOString().slice(0, 10),
+    to: addDaysUtc(toExclusive, -1).toISOString().slice(0, 10),
+    students: rows,
   };
 }

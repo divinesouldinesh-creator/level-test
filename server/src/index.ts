@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import teacherRoutes from "./routes/teacher.js";
@@ -8,10 +10,15 @@ import teacherSyllabusRoutes from "./routes/teacherSyllabus.js";
 import studentRoutes from "./routes/student.js";
 import syllabusAdminRoutes from "./routes/syllabusAdmin.js";
 import syllabusStudentRoutes from "./routes/syllabusStudent.js";
+import settingsRoutes from "./routes/settings.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = "0.0.0.0";
+const uploadDir = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 /** Browser origins allowed when the client calls the API with an absolute URL (VITE_API_URL). Default covers local Vite. */
 function corsAllowedOrigins(): string[] {
@@ -40,10 +47,12 @@ app.use(
   })
 );
 app.use(express.json({ limit: "2mb" }));
+app.use("/uploads", express.static(uploadDir));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/admin/syllabus", syllabusAdminRoutes);
 app.use("/api/v1/teacher", teacherRoutes);

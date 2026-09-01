@@ -6,7 +6,7 @@ import { AppShell } from "../../components/AppShell";
 type ClassRow = { id: string; name: string; grade: string | null; studentCount: number };
 type SectionRow = { id: string; name: string };
 type ClassWithSections = ClassRow & { sections: SectionRow[] };
-type AttendanceStatus = "PRESENT" | "ABSENT" | "LATE" | "LEAVE";
+type AttendanceStatus = "PRESENT" | "ABSENT";
 type AttendanceRow = {
   id: string;
   fullName: string;
@@ -333,8 +333,6 @@ export function TeacherDashboard() {
                       >
                         <option value="PRESENT">Present</option>
                         <option value="ABSENT">Absent</option>
-                        <option value="LATE">Late</option>
-                        <option value="LEAVE">Leave</option>
                       </select>
                     </td>
                     <td className="p-3">

@@ -1,5 +1,12 @@
 const base = import.meta.env.VITE_API_URL ?? "";
 
+/** Resolve a stored media path (e.g. /uploads/…) against the API origin when needed. */
+export function mediaUrl(path: string | null | undefined): string | undefined {
+  if (!path) return undefined;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${base}${path}`;
+}
+
 export function getToken(): string | null {
   return localStorage.getItem("token");
 }

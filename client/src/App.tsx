@@ -18,6 +18,7 @@ import { SyllabusCurriculumPage } from "./pages/admin/SyllabusCurriculumPage";
 import { SyllabusQuestionBankPage } from "./pages/admin/SyllabusQuestionBankPage";
 import { AdminTeachersPage } from "./pages/admin/AdminTeachersPage";
 import { AdminSecurityPage } from "./pages/admin/AdminSecurityPage";
+import { AdminSchoolBrandingPage } from "./pages/admin/AdminSchoolBrandingPage";
 import { AdminAttendancePage } from "./pages/admin/AdminAttendancePage";
 import { TeacherOverviewPage } from "./pages/teacher/TeacherOverviewPage";
 import { TeacherAttendancePage } from "./pages/teacher/TeacherAttendancePage";
@@ -169,6 +170,7 @@ function AppRoutes() {
         <Route path="students" element={<AdminStudentsPage />} />
         <Route path="attendance" element={<AdminAttendancePage />} />
         <Route path="teachers" element={<AdminTeachersPage />} />
+        <Route path="branding" element={<AdminSchoolBrandingPage />} />
         <Route path="security" element={<AdminSecurityPage />} />
       </Route>
       <Route path="/" element={<Navigate to="/login" replace />} />

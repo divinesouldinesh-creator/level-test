@@ -9,13 +9,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api } from "../../api";
+import { api, mediaUrl } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 
 type Q = {
   id: string;
   stem: string;
+  stemImageUrl?: string | null;
   options: string[];
   chapterId: string;
   topicId: string;
@@ -26,6 +27,7 @@ type SavedProgress = { answers: Record<string, number>; idx: number };
 type ReviewItem = {
   id: string;
   stem: string;
+  stemImageUrl?: string | null;
   options: string[];
   selectedOption: number | null;
   correctOption: number;
@@ -395,6 +397,13 @@ export function SyllabusTakeTest() {
                               </span>
                             )}
                           </div>
+                          {q.stemImageUrl ? (
+                            <img
+                              src={mediaUrl(q.stemImageUrl)}
+                              alt=""
+                              className="mt-2 max-h-56 w-full object-contain rounded-lg border border-slate-100 bg-slate-50"
+                            />
+                          ) : null}
                           <p className="mt-1 text-xs text-slate-500">
                             {q.chapterName} · {q.topicName}
                           </p>
@@ -585,6 +594,13 @@ export function SyllabusTakeTest() {
         onCut={(e) => e.preventDefault()}
       >
         <p className="text-lg md:text-xl font-medium leading-relaxed">{current.stem}</p>
+        {current.stemImageUrl ? (
+          <img
+            src={mediaUrl(current.stemImageUrl)}
+            alt=""
+            className="mt-4 max-h-72 w-full object-contain rounded-xl border border-slate-100 bg-slate-50"
+          />
+        ) : null}
         <div className="mt-6 space-y-3">
           {current.options.map((opt, i) => (
             <button

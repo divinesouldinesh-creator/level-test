@@ -35,8 +35,6 @@ enum PerformanceBand {
 enum AttendanceStatus {
   PRESENT
   ABSENT
-  LATE
-  LEAVE
 }
 
 model User {
@@ -187,6 +185,7 @@ model Question {
   levelId          String     @map("level_id")
   topicId          String     @map("topic_id")
   stem             String
+  stemImageUrl     String?    @map("stem_image_url")
   optionA          String     @map("option_a")
   optionB          String     @map("option_b")
   optionC          String     @map("option_c")
@@ -420,6 +419,7 @@ model SyllabusQuestion {
   topicId       String     @map("topic_id")
   difficulty    Difficulty @default(MEDIUM)
   stem          String
+  stemImageUrl  String?    @map("stem_image_url")
   optionA       String     @map("option_a")
   optionB       String     @map("option_b")
   optionC       String     @map("option_c")
@@ -521,4 +521,12 @@ model SyllabusQuestionImport {
   errorsJson        String?  @map("errors_json")
 
   uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+}
+
+/// Singleton row (id = "default") for school name and logo on certificates, etc.
+model SchoolBranding {
+  id         String   @id @default("default")
+  schoolName String   @default("Your School") @map("school_name")
+  logoUrl    String?  @map("logo_url")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 }

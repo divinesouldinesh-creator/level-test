@@ -19,6 +19,15 @@ const uploadDir = process.env.UPLOAD_DIR ?? "./uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 } });
 
+const stemImageUrlSchema = z
+  .string()
+  .max(2048)
+  .nullable()
+  .optional()
+  .refine((v) => v == null || v === "" || v.startsWith("/uploads/") || /^https?:\/\//i.test(v), {
+    message: "Invalid image URL",
+  });
+
 function syllabusContentHash(topicId: string, stem: string, correctOption: number): string {
   const payload = `${topicId}|${stem.replace(/\s+/g, " ").trim().toLowerCase()}|${correctOption}`;
   return crypto.createHash("sha256").update(payload).digest("hex");
@@ -501,6 +510,7 @@ router.post("/questions", async (req, res) => {
     optionD: z.string().min(1),
     correctOption: z.number().int().min(0).max(3),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+    stemImageUrl: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -519,6 +529,7 @@ router.post("/questions", async (req, res) => {
       optionD: p.data.optionD,
       correctOption: p.data.correctOption,
       difficulty: p.data.difficulty ?? "MEDIUM",
+      stemImageUrl: p.data.stemImageUrl || null,
       contentHash: hash,
       createdById: req.user!.sub,
     },
@@ -535,6 +546,7 @@ router.patch("/questions/:id", async (req, res) => {
     optionD: z.string().optional(),
     correctOption: z.number().int().min(0).max(3).optional(),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+    stemImageUrl: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -548,9 +560,14 @@ router.patch("/questions/:id", async (req, res) => {
   if (dup && dup.id !== existing.id)
     return res.status(409).json({ error: "Duplicate question", id: dup.id });
 
+  const { stemImageUrl, ...rest } = p.data;
   const q = await prisma.syllabusQuestion.update({
     where: { id: existing.id },
-    data: { ...p.data, contentHash: nextHash },
+    data: {
+      ...rest,
+      ...(stemImageUrl !== undefined ? { stemImageUrl: stemImageUrl || null } : {}),
+      contentHash: nextHash,
+    },
   });
   res.json(q);
 });

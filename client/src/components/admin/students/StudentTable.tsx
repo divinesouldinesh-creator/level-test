@@ -20,6 +20,7 @@ export function StudentTable({
   onToggleAllVisible,
   onDeleteSelected,
   onResetPassword,
+  onRename,
   onDelete,
   onPrintClass,
 }: {
@@ -40,6 +41,7 @@ export function StudentTable({
   onToggleAllVisible: (checked: boolean, visibleIds: string[]) => void;
   onDeleteSelected: () => void;
   onResetPassword: (id: string) => void;
+  onRename: (id: string) => void;
   onDelete: (id: string) => void;
   onPrintClass: () => void;
 }) {
@@ -241,6 +243,14 @@ export function StudentTable({
                         onClick={() => exportOneXlsx(row)}
                       >
                         Excel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === row.id}
+                        className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                        onClick={() => onRename(row.id)}
+                      >
+                        Rename
                       </button>
                       <button
                         type="button"

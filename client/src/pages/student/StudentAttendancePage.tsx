@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
+import {
+  type AttendanceRange,
+  academicYearStartIso,
+  buildAttendanceReportQuery,
+  todayIso,
+} from "../../attendanceReport";
 
-type AttendanceRange = "daily" | "weekly" | "monthly";
-type AttendanceStatus = "PRESENT" | "ABSENT" | "LATE" | "LEAVE";
+type AttendanceStatus = "PRESENT" | "ABSENT";
 type AttendanceReport = {
   student: {
     id: string;
@@ -22,8 +28,6 @@ type AttendanceReport = {
     totalDays: number;
     present: number;
     absent: number;
-    late: number;
-    leave: number;
     attendancePct: number | null;
   };
   records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
@@ -32,19 +36,35 @@ type AttendanceReport = {
 export function StudentAttendancePage() {
   const { logout, auth } = useAuth();
   const [range, setRange] = useState<AttendanceRange>("weekly");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todayIso());
+  const [customFrom, setCustomFrom] = useState(() => academicYearStartIso(todayIso()));
+  const [customTo, setCustomTo] = useState(() => todayIso());
   const [report, setReport] = useState<AttendanceReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const headerTitle = [auth.profile?.fullName, auth.profile?.className].filter(Boolean).join(" - ") || "Student";
 
+  function handleRangeChange(next: AttendanceRange) {
+    setRange(next);
+    if (next === "custom") {
+      const today = todayIso();
+      setCustomFrom(academicYearStartIso(today));
+      setCustomTo(today);
+    }
+  }
+
   useEffect(() => {
+    if (range === "custom" && (!customFrom || !customTo)) return;
     void (async () => {
       setLoading(true);
       setErr(null);
-      const r = await api<AttendanceReport>(
-        `/api/v1/student/attendance/report?range=${encodeURIComponent(range)}&date=${encodeURIComponent(date)}`
-      );
+      const qs = buildAttendanceReportQuery({
+        range,
+        date,
+        from: customFrom,
+        to: customTo,
+      });
+      const r = await api<AttendanceReport>(`/api/v1/student/attendance/report?${qs}`);
       setLoading(false);
       if (!r.ok || !r.data) {
         setErr(r.error ?? "Could not load attendance");
@@ -52,7 +72,7 @@ export function StudentAttendancePage() {
       }
       setReport(r.data);
     })();
-  }, [range, date]);
+  }, [range, date, customFrom, customTo]);
 
   return (
     <AppShell
@@ -65,29 +85,22 @@ export function StudentAttendancePage() {
       ]}
     >
       <h1 className="text-2xl font-bold text-slate-900">My attendance</h1>
-      <p className="mt-1 text-slate-600">Check daily, weekly, or monthly attendance from your login.</p>
+      <p className="mt-1 text-slate-600">
+        View daily, weekly, monthly, academic-year, or custom-range attendance.
+      </p>
 
       <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-3">
-          <select
-            className="rounded-lg border px-3 py-2"
-            value={range}
-            onChange={(e) => setRange(e.target.value as AttendanceRange)}
-          >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-          <input
-            type="date"
-            className="rounded-lg border px-3 py-2"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-          <p className="text-sm text-slate-500 flex items-center">
-            {report ? `${report.from} to ${report.to}` : "Select range and date"}
-          </p>
-        </div>
+        <AttendanceRangeFilters
+          range={range}
+          onRangeChange={handleRangeChange}
+          date={date}
+          onDateChange={setDate}
+          customFrom={customFrom}
+          onCustomFromChange={setCustomFrom}
+          customTo={customTo}
+          onCustomToChange={setCustomTo}
+          rangeHint={report ? `${report.from} to ${report.to}` : "Select range and dates"}
+        />
       </section>
 
       {loading ? <p className="mt-4 text-slate-500">Loading attendance…</p> : null}
@@ -95,12 +108,10 @@ export function StudentAttendancePage() {
 
       {report ? (
         <>
-          <section className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card label="Total" value={String(report.summary.totalDays)} />
             <Card label="Present" value={String(report.summary.present)} />
-            <Card label="Late" value={String(report.summary.late)} />
             <Card label="Absent" value={String(report.summary.absent)} />
-            <Card label="Leave" value={String(report.summary.leave)} />
             <Card
               label="Attendance %"
               value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"}

@@ -224,6 +224,7 @@ router.get("/tests/:testId", async (req, res) => {
     questions: test.testQuestions.map((tq) => ({
       id: tq.syllabusQuestion.id,
       stem: tq.syllabusQuestion.stem,
+      stemImageUrl: tq.syllabusQuestion.stemImageUrl ?? null,
       options: [
         tq.syllabusQuestion.optionA,
         tq.syllabusQuestion.optionB,
@@ -276,6 +277,7 @@ router.get("/tests/:testId/review", async (req, res) => {
     return {
       id: q.id,
       stem: q.stem,
+      stemImageUrl: q.stemImageUrl ?? null,
       options: [q.optionA, q.optionB, q.optionC, q.optionD],
       selectedOption: sa?.selectedOption ?? null,
       correctOption: q.correctOption,

@@ -17,6 +17,7 @@ type SchoolClassMeta = {
 
 type Toast = { type: "ok" | "err"; message: string };
 type ResetDialog = { studentId: string; studentName: string; password: string };
+type RenameDialog = { studentId: string; fullName: string };
 
 export function AdminStudentsPage() {
   const [tab, setTab] = useState<AdminStudentTabId>("generate");
@@ -35,6 +36,7 @@ export function AdminStudentsPage() {
   const [passwordHints, setPasswordHints] = useState<Record<string, string>>({});
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
+  const [renameDialog, setRenameDialog] = useState<RenameDialog | null>(null);
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [confirm, setConfirm] = useState<{
@@ -222,6 +224,35 @@ export function AdminStudentsPage() {
     setResetDialog(null);
   }
 
+  function renameStudent(studentId: string) {
+    const student = allStudents.find((s) => s.id === studentId);
+    if (!student) return;
+    setRenameDialog({ studentId, fullName: student.fullName });
+  }
+
+  async function submitRename() {
+    if (!renameDialog) return;
+    const fullName = renameDialog.fullName.trim();
+    if (!fullName) {
+      showToast({ type: "err", message: "Name cannot be empty." });
+      return;
+    }
+    const studentId = renameDialog.studentId;
+    setBusyId(studentId);
+    const r = await api<{ fullName: string }>(`/api/v1/admin/students/${studentId}`, {
+      method: "PATCH",
+      json: { fullName },
+    });
+    setBusyId(null);
+    if (!r.ok) {
+      showToast({ type: "err", message: r.error ?? "Rename failed" });
+      return;
+    }
+    showToast({ type: "ok", message: `Name updated to “${r.data?.fullName ?? fullName}”.` });
+    setRenameDialog(null);
+    await loadStudents();
+  }
+
   async function deleteStudent(studentId: string) {
     if (!window.confirm("Delete this student account permanently?")) return;
     setBusyId(studentId);
@@ -368,6 +399,7 @@ export function AdminStudentsPage() {
           onToggleAllVisible={toggleAllVisibleSelection}
           onDeleteSelected={deleteSelectedStudents}
           onResetPassword={(id) => void resetPassword(id)}
+          onRename={(id) => renameStudent(id)}
           onDelete={(id) => void deleteStudent(id)}
           onPrintClass={() => printFilteredClass()}
         />
@@ -404,6 +436,44 @@ export function AdminStudentsPage() {
                 onClick={() => confirm.onConfirm()}
               >
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-900">Rename student</h3>
+            <p className="mt-2 text-sm text-slate-700">Update the student&apos;s display name across attendance, tests, and login.</p>
+            <label className="mt-4 block text-sm font-medium text-slate-700">
+              Full name
+              <input
+                type="text"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 min-h-[44px]"
+                value={renameDialog.fullName}
+                onChange={(e) =>
+                  setRenameDialog((prev) => (prev ? { ...prev, fullName: e.target.value } : prev))
+                }
+                autoFocus
+              />
+            </label>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium min-h-[44px]"
+                onClick={() => setRenameDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busyId === renameDialog.studentId || !renameDialog.fullName.trim()}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white min-h-[44px] disabled:opacity-50"
+                onClick={() => void submitRename()}
+              >
+                Save name
               </button>
             </div>
           </div>

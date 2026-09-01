@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, getToken } from "../../api";
+import { api, getToken, mediaUrl } from "../../api";
 import * as XLSX from "xlsx";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 
@@ -18,6 +18,7 @@ type QuestionRow = {
   id: string;
   topicId: string;
   stem: string;
+  stemImageUrl?: string | null;
   optionA: string;
   optionB: string;
   optionC: string;
@@ -68,6 +69,7 @@ export function AdminQuestionBankPage() {
 
   const [form, setForm] = useState({
     stem: "",
+    stemImageUrl: "" as string,
     optionA: "",
     optionB: "",
     optionC: "",
@@ -76,6 +78,8 @@ export function AdminQuestionBankPage() {
     difficulty: "MEDIUM" as "EASY" | "MEDIUM" | "HARD",
     editId: "",
   });
+  const [imageUploading, setImageUploading] = useState(false);
+  const stemImageInputRef = useRef<HTMLInputElement | null>(null);
   const [docxFile, setDocxFile] = useState<File | null>(null);
   const [sheetFile, setSheetFile] = useState<File | null>(null);
   const [syncMode, setSyncMode] = useState(true);
@@ -180,6 +184,7 @@ export function AdminQuestionBankPage() {
   function resetForm() {
     setForm({
       stem: "",
+      stemImageUrl: "",
       optionA: "",
       optionB: "",
       optionC: "",
@@ -188,6 +193,33 @@ export function AdminQuestionBankPage() {
       difficulty: "MEDIUM",
       editId: "",
     });
+    if (stemImageInputRef.current) stemImageInputRef.current.value = "";
+  }
+
+  async function uploadStemImage(file: File) {
+    setImageUploading(true);
+    setErr(null);
+    try {
+      const fd = new FormData();
+      fd.set("file", file);
+      const token = getToken();
+      const base = import.meta.env.VITE_API_URL ?? "";
+      const res = await fetch(`${base}/api/v1/admin/question-images`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        setErr(data.error ?? "Image upload failed");
+        return;
+      }
+      setForm((x) => ({ ...x, stemImageUrl: data.url! }));
+    } catch {
+      setErr("Image upload failed");
+    } finally {
+      setImageUploading(false);
+    }
   }
 
   async function saveQuestion(e: React.FormEvent) {
@@ -206,6 +238,7 @@ export function AdminQuestionBankPage() {
       optionD: form.optionD.trim(),
       correctOption: parseInt(form.correctOption, 10),
       difficulty: form.difficulty,
+      stemImageUrl: form.stemImageUrl || null,
     };
     const r = form.editId
       ? await api(`/api/v1/admin/questions/${form.editId}`, {
@@ -218,6 +251,7 @@ export function AdminQuestionBankPage() {
             optionD: payload.optionD,
             correctOption: payload.correctOption,
             difficulty: payload.difficulty,
+            stemImageUrl: payload.stemImageUrl,
           },
         })
       : await api("/api/v1/admin/questions", { method: "POST", json: payload });
@@ -233,6 +267,7 @@ export function AdminQuestionBankPage() {
   function startEdit(q: QuestionRow) {
     setForm({
       stem: q.stem,
+      stemImageUrl: q.stemImageUrl ?? "",
       optionA: q.optionA,
       optionB: q.optionB,
       optionC: q.optionC,
@@ -241,6 +276,7 @@ export function AdminQuestionBankPage() {
       difficulty: q.difficulty,
       editId: q.id,
     });
+    if (stemImageInputRef.current) stemImageInputRef.current.value = "";
     setErr(null);
     setImportMsg(null);
     requestAnimationFrame(() => {
@@ -838,6 +874,43 @@ export function AdminQuestionBankPage() {
               onChange={(e) => setForm((x) => ({ ...x, stem: e.target.value }))}
               disabled={busy}
             />
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-xs font-medium text-slate-700">Stem image (optional)</p>
+              <input
+                ref={stemImageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                className="mt-1 block w-full text-xs text-slate-600"
+                disabled={busy || imageUploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void uploadStemImage(file);
+                }}
+              />
+              {imageUploading ? (
+                <p className="mt-1 text-xs text-slate-500">Uploading…</p>
+              ) : null}
+              {form.stemImageUrl ? (
+                <div className="mt-2 flex flex-wrap items-start gap-2">
+                  <img
+                    src={mediaUrl(form.stemImageUrl)}
+                    alt="Stem preview"
+                    className="max-h-40 max-w-full rounded border border-slate-200 object-contain bg-white"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setForm((x) => ({ ...x, stemImageUrl: "" }));
+                      if (stemImageInputRef.current) stemImageInputRef.current.value = "";
+                    }}
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                  >
+                    Remove image
+                  </button>
+                </div>
+              ) : null}
+            </div>
             {(["optionA", "optionB", "optionC", "optionD"] as const).map((k, idx) => (
               <input
                 key={k}
@@ -995,6 +1068,13 @@ export function AdminQuestionBankPage() {
                 <p className="text-sm text-slate-900">
                   {i + 1}. {q.stem}
                 </p>
+                {q.stemImageUrl ? (
+                  <img
+                    src={mediaUrl(q.stemImageUrl)}
+                    alt=""
+                    className="mt-2 max-h-28 rounded border border-slate-200 object-contain bg-slate-50"
+                  />
+                ) : null}
                 <p className="text-xs text-slate-500 mt-1">
                   Correct: {String.fromCharCode(65 + q.correctOption)} | Difficulty: {q.difficulty}
                 </p>

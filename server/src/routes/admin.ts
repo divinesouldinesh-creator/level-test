@@ -2,11 +2,18 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs";
+import path from "path";
+import { randomUUID } from "crypto";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
-import { attendanceReportForStudent } from "../services/attendanceReport.js";
+import { attendanceReportForStudent, attendanceSummaryForClassSection } from "../services/attendanceReport.js";
+import {
+  attendanceReportQuerySchemaWithStudent,
+  attendanceSummaryQuerySchema,
+} from "../schemas/attendanceReportQuery.js";
+import { updateStudentNameSchema } from "../schemas/student.js";
 import { questionContentHash } from "../utils/questionHash.js";
 import { extractTextFromDocx, parseQuestionBlocks, parseDifficulty } from "../services/wordImport.js";
 import {
@@ -16,25 +23,74 @@ import {
   parseStudentSheetBuffer,
   saveStudentAccounts,
 } from "../services/studentAccounts.js";
+import {
+  getSchoolBranding,
+  updateSchoolLogo,
+  updateSchoolName,
+} from "../services/schoolBranding.js";
+import { sendBrandingError } from "../utils/brandingErrors.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("ADMIN"));
 
-const attendanceReportQuerySchema = z.object({
-  studentId: z.string().min(1),
-  range: z.enum(["daily", "weekly", "monthly"]).default("daily"),
-  date: z.string().optional(),
-});
-
-const uploadDir = process.env.UPLOAD_DIR ?? "./uploads";
+const uploadDir = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
+}
+const questionsUploadDir = path.join(uploadDir, "questions");
+if (!fs.existsSync(questionsUploadDir)) {
+  fs.mkdirSync(questionsUploadDir, { recursive: true });
+}
+const schoolUploadDir = path.join(uploadDir, "school");
+if (!fs.existsSync(schoolUploadDir)) {
+  fs.mkdirSync(schoolUploadDir, { recursive: true });
 }
 
 const upload = multer({
   dest: uploadDir,
   limits: { fileSize: 5 * 1024 * 1024 },
 });
+
+const imageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, questionsUploadDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      const safe = [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext) ? ext : ".jpg";
+      cb(null, `${randomUUID()}${safe}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG, GIF, or WebP images are allowed"));
+  },
+});
+
+const schoolLogoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, schoolUploadDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      const safe = [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext) ? ext : ".png";
+      cb(null, `logo-${randomUUID()}${safe}`);
+    },
+  }),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG, GIF, or WebP images are allowed"));
+  },
+});
+
+const stemImageUrlSchema = z
+  .string()
+  .max(2048)
+  .nullable()
+  .optional()
+  .refine((v) => v == null || v === "" || v.startsWith("/uploads/") || /^https?:\/\//i.test(v), {
+    message: "Invalid image URL",
+  });
 
 function normHeader(s: string): string {
   return s.trim().toLowerCase().replace(/[\s_]+/g, "");
@@ -228,16 +284,36 @@ router.get("/classes", async (_req, res) => {
 });
 
 router.get("/attendance/report", async (req, res) => {
-  const parsed = attendanceReportQuerySchema.safeParse(req.query);
+  const parsed = attendanceReportQuerySchemaWithStudent.safeParse(req.query);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
-  const report = await attendanceReportForStudent(
-    prisma,
-    parsed.data.studentId,
-    parsed.data.range,
-    parsed.data.date
-  );
+  const report = await attendanceReportForStudent(prisma, parsed.data.studentId, {
+    range: parsed.data.range,
+    anchorDate: parsed.data.date,
+    from: parsed.data.from,
+    to: parsed.data.to,
+  });
   if (!report) return res.status(404).json({ error: "Student not found" });
+  if ("error" in report) return res.status(400).json({ error: report.error });
   res.json(report);
+});
+
+router.get("/attendance/summary", async (req, res) => {
+  const parsed = attendanceSummaryQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const summary = await attendanceSummaryForClassSection(
+    prisma,
+    parsed.data.classId,
+    parsed.data.sectionId,
+    {
+      range: parsed.data.range,
+      anchorDate: parsed.data.date,
+      from: parsed.data.from,
+      to: parsed.data.to,
+    }
+  );
+  if (!summary) return res.status(404).json({ error: "Class or section not found" });
+  if ("error" in summary) return res.status(400).json({ error: summary.error });
+  res.json(summary);
 });
 
 router.post("/classes", async (req, res) => {
@@ -730,6 +806,22 @@ router.put("/levels/:levelId/topics", async (req, res) => {
 });
 
 // --- Questions CRUD ---
+router.post("/question-images", (req, res, next) => {
+  imageUpload.single("file")(req, res, (err) => {
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Upload failed" });
+      return;
+    }
+    next();
+  });
+}, (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "No file uploaded" });
+    return;
+  }
+  res.json({ url: `/uploads/questions/${req.file.filename}` });
+});
+
 router.get("/questions", async (req, res) => {
   const topicId = req.query.topicId as string | undefined;
   const levelId = req.query.levelId as string | undefined;
@@ -760,6 +852,7 @@ router.post("/questions", async (req, res) => {
     optionD: z.string(),
     correctOption: z.number().min(0).max(3),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+    stemImageUrl: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -769,9 +862,11 @@ router.post("/questions", async (req, res) => {
     res.status(409).json({ error: "Duplicate question", id: dup.id });
     return;
   }
+  const { stemImageUrl, ...rest } = p.data;
   const q = await prisma.question.create({
     data: {
-      ...p.data,
+      ...rest,
+      stemImageUrl: stemImageUrl || null,
       contentHash: hash,
       createdById: req.user!.sub,
       difficulty: p.data.difficulty ?? "MEDIUM",
@@ -794,6 +889,7 @@ router.patch("/questions/:id", async (req, res) => {
     optionD: z.string().optional(),
     correctOption: z.number().int().min(0).max(3).optional(),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
+    stemImageUrl: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -807,10 +903,12 @@ router.patch("/questions/:id", async (req, res) => {
   const dup = await prisma.question.findUnique({ where: { contentHash: nextHash } });
   if (dup && dup.id !== existing.id) return res.status(409).json({ error: "Duplicate question", id: dup.id });
 
+  const { stemImageUrl, ...rest } = p.data;
   const q = await prisma.question.update({
     where: { id: existing.id },
     data: {
-      ...p.data,
+      ...rest,
+      ...(stemImageUrl !== undefined ? { stemImageUrl: stemImageUrl || null } : {}),
       contentHash: nextHash,
     },
   });
@@ -1280,6 +1378,36 @@ const resetPasswordSchema = z.object({
   password: z.string().min(4).max(32),
 });
 
+router.patch("/students/:studentId", async (req, res) => {
+  const p = updateStudentNameSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const studentId = req.params.studentId;
+  const existing = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!existing) return res.status(404).json({ error: "Student not found" });
+
+  const student = await prisma.student.update({
+    where: { id: studentId },
+    data: { fullName: p.data.fullName },
+    include: {
+      schoolClass: true,
+      section: true,
+      user: { select: { studentLoginId: true } },
+    },
+  });
+
+  res.json({
+    id: student.id,
+    fullName: student.fullName,
+    classId: student.classId,
+    sectionId: student.sectionId,
+    className: student.schoolClass.name,
+    classLabel: classLabelForDisplay(student.schoolClass),
+    sectionName: student.section.name,
+    username: student.user.studentLoginId ?? "",
+  });
+});
+
 router.patch("/students/:studentId/reset-password", async (req, res) => {
   const p = resetPasswordSchema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -1445,6 +1573,78 @@ router.delete("/teachers/:teacherId", async (req, res) => {
   if (!teacher) return res.status(404).json({ error: "Teacher not found" });
   await prisma.user.delete({ where: { id: teacher.userId } });
   res.json({ ok: true });
+});
+
+function deleteUploadedFileIfLocal(url: string | null | undefined) {
+  if (!url || !url.startsWith("/uploads/")) return;
+  const rel = url.replace(/^\/uploads\/?/, "");
+  const full = path.join(uploadDir, rel);
+  if (!full.startsWith(path.resolve(uploadDir))) return;
+  try {
+    if (fs.existsSync(full)) fs.unlinkSync(full);
+  } catch {
+    /* ignore */
+  }
+}
+
+const schoolBrandingNameSchema = z.object({
+  schoolName: z.string().trim().min(1, "School name is required").max(200),
+});
+
+router.get("/school-branding", async (_req, res) => {
+  try {
+    const branding = await getSchoolBranding(prisma);
+    res.json(branding);
+  } catch (e) {
+    sendBrandingError(res, e);
+  }
+});
+
+router.patch("/school-branding", async (req, res) => {
+  const p = schoolBrandingNameSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  try {
+    const branding = await updateSchoolName(prisma, p.data.schoolName);
+    res.json(branding);
+  } catch (e) {
+    sendBrandingError(res, e);
+  }
+});
+
+router.post("/school-logo", (req, res, next) => {
+  schoolLogoUpload.single("file")(req, res, (err) => {
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Upload failed" });
+      return;
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "No file uploaded" });
+    return;
+  }
+  try {
+    const current = await getSchoolBranding(prisma);
+    deleteUploadedFileIfLocal(current.logoUrl);
+
+    const logoUrl = `/uploads/school/${req.file.filename}`;
+    const branding = await updateSchoolLogo(prisma, logoUrl);
+    res.json(branding);
+  } catch (e) {
+    sendBrandingError(res, e);
+  }
+});
+
+router.delete("/school-logo", async (_req, res) => {
+  try {
+    const current = await getSchoolBranding(prisma);
+    deleteUploadedFileIfLocal(current.logoUrl);
+    const branding = await updateSchoolLogo(prisma, null);
+    res.json(branding);
+  } catch (e) {
+    sendBrandingError(res, e);
+  }
 });
 
 export default router;

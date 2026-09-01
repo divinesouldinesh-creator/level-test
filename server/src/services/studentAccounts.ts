@@ -189,6 +189,20 @@ export async function generateStudentRows(
   return rows;
 }
 
+export async function generateSingleStudentRow(
+  prisma: PrismaClient,
+  params: { classId: string; sectionId: string; fullName: string }
+): Promise<GeneratedStudentRow> {
+  const name = params.fullName.trim();
+  if (!name) throw new Error("Student name is required");
+  const [row] = await generateStudentRows(prisma, {
+    classId: params.classId,
+    sectionId: params.sectionId,
+    count: 1,
+  });
+  return { ...row, fullName: name };
+}
+
 export type UploadSourceRow = { name: string; class: string; section: string };
 
 export async function buildRowsFromUpload(
