@@ -107,6 +107,116 @@ model Student {
   topicPerformance  TopicPerformance[]
   attendanceEntries AttendanceEntry[]
   syllabusTests     SyllabusTest[]
+  engagement        StudentEngagement?
+  xpEvents          XpEvent[]
+  dailyChallenges   DailyChallenge[]
+  topicMasteries    TopicMastery[]
+  masterySessions   MasterySession[]
+}
+
+enum XpReason {
+  CHECK_IN
+  DAILY_CHALLENGE
+  DAILY_CHALLENGE_BONUS
+  TOPIC_PRACTICE
+  TOPIC_MASTERY
+}
+
+enum DailyChallengeStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum TopicMasteryStatus {
+  NEEDS_WORK
+  LEARNING
+  PRACTICING
+  REVIEW_DUE
+  MASTERED
+}
+
+enum MasterySessionKind {
+  PRACTICE
+  RECHECK
+}
+
+enum MasterySessionStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+/// Gamification totals + streaks for daily engagement.
+model StudentEngagement {
+  id                 String    @id @default(cuid())
+  studentId          String    @unique @map("student_id")
+  xpTotal            Int       @default(0) @map("xp_total")
+  checkInStreak      Int       @default(0) @map("check_in_streak")
+  bestCheckInStreak  Int       @default(0) @map("best_check_in_streak")
+  practiceStreak     Int       @default(0) @map("practice_streak")
+  bestPracticeStreak Int       @default(0) @map("best_practice_streak")
+  /// YYYY-MM-DD (IST calendar day)
+  lastCheckInDay     String?   @map("last_check_in_day")
+  lastPracticeDay    String?   @map("last_practice_day")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+model XpEvent {
+  id        String   @id @default(cuid())
+  studentId String   @map("student_id")
+  amount    Int
+  reason    XpReason
+  /// YYYY-MM-DD — used to enforce one check-in XP per day
+  dayKey    String   @map("day_key")
+  refId     String?  @map("ref_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, dayKey])
+  @@index([studentId, reason, dayKey])
+}
+
+/// One auto-built skill Daily 5 per student per calendar day.
+model DailyChallenge {
+  id           String               @id @default(cuid())
+  studentId    String               @map("student_id")
+  dayKey       String               @map("day_key")
+  subjectId    String               @map("subject_id")
+  levelId      String               @map("level_id")
+  status       DailyChallengeStatus @default(IN_PROGRESS)
+  focusTopicNames String[]          @default([]) @map("focus_topic_names")
+  score        Int?
+  maxScore     Int?                 @map("max_score")
+  percentage   Float?
+  xpAwarded    Int?                 @map("xp_awarded")
+  startedAt    DateTime             @default(now()) @map("started_at")
+  completedAt  DateTime?            @map("completed_at")
+
+  student   Student                  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject   Subject                  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  level     Level                    @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  questions DailyChallengeQuestion[]
+
+  @@unique([studentId, dayKey])
+  @@index([studentId, dayKey])
+  @@index([subjectId])
+}
+
+model DailyChallengeQuestion {
+  id             String  @id @default(cuid())
+  challengeId    String  @map("challenge_id")
+  questionId     String  @map("question_id")
+  orderIndex     Int     @map("order_index")
+  selectedOption Int?    @map("selected_option")
+  isCorrect      Boolean? @map("is_correct")
+
+  challenge DailyChallenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  question  Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([challengeId, orderIndex])
+  @@index([challengeId])
 }
 
 model Subject {
@@ -118,6 +228,8 @@ model Subject {
   tests           Test[]
   classSubjects   ClassSubject[]
   studentProgress StudentProgress[]
+  dailyChallenges DailyChallenge[]
+  topicMasteries  TopicMastery[]
 }
 
 /// Join: which subjects a class studies (students see these subjects)
@@ -144,6 +256,8 @@ model Level {
   levelTopicParticipations LevelTopicParticipation[]
   studentProgress          StudentProgress[]
   suggestedNextInAttempts  TestAttempt[]             @relation("SuggestedNextLevel")
+  dailyChallenges          DailyChallenge[]
+  topicMasteries           TopicMastery[]
 }
 
 model Topic {
@@ -153,6 +267,8 @@ model Topic {
   questions                Question[]
   levelTopicParticipations LevelTopicParticipation[]
   topicPerformance         TopicPerformance[]
+  lesson                   TopicLesson?
+  masteries                TopicMastery[]
 
   @@unique([name])
 }
@@ -205,8 +321,10 @@ model Question {
   variations Question[] @relation("QuestionVariations")
   createdBy  User?      @relation("QuestionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  testQuestions  TestQuestion[]
-  studentAnswers StudentAnswer[]
+  testQuestions           TestQuestion[]
+  studentAnswers          StudentAnswer[]
+  dailyChallengeQuestions DailyChallengeQuestion[]
+  masterySessionQuestions MasterySessionQuestion[]
 
   @@unique([contentHash])
   @@index([topicId])
@@ -300,6 +418,80 @@ model TopicPerformance {
 
   @@unique([studentId, topicId])
   @@index([topicId])
+}
+
+/// Optional short lesson shown in the Learn step of topic mastery.
+model TopicLesson {
+  id        String   @id @default(cuid())
+  topicId   String   @unique @map("topic_id")
+  title     String
+  body      String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+}
+
+/// Per-student mastery pipeline for a skill topic at a level.
+model TopicMastery {
+  id               String             @id @default(cuid())
+  studentId        String             @map("student_id")
+  topicId          String             @map("topic_id")
+  subjectId        String             @map("subject_id")
+  levelId          String             @map("level_id")
+  status           TopicMasteryStatus @default(NEEDS_WORK)
+  learnCompletedAt DateTime?          @map("learn_completed_at")
+  lastPracticePct  Float?             @map("last_practice_pct")
+  lastPracticeAt   DateTime?          @map("last_practice_at")
+  lastRecheckPct   Float?             @map("last_recheck_pct")
+  lastRecheckAt    DateTime?          @map("last_recheck_at")
+  masteredAt       DateTime?          @map("mastered_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  student  Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  topic    Topic            @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  subject  Subject          @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  level    Level            @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  sessions MasterySession[]
+
+  @@unique([studentId, topicId, levelId])
+  @@index([studentId, status])
+  @@index([topicId])
+}
+
+model MasterySession {
+  id             String               @id @default(cuid())
+  studentId      String               @map("student_id")
+  topicMasteryId String               @map("topic_mastery_id")
+  kind           MasterySessionKind
+  status         MasterySessionStatus @default(IN_PROGRESS)
+  score          Int?
+  maxScore       Int?                 @map("max_score")
+  percentage     Float?
+  xpAwarded      Int?                 @map("xp_awarded")
+  startedAt      DateTime             @default(now()) @map("started_at")
+  completedAt    DateTime?            @map("completed_at")
+
+  student      Student                 @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  topicMastery TopicMastery            @relation(fields: [topicMasteryId], references: [id], onDelete: Cascade)
+  questions    MasterySessionQuestion[]
+
+  @@index([studentId, status])
+  @@index([topicMasteryId])
+}
+
+model MasterySessionQuestion {
+  id             String   @id @default(cuid())
+  sessionId      String   @map("session_id")
+  questionId     String   @map("question_id")
+  orderIndex     Int      @map("order_index")
+  selectedOption Int?     @map("selected_option")
+  isCorrect      Boolean? @map("is_correct")
+
+  session  MasterySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, orderIndex])
+  @@index([sessionId])
 }
 
 model QuestionImport {

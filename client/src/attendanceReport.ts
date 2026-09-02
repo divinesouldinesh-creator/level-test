@@ -7,6 +7,30 @@ export type AttendanceReportSummary = {
   attendancePct: number | null;
 };
 
+export type AttendanceStreak = {
+  currentStreak: number;
+  bestStreak: number;
+  asOfDate: string | null;
+};
+
+/** Motivational copy for the student streak card. */
+export function attendanceStreakMessage(streak: AttendanceStreak): string {
+  const { currentStreak, bestStreak } = streak;
+  if (currentStreak === 0) {
+    return "Start your streak — be present on the next school day!";
+  }
+  if (currentStreak >= bestStreak && currentStreak >= 5) {
+    return `New personal best! Keep your ${currentStreak}-day streak going.`;
+  }
+  if (currentStreak >= 10) {
+    return "Amazing consistency — you're on fire!";
+  }
+  if (currentStreak >= 5) {
+    return "Great job — keep showing up!";
+  }
+  return "Nice start — build your streak day by day!";
+}
+
 export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }

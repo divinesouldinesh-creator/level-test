@@ -7,9 +7,289 @@ import { pickQuestionsForTest } from "../services/testGenerator.js";
 import { bandFromPercentage, applyAttemptResults } from "../services/resultAnalysis.js";
 import { attendanceReportForStudent } from "../services/attendanceReport.js";
 import { attendanceReportQuerySchema } from "../schemas/attendanceReportQuery.js";
+import {
+  getOrCreateTodayChallenge,
+  getChallengeForStudent,
+  submitDailyChallenge,
+} from "../services/dailyChallenge.js";
+import { getEngagementSummary, performCheckIn } from "../services/studentEngagement.js";
+import {
+  getMasteryDetail,
+  getMasterySession,
+  listMasteryQueue,
+  markLearnComplete,
+  startMasterySession,
+  submitMasterySession,
+} from "../services/topicMastery.js";
+import { MasterySessionKind } from "@prisma/client";
 
 const router = Router();
 router.use(authMiddleware, requireRole("STUDENT"));
+
+async function requireStudent(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { student: true },
+  });
+  return user?.student ?? null;
+}
+
+router.get("/home", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+
+  const [engagement, challenge, masteryQueue] = await Promise.all([
+    getEngagementSummary(prisma, student.id),
+    getOrCreateTodayChallenge(prisma, student.id, student.classId),
+    listMasteryQueue(prisma, student.id, student.classId),
+  ]);
+
+  res.json({
+    engagement,
+    dailyChallenge: challenge,
+    masteryQueue,
+  });
+});
+
+router.post("/check-in", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const result = await performCheckIn(prisma, student.id);
+  res.json(result);
+});
+
+router.post("/daily-challenge/start", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const challenge = await getOrCreateTodayChallenge(prisma, student.id, student.classId);
+  if (!challenge) {
+    return res.status(400).json({
+      error: "No daily challenge available — ask your teacher to add skill questions for your class.",
+    });
+  }
+  res.json(challenge);
+});
+
+router.get("/daily-challenge/:challengeId", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const challenge = await getChallengeForStudent(prisma, student.id, req.params.challengeId);
+  if (!challenge) return res.status(404).json({ error: "Challenge not found" });
+
+  const questions = challenge.questions.map((cq) => {
+    const q = cq.question;
+    const base = {
+      id: q.id,
+      stem: q.stem,
+      stemImageUrl: q.stemImageUrl,
+      options: [q.optionA, q.optionB, q.optionC, q.optionD],
+      topicId: q.topicId,
+      topicName: q.topic.name,
+      orderIndex: cq.orderIndex,
+    };
+    if (challenge.status === "COMPLETED") {
+      return {
+        ...base,
+        selectedOption: cq.selectedOption,
+        correctOption: q.correctOption,
+        isCorrect: cq.isCorrect,
+      };
+    }
+    return base;
+  });
+
+  res.json({
+    id: challenge.id,
+    dayKey: challenge.dayKey,
+    status: challenge.status,
+    subjectName: challenge.subject.name,
+    levelName: challenge.level.name,
+    focusTopicNames: challenge.focusTopicNames,
+    score: challenge.score,
+    maxScore: challenge.maxScore,
+    percentage: challenge.percentage,
+    xpAwarded: challenge.xpAwarded,
+    questions,
+  });
+});
+
+router.post("/daily-challenge/:challengeId/submit", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+
+  const parsed = z
+    .object({
+      answers: z.array(
+        z.object({
+          questionId: z.string(),
+          selectedOption: z.number().int().min(0).max(3),
+        })
+      ),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const result = await submitDailyChallenge(
+    prisma,
+    student.id,
+    req.params.challengeId,
+    parsed.data.answers
+  );
+
+  if ("error" in result) {
+    if (result.error === "not_found") return res.status(404).json({ error: "Challenge not found" });
+    if (result.error === "already_completed") {
+      return res.status(409).json({
+        error: "Already completed",
+        score: result.score,
+        maxScore: result.maxScore,
+        percentage: result.percentage,
+        xpAwarded: result.xpAwarded,
+      });
+    }
+    if (result.error === "incomplete") return res.status(400).json({ error: "Answer every question" });
+    return res.status(400).json({ error: "Invalid answers" });
+  }
+
+  res.json(result);
+});
+
+router.get("/mastery", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const queue = await listMasteryQueue(prisma, student.id, student.classId);
+  res.json({ items: queue });
+});
+
+router.get("/mastery/:masteryId", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const detail = await getMasteryDetail(prisma, student.id, req.params.masteryId);
+  if (!detail) return res.status(404).json({ error: "Mastery path not found" });
+  res.json(detail);
+});
+
+router.post("/mastery/:masteryId/learn", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const result = await markLearnComplete(prisma, student.id, req.params.masteryId);
+  if ("error" in result) {
+    if (result.error === "not_found") return res.status(404).json({ error: "Not found" });
+    return res.status(400).json({ error: "Already mastered" });
+  }
+  res.json(result);
+});
+
+router.post("/mastery/:masteryId/start", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const parsed = z
+    .object({ kind: z.enum(["PRACTICE", "RECHECK"]) })
+    .safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const masteryId = req.params.masteryId;
+  if (!masteryId) return res.status(400).json({ error: "Missing mastery id" });
+
+  const result = await startMasterySession(
+    prisma,
+    student.id,
+    masteryId,
+    parsed.data.kind === "RECHECK" ? MasterySessionKind.RECHECK : MasterySessionKind.PRACTICE
+  );
+  if ("error" in result) {
+    const map: Record<string, [number, string]> = {
+      not_found: [404, "Not found"],
+      already_mastered: [400, "Already mastered"],
+      recheck_not_ready: [400, "Pass practice first, then recheck"],
+      learn_first: [400, "Complete the Learn step first"],
+      no_questions: [400, "No questions available for this topic"],
+    };
+    const errKey = result.error;
+    const [code, msg] = (errKey && map[errKey]) || [400, "Could not start"];
+    return res.status(code).json({ error: msg });
+  }
+  res.json(result);
+});
+
+router.get("/mastery/sessions/:sessionId", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const session = await getMasterySession(prisma, student.id, req.params.sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  const questions = session.questions.map((sq) => {
+    const q = sq.question;
+    const base = {
+      id: q.id,
+      stem: q.stem,
+      stemImageUrl: q.stemImageUrl,
+      options: [q.optionA, q.optionB, q.optionC, q.optionD],
+      orderIndex: sq.orderIndex,
+    };
+    if (session.status === "COMPLETED") {
+      return {
+        ...base,
+        selectedOption: sq.selectedOption,
+        correctOption: q.correctOption,
+        isCorrect: sq.isCorrect,
+      };
+    }
+    return base;
+  });
+
+  res.json({
+    id: session.id,
+    kind: session.kind,
+    status: session.status,
+    topicName: session.topicMastery.topic.name,
+    subjectName: session.topicMastery.subject.name,
+    levelName: session.topicMastery.level.name,
+    masteryId: session.topicMasteryId,
+    score: session.score,
+    maxScore: session.maxScore,
+    percentage: session.percentage,
+    xpAwarded: session.xpAwarded,
+    questions,
+  });
+});
+
+router.post("/mastery/sessions/:sessionId/submit", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) return res.status(400).json({ error: "Not a student" });
+  const parsed = z
+    .object({
+      answers: z.array(
+        z.object({
+          questionId: z.string(),
+          selectedOption: z.number().int().min(0).max(3),
+        })
+      ),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const result = await submitMasterySession(
+    prisma,
+    student.id,
+    req.params.sessionId,
+    parsed.data.answers
+  );
+  if ("error" in result) {
+    if (result.error === "not_found") return res.status(404).json({ error: "Session not found" });
+    if (result.error === "already_completed") {
+      return res.status(409).json({
+        error: "Already completed",
+        score: result.score,
+        maxScore: result.maxScore,
+        percentage: result.percentage,
+        xpAwarded: result.xpAwarded,
+      });
+    }
+    return res.status(400).json({ error: "Answer every question" });
+  }
+  res.json(result);
+});
 
 router.get("/subjects", async (req, res) => {
   const user = await prisma.user.findUnique({

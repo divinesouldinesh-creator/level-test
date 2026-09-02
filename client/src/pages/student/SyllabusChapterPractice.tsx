@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
+import { studentNav } from "../../studentNav";
 
 type ChapterRow = {
   id: string;
@@ -85,10 +86,7 @@ export function SyllabusChapterPractice() {
     <AppShell
       title={auth.profile?.fullName ?? "Student"}
       onLogout={logout}
-      nav={[
-        { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus" },
-      ]}
+      nav={[...studentNav]} sidebarKicker="Student"
     >
       <Link to="/student/syllabus" className="text-brand-600 text-sm font-medium">
         ← Subjects

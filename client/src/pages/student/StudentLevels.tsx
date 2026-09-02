@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
+import { studentNav } from "../../studentNav";
 
 type LevelRow = {
   id: string;
@@ -49,12 +50,10 @@ export function StudentLevels() {
     <AppShell
       title={auth.profile?.fullName ?? "Student"}
       onLogout={logout}
-      nav={[
-        { to: "/student", label: "Subjects" },
-        { to: `/student/subject/${subjectId}/levels`, label: "Levels" },
-      ]}
+      nav={[...studentNav]}
+      sidebarKicker="Student"
     >
-      <Link to="/student" className="text-brand-600 text-sm font-medium">
+      <Link to="/student/skills" className="text-brand-600 text-sm font-medium">
         Back to subjects
       </Link>
       <h1 className="text-2xl font-bold text-slate-900 mt-2">Levels</h1>

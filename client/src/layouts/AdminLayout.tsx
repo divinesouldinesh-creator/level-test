@@ -12,6 +12,7 @@ export function AdminLayout() {
         { to: "/admin", label: "Dashboard", end: true },
         { to: "/admin/curriculum", label: "Skill Curriculum" },
         { to: "/admin/question-bank", label: "Skill Question Bank" },
+        { to: "/admin/topic-lessons", label: "Topic lessons" },
         { to: "/admin/syllabus/curriculum", label: "Syllabus Curriculum" },
         { to: "/admin/syllabus/question-bank", label: "Syllabus Question Bank" },
         { to: "/admin/coverage", label: "Coverage" },

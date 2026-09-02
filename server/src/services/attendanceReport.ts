@@ -75,6 +75,82 @@ export function resolveReportBounds(
   return { from, toExclusive };
 }
 
+export type AttendanceStreak = {
+  currentStreak: number;
+  bestStreak: number;
+  /** Most recent school day with an attendance record. */
+  asOfDate: string | null;
+};
+
+type StreakRecord = { date: string; status: AttendanceStatus };
+
+/** Consecutive present school days (marked dates only), newest first for current. */
+export function computeAttendanceStreak(records: StreakRecord[]): AttendanceStreak {
+  const byDate = new Map<string, AttendanceStatus>();
+  for (const r of records) {
+    byDate.set(r.date, r.status);
+  }
+  const datesAsc = [...byDate.keys()].sort();
+  if (datesAsc.length === 0) {
+    return { currentStreak: 0, bestStreak: 0, asOfDate: null };
+  }
+
+  let bestStreak = 0;
+  let run = 0;
+  for (const date of datesAsc) {
+    if (byDate.get(date) === AttendanceStatus.PRESENT) {
+      run += 1;
+      if (run > bestStreak) bestStreak = run;
+    } else {
+      run = 0;
+    }
+  }
+
+  let currentStreak = 0;
+  for (const date of [...datesAsc].reverse()) {
+    if (byDate.get(date) === AttendanceStatus.PRESENT) {
+      currentStreak += 1;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    currentStreak,
+    bestStreak,
+    asOfDate: datesAsc[datesAsc.length - 1] ?? null,
+  };
+}
+
+export async function attendanceStreakForStudent(
+  prisma: PrismaClient,
+  studentId: string,
+  anchorDate?: string
+): Promise<AttendanceStreak> {
+  const anchor = parseAnchorDate(anchorDate);
+  const from = academicYearStartUtc(anchor);
+  const toExclusive = addDaysUtc(startOfDayUtc(anchor), 1);
+
+  const entries = await prisma.attendanceEntry.findMany({
+    where: {
+      studentId,
+      session: { date: { gte: from, lt: toExclusive } },
+    },
+    select: {
+      status: true,
+      session: { select: { date: true } },
+    },
+    orderBy: { session: { date: "asc" } },
+  });
+
+  const records: StreakRecord[] = entries.map((e) => ({
+    date: e.session.date.toISOString().slice(0, 10),
+    status: e.status,
+  }));
+
+  return computeAttendanceStreak(records);
+}
+
 export async function attendanceReportForStudent(
   prisma: PrismaClient,
   studentId: string,
@@ -124,6 +200,8 @@ export async function attendanceReportForStudent(
   const total = entries.length;
   const attendancePct = total > 0 ? Math.round((present * 1000) / total) / 10 : null;
 
+  const streak = await attendanceStreakForStudent(prisma, studentId, input.anchorDate);
+
   return {
     student: {
       id: student.id,
@@ -143,6 +221,7 @@ export async function attendanceReportForStudent(
       absent,
       attendancePct,
     },
+    streak,
     records: entries.map((e) => ({
       date: e.session.date.toISOString().slice(0, 10),
       status: e.status,

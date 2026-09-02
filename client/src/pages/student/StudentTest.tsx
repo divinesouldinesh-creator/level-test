@@ -12,6 +12,7 @@ import {
 import { api, mediaUrl } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
+import { studentNav } from "../../studentNav";
 
 type Q = { id: string; stem: string; stemImageUrl?: string | null; options: string[]; topicId: string };
 type SavedTestProgress = {
@@ -240,7 +241,8 @@ export function StudentTest() {
       <AppShell
         title="Results"
         onLogout={logout}
-        nav={[{ to: "/student", label: "Subjects" }]}
+        nav={[...studentNav]}
+        sidebarKicker="Student"
       >
         <h1 className="text-2xl font-bold">Your result</h1>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
@@ -510,7 +512,7 @@ export function StudentTest() {
         )}
 
         <Link
-          to="/student"
+          to="/student/skills"
           className="mt-8 inline-flex rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] items-center"
         >
           Back to subjects
@@ -521,13 +523,14 @@ export function StudentTest() {
 
   if (!current) {
     return (
-      <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[{ to: "/student", label: "Subjects" }]}>
+      <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[...studentNav]}
+        sidebarKicker="Student">
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="font-semibold text-amber-900">No questions available for this test.</p>
           <p className="text-amber-800 text-sm mt-1">
             {err ?? "This test does not have question rows yet. Please go back and start a new test."}
           </p>
-          <Link to="/student" className="mt-3 inline-block text-brand-700 font-medium">
+          <Link to="/student/skills" className="mt-3 inline-block text-brand-700 font-medium">
             Back to subjects
           </Link>
         </div>
@@ -538,7 +541,8 @@ export function StudentTest() {
   const labels = ["A", "B", "C", "D"];
 
   return (
-    <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[{ to: "/student", label: "Subjects" }]}>
+    <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[...studentNav]}
+        sidebarKicker="Student">
       <div className="mb-4">
         <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
           <div className="h-full bg-brand-500 transition-all" style={{ width: `${progress}%` }} />

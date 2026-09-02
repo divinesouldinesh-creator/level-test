@@ -541,6 +541,88 @@ router.get("/topics", async (_req, res) => {
   res.json(topics);
 });
 
+/** Skill topics with mastery lesson status (for admin editor). */
+router.get("/topic-lessons", async (_req, res) => {
+  const topics = await prisma.topic.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      lesson: { select: { title: true, body: true, updatedAt: true } },
+      levelTopicParticipations: {
+        include: {
+          level: { include: { subject: { select: { name: true } } } },
+        },
+      },
+      _count: { select: { questions: true } },
+    },
+  });
+  res.json(
+    topics.map((t) => ({
+      id: t.id,
+      name: t.name,
+      questionCount: t._count.questions,
+      lesson: t.lesson,
+      usedIn: t.levelTopicParticipations.map((p) => ({
+        levelId: p.levelId,
+        levelName: p.level.name,
+        subjectName: p.level.subject.name,
+      })),
+    }))
+  );
+});
+
+router.get("/topics/:topicId/lesson", async (req, res) => {
+  const topicId = req.params.topicId;
+  const topic = await prisma.topic.findUnique({
+    where: { id: topicId },
+    include: { lesson: true },
+  });
+  if (!topic) return res.status(404).json({ error: "Topic not found" });
+  res.json({
+    topicId: topic.id,
+    topicName: topic.name,
+    lesson: topic.lesson,
+  });
+});
+
+router.put("/topics/:topicId/lesson", async (req, res) => {
+  const topicId = req.params.topicId;
+  const schema = z.object({
+    title: z.string().min(1).max(200),
+    body: z.string().min(1).max(20_000),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const topic = await prisma.topic.findUnique({ where: { id: topicId } });
+  if (!topic) return res.status(404).json({ error: "Topic not found" });
+
+  const lesson = await prisma.topicLesson.upsert({
+    where: { topicId },
+    create: {
+      topicId,
+      title: p.data.title.trim(),
+      body: p.data.body.trim(),
+    },
+    update: {
+      title: p.data.title.trim(),
+      body: p.data.body.trim(),
+    },
+  });
+  res.json({
+    topicId,
+    topicName: topic.name,
+    lesson,
+  });
+});
+
+router.delete("/topics/:topicId/lesson", async (req, res) => {
+  const topicId = req.params.topicId;
+  const topic = await prisma.topic.findUnique({ where: { id: topicId } });
+  if (!topic) return res.status(404).json({ error: "Topic not found" });
+  await prisma.topicLesson.deleteMany({ where: { topicId } });
+  res.json({ ok: true });
+});
+
 router.post("/subjects", async (req, res) => {
   const schema = z.object({ name: z.string(), code: z.string().optional() });
   const p = schema.safeParse(req.body);

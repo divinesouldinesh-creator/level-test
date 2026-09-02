@@ -12,6 +12,7 @@ import {
 import { api, mediaUrl } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
+import { studentNav } from "../../studentNav";
 
 type Q = {
   id: string;
@@ -249,10 +250,7 @@ export function SyllabusTakeTest() {
       <AppShell
         title="Syllabus"
         onLogout={logout}
-        nav={[
-          { to: "/student", label: "Skill subjects" },
-          { to: "/student/syllabus", label: "Syllabus" },
-        ]}
+        nav={[...studentNav]} sidebarKicker="Student"
       >
         <h1 className="text-2xl font-bold">Your result</h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -541,10 +539,7 @@ export function SyllabusTakeTest() {
       <AppShell
         title={auth.profile?.fullName ?? "Practice"}
         onLogout={logout}
-        nav={[
-          { to: "/student", label: "Skill subjects" },
-          { to: "/student/syllabus", label: "Syllabus" },
-        ]}
+        nav={[...studentNav]} sidebarKicker="Student"
       >
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="font-semibold text-amber-900">No questions available.</p>
@@ -565,10 +560,7 @@ export function SyllabusTakeTest() {
     <AppShell
       title={auth.profile?.fullName ?? "Practice"}
       onLogout={logout}
-      nav={[
-        { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus" },
-      ]}
+      nav={[...studentNav]} sidebarKicker="Student"
     >
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-xs text-slate-500">

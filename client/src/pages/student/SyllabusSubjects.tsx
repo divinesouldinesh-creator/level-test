@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
+import { studentNav } from "../../studentNav";
 
 type Subject = { id: string; name: string; code: string | null; chapterCount: number };
 
@@ -24,17 +25,9 @@ export function SyllabusSubjects() {
   }, []);
 
   return (
-    <AppShell
-      title={headerTitle}
-      onLogout={logout}
-      nav={[
-        { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus" },
-        { to: "/student/attendance", label: "Attendance" },
-      ]}
-    >
+    <AppShell title={headerTitle} onLogout={logout} nav={[...studentNav]} sidebarKicker="Student">
       <Link to="/student" className="text-brand-600 text-sm font-medium">
-        ← Skill subjects
+        ← Home
       </Link>
       <h1 className="mt-2 text-2xl font-bold text-slate-900">Syllabus</h1>
       <p className="mt-1 text-slate-600">

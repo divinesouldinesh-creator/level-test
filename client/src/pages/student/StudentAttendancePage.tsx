@@ -5,10 +5,13 @@ import { api } from "../../api";
 import { useAuth } from "../../auth";
 import {
   type AttendanceRange,
+  type AttendanceStreak,
   academicYearStartIso,
+  attendanceStreakMessage,
   buildAttendanceReportQuery,
   todayIso,
 } from "../../attendanceReport";
+import { studentNav } from "../../studentNav";
 
 type AttendanceStatus = "PRESENT" | "ABSENT";
 type AttendanceReport = {
@@ -30,6 +33,7 @@ type AttendanceReport = {
     absent: number;
     attendancePct: number | null;
   };
+  streak: AttendanceStreak;
   records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
 };
 
@@ -78,11 +82,8 @@ export function StudentAttendancePage() {
     <AppShell
       title={headerTitle}
       onLogout={logout}
-      nav={[
-        { to: "/student", label: "Skill subjects" },
-        { to: "/student/syllabus", label: "Syllabus" },
-        { to: "/student/attendance", label: "Attendance" },
-      ]}
+      nav={[...studentNav]}
+      sidebarKicker="Student"
     >
       <h1 className="text-2xl font-bold text-slate-900">My attendance</h1>
       <p className="mt-1 text-slate-600">
@@ -108,6 +109,31 @@ export function StudentAttendancePage() {
 
       {report ? (
         <>
+          <section className="mt-4 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 via-orange-50 to-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-400 to-amber-500 text-3xl shadow-md">
+                🔥
+              </div>
+              <div className="flex-1 min-w-[200px]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                  Attendance streak
+                </p>
+                <p className="mt-1 text-3xl font-bold text-slate-900">
+                  {report.streak.currentStreak}{" "}
+                  <span className="text-lg font-semibold text-slate-600">
+                    {report.streak.currentStreak === 1 ? "day" : "days"}
+                  </span>
+                </p>
+                <p className="mt-1 text-sm text-slate-700">{attendanceStreakMessage(report.streak)}</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  Best this year: <strong>{report.streak.bestStreak}</strong> day
+                  {report.streak.bestStreak === 1 ? "" : "s"}
+                  {report.streak.asOfDate ? ` · Last marked: ${report.streak.asOfDate}` : ""}
+                </p>
+              </div>
+            </div>
+          </section>
+
           <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card label="Total" value={String(report.summary.totalDays)} />
             <Card label="Present" value={String(report.summary.present)} />

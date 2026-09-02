@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
+import { studentNav } from "../../studentNav";
 
 type Subject = { id: string; name: string; code: string | null };
 
@@ -21,22 +22,11 @@ export function StudentSubjects() {
   }, []);
 
   return (
-    <AppShell
-      title={headerTitle}
-      onLogout={logout}
-      nav={[
-        { to: "/student", label: "Skill subjects", end: true },
-        { to: "/student/syllabus", label: "Syllabus" },
-        { to: "/student/attendance", label: "Attendance" },
-      ]}
-    >
+    <AppShell title={headerTitle} onLogout={logout} nav={[...studentNav]} sidebarKicker="Student">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-2xl font-bold text-slate-900">Your skill subjects</h1>
-        <Link
-          to="/student/syllabus"
-          className="text-sm font-medium text-indigo-700 hover:text-indigo-900"
-        >
-          Syllabus →
+        <Link to="/student" className="text-sm font-medium text-indigo-700 hover:text-indigo-900">
+          ← Home
         </Link>
       </div>
       <p className="text-slate-600 mt-1">Choose a subject to view levels and start a test.</p>

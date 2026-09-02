@@ -13,6 +13,8 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:ensure-branding": "tsx scripts/ensure-school-branding.ts",
+    "db:ensure-engagement": "tsx scripts/ensure-daily-engagement.ts",
+    "db:ensure-mastery": "tsx scripts/ensure-topic-mastery.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

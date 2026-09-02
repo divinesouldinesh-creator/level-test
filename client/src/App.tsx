@@ -2,9 +2,12 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { AdminLayout } from "./layouts/AdminLayout";
 import { LoginPage } from "./pages/LoginPage";
+import { StudentHomePage } from "./pages/student/StudentHomePage";
 import { StudentSubjects } from "./pages/student/StudentSubjects";
 import { StudentLevels } from "./pages/student/StudentLevels";
 import { StudentTest } from "./pages/student/StudentTest";
+import { StudentDailyChallengePage } from "./pages/student/StudentDailyChallengePage";
+import { StudentMasteryPage } from "./pages/student/StudentMasteryPage";
 import { SyllabusSubjects } from "./pages/student/SyllabusSubjects";
 import { SyllabusChapterPractice } from "./pages/student/SyllabusChapterPractice";
 import { SyllabusTakeTest } from "./pages/student/SyllabusTakeTest";
@@ -19,6 +22,7 @@ import { SyllabusQuestionBankPage } from "./pages/admin/SyllabusQuestionBankPage
 import { AdminTeachersPage } from "./pages/admin/AdminTeachersPage";
 import { AdminSecurityPage } from "./pages/admin/AdminSecurityPage";
 import { AdminSchoolBrandingPage } from "./pages/admin/AdminSchoolBrandingPage";
+import { AdminTopicLessonsPage } from "./pages/admin/AdminTopicLessonsPage";
 import { AdminAttendancePage } from "./pages/admin/AdminAttendancePage";
 import { TeacherOverviewPage } from "./pages/teacher/TeacherOverviewPage";
 import { TeacherAttendancePage } from "./pages/teacher/TeacherAttendancePage";
@@ -60,7 +64,31 @@ function AppRoutes() {
         path="/student"
         element={
           <Guard role="STUDENT">
+            <StudentHomePage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/skills"
+        element={
+          <Guard role="STUDENT">
             <StudentSubjects />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/daily/:challengeId"
+        element={
+          <Guard role="STUDENT">
+            <StudentDailyChallengePage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/mastery/:masteryId"
+        element={
+          <Guard role="STUDENT">
+            <StudentMasteryPage />
           </Guard>
         }
       />
@@ -165,6 +193,7 @@ function AppRoutes() {
         <Route path="curriculum" element={<AdminCurriculumPage />} />
         <Route path="coverage" element={<AdminCoveragePage />} />
         <Route path="question-bank" element={<AdminQuestionBankPage />} />
+        <Route path="topic-lessons" element={<AdminTopicLessonsPage />} />
         <Route path="syllabus/curriculum" element={<SyllabusCurriculumPage />} />
         <Route path="syllabus/question-bank" element={<SyllabusQuestionBankPage />} />
         <Route path="students" element={<AdminStudentsPage />} />
