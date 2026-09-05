@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters";
 import { ClassAttendanceSummaryPanel } from "../../components/ClassAttendanceSummaryPanel";
@@ -28,13 +28,17 @@ type AttendanceReport = {
   records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
 };
 
+type AttendanceTab = "individual" | "class";
+
 export function AdminAttendancePage() {
+  const [tab, setTab] = useState<AttendanceTab>("individual");
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [students, setStudents] = useState<Student[]>([]);
   const [studentId, setStudentId] = useState("");
-  const [range, setRange] = useState<AttendanceRange>("weekly");
+  const [studentSearch, setStudentSearch] = useState("");
+  const [range, setRange] = useState<AttendanceRange>("last_7_days");
   const [date, setDate] = useState(() => todayIso());
   const [customFrom, setCustomFrom] = useState(() => academicYearStartIso(todayIso()));
   const [customTo, setCustomTo] = useState(() => todayIso());
@@ -96,11 +100,30 @@ export function AdminAttendancePage() {
         studentLoginId: s.username,
       }));
       setStudents(list);
+      setStudentSearch("");
       setStudentId((prev) => (prev && list.some((s) => s.id === prev) ? prev : list[0]?.id ?? ""));
     })();
   }, [classId, sectionId]);
 
+  const filteredStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(
+      (s) =>
+        s.fullName.toLowerCase().includes(q) ||
+        (s.studentLoginId && s.studentLoginId.toLowerCase().includes(q))
+    );
+  }, [students, studentSearch]);
+
   useEffect(() => {
+    setStudentId((prev) => {
+      if (prev && filteredStudents.some((s) => s.id === prev)) return prev;
+      return filteredStudents[0]?.id ?? "";
+    });
+  }, [filteredStudents]);
+
+  useEffect(() => {
+    if (tab !== "individual") return;
     void (async () => {
       if (!studentId) {
         setReport(null);
@@ -125,83 +148,225 @@ export function AdminAttendancePage() {
       }
       setReport(r.data);
     })();
-  }, [studentId, range, date, customFrom, customTo]);
+  }, [tab, studentId, range, date, customFrom, customTo]);
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-900">Attendance reports</h1>
+      <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
       <p className="text-slate-600 mt-1">
-        Daily, weekly, monthly, academic-year, or custom-range attendance for any student.
+        Check one student&apos;s attendance, or see the whole class summary and certificates.
       </p>
 
-      <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
-        <div className="grid gap-3 md:grid-cols-3">
-          <select className="rounded-lg border px-3 py-2" value={classId} onChange={(e) => setClassId(e.target.value)}>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <select className="rounded-lg border px-3 py-2" value={sectionId} onChange={(e) => setSectionId(e.target.value)}>
-            {sections.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select className="rounded-lg border px-3 py-2" value={studentId} onChange={(e) => setStudentId(e.target.value)}>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.fullName}
-              </option>
-            ))}
-          </select>
-        </div>
-        <AttendanceRangeFilters
-          range={range}
-          onRangeChange={handleRangeChange}
-          date={date}
-          onDateChange={setDate}
-          customFrom={customFrom}
-          onCustomFromChange={setCustomFrom}
-          customTo={customTo}
-          onCustomToChange={setCustomTo}
-          rangeHint={report ? `${report.from} to ${report.to}` : undefined}
-        />
-      </section>
+      <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
+        {(
+          [
+            ["individual", "Individual"],
+            ["class", "Class"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={`flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm font-medium transition-colors min-h-[44px] ${
+              tab === id
+                ? "bg-white text-brand-900 shadow-sm border border-slate-200"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Class attendance summary</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Attendance percentages for all students in the selected class and section, with filters.
-        </p>
-        <div className="mt-4">
+      {tab === "individual" ? (
+        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Individual student</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Choose a student and date range to see present, absent, and attendance %.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Class</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={classId}
+                onChange={(e) => setClassId(e.target.value)}
+              >
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Section</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={sectionId}
+                onChange={(e) => setSectionId(e.target.value)}
+              >
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Search by name</span>
+              <input
+                type="search"
+                className="w-full rounded-lg border px-3 py-2"
+                placeholder="Type student name or login ID…"
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+                disabled={students.length === 0}
+              />
+            </label>
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Student</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                disabled={filteredStudents.length === 0}
+              >
+                {filteredStudents.length === 0 ? (
+                  <option value="">{students.length === 0 ? "No students" : "No matches"}</option>
+                ) : null}
+                {filteredStudents.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.fullName}
+                    {s.studentLoginId ? ` (${s.studentLoginId})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {students.length > 0 && filteredStudents.length === 0 ? (
+            <p className="text-sm text-slate-500">No students match “{studentSearch.trim()}”.</p>
+          ) : null}
+          <AttendanceRangeFilters
+            range={range}
+            onRangeChange={handleRangeChange}
+            date={date}
+            onDateChange={setDate}
+            customFrom={customFrom}
+            onCustomFromChange={setCustomFrom}
+            customTo={customTo}
+            onCustomToChange={setCustomTo}
+            rangeHint={report ? `${report.from} to ${report.to}` : undefined}
+          />
+
+          {loading ? <p className="text-slate-500">Loading report…</p> : null}
+          {err ? <p className="text-rose-700">{err}</p> : null}
+
+          {report ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Card label="Total" value={String(report.summary.totalDays)} />
+                <Card label="Present" value={String(report.summary.present)} />
+                <Card label="Absent" value={String(report.summary.absent)} />
+                <Card
+                  label="Attendance %"
+                  value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"}
+                />
+              </div>
+              <p className="text-sm text-slate-600">
+                {report.student.fullName} ({report.student.studentLoginId ?? "—"}) · {report.student.className} ·{" "}
+                {report.student.sectionName} · {report.from} to {report.to}
+              </p>
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="text-left p-3">Date</th>
+                      <th className="text-left p-3">Status</th>
+                      <th className="text-left p-3">Remark</th>
+                      <th className="text-left p-3">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.records.map((r) => (
+                      <tr key={`${r.date}-${r.status}-${r.remark}`} className="border-t border-slate-100">
+                        <td className="p-3 whitespace-nowrap">{r.date}</td>
+                        <td className="p-3">
+                          <span
+                            className={
+                              r.status === "PRESENT"
+                                ? "text-emerald-700 font-medium"
+                                : "text-rose-700 font-medium"
+                            }
+                          >
+                            {r.status === "PRESENT" ? "Present" : "Absent"}
+                          </span>
+                        </td>
+                        <td className="p-3">{r.remark || "—"}</td>
+                        <td className="p-3">{r.notes || "—"}</td>
+                      </tr>
+                    ))}
+                    {report.records.length === 0 ? (
+                      <tr>
+                        <td className="p-3 text-slate-500" colSpan={4}>
+                          No attendance records in this range.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+        </section>
+      ) : (
+        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Class summary</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Attendance % for every student in a class and section, with filters and certificates.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Class</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={classId}
+                onChange={(e) => setClassId(e.target.value)}
+              >
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Section</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={sectionId}
+                onChange={(e) => setSectionId(e.target.value)}
+              >
+                {sections.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <ClassAttendanceSummaryPanel
             apiPrefix="/api/v1/admin"
             classId={classId}
             sectionId={sectionId}
           />
-        </div>
-      </section>
-
-      {loading ? <p className="mt-4 text-slate-500">Loading report…</p> : null}
-      {err ? <p className="mt-4 text-rose-700">{err}</p> : null}
-
-      {report ? (
-        <>
-          <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Card label="Total" value={String(report.summary.totalDays)} />
-            <Card label="Present" value={String(report.summary.present)} />
-            <Card label="Absent" value={String(report.summary.absent)} />
-            <Card label="Attendance %" value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"} />
-          </section>
-          <p className="mt-3 text-sm text-slate-600">
-            {report.student.fullName} ({report.student.studentLoginId ?? "—"}) • {report.student.className} •{" "}
-            {report.student.sectionName} • {report.from} to {report.to}
-          </p>
-        </>
-      ) : null}
+        </section>
+      )}
     </div>
   );
 }

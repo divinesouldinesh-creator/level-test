@@ -1,4 +1,11 @@
-export type AttendanceRange = "daily" | "weekly" | "monthly" | "academic_year" | "custom";
+export type AttendanceRange =
+  | "daily"
+  | "weekly"
+  | "last_7_days"
+  | "monthly"
+  | "last_month"
+  | "academic_year"
+  | "custom";
 
 export type AttendanceReportSummary = {
   totalDays: number;

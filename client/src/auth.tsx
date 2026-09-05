@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api, getToken, setToken } from "./api";
 
-type Role = "ADMIN" | "TEACHER" | "STUDENT";
+type Role = "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE";
 
 export type AuthState = {
   role: Role | null;

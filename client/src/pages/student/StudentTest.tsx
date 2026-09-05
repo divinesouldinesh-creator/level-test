@@ -512,7 +512,7 @@ export function StudentTest() {
         )}
 
         <Link
-          to="/student/skills"
+          to="/student/subjects"
           className="mt-8 inline-flex rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] items-center"
         >
           Back to subjects
@@ -530,7 +530,7 @@ export function StudentTest() {
           <p className="text-amber-800 text-sm mt-1">
             {err ?? "This test does not have question rows yet. Please go back and start a new test."}
           </p>
-          <Link to="/student/skills" className="mt-3 inline-block text-brand-700 font-medium">
+          <Link to="/student/subjects" className="mt-3 inline-block text-brand-700 font-medium">
             Back to subjects
           </Link>
         </div>

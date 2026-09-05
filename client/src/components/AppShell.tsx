@@ -14,7 +14,7 @@ export function AppShell({
   nav: AppShellNavItem[];
   children: React.ReactNode;
   onLogout: () => void;
-  /** Small label above the user name (e.g. distinguish skill vs syllabus area). */
+  /** Small label above the user name. */
   sidebarKicker?: string;
 }) {
   const [open, setOpen] = useState(false);

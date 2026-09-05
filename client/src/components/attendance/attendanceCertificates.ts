@@ -50,7 +50,7 @@ function buildCertificateHtml(
     : escapeHtml(row.className);
   const gradientId = `trophyGrad-${index}`;
   const headerGraphic = logoUrl
-    ? `<img class="school-logo" src="${escapeHtml(logoUrl)}" alt="School logo"/>`
+    ? `<img class="school-logo" src="${escapeHtml(logoUrl)}" alt="" />`
     : trophySvg(gradientId);
 
   return `

@@ -1,6 +1,13 @@
 import { AttendanceStatus, PrismaClient } from "@prisma/client";
 
-export type AttendanceRange = "daily" | "weekly" | "monthly" | "academic_year" | "custom";
+export type AttendanceRange =
+  | "daily"
+  | "weekly"
+  | "last_7_days"
+  | "monthly"
+  | "last_month"
+  | "academic_year"
+  | "custom";
 
 export type AttendanceReportBoundsInput = {
   range: AttendanceRange;
@@ -70,6 +77,19 @@ export function resolveReportBounds(
     const from = startOfWeekUtc(anchor);
     return { from, toExclusive: addDaysUtc(from, 7) };
   }
+  if (input.range === "last_7_days") {
+    const toExclusive = addDaysUtc(startOfDayUtc(anchor), 1);
+    const from = addDaysUtc(startOfDayUtc(anchor), -6);
+    return { from, toExclusive };
+  }
+  if (input.range === "last_month") {
+    const y = anchor.getUTCFullYear();
+    const m = anchor.getUTCMonth();
+    const from = new Date(Date.UTC(y, m - 1, 1));
+    const toExclusive = new Date(Date.UTC(y, m, 1));
+    return { from, toExclusive };
+  }
+  // monthly — calendar month of the reference date
   const from = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1));
   const toExclusive = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 1));
   return { from, toExclusive };

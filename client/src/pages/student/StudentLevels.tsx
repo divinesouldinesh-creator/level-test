@@ -15,19 +15,27 @@ type LevelRow = {
   lastPercentage: number | null;
 };
 
+type Subject = { id: string; name: string; code: string | null };
+
 export function StudentLevels() {
   const { subjectId } = useParams();
   const navigate = useNavigate();
   const { logout, auth } = useAuth();
   const [levels, setLevels] = useState<LevelRow[]>([]);
+  const [subjectName, setSubjectName] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
-      const r = await api<LevelRow[]>(`/api/v1/student/subjects/${subjectId}/levels`);
-      if (!r.ok) setErr(r.error ?? "Failed");
-      else setLevels(r.data ?? []);
+      const [lvlRes, subRes] = await Promise.all([
+        api<LevelRow[]>(`/api/v1/student/subjects/${subjectId}/levels`),
+        api<Subject[]>("/api/v1/student/subjects"),
+      ]);
+      if (!lvlRes.ok) setErr(lvlRes.error ?? "Failed");
+      else setLevels(lvlRes.data ?? []);
+      const sub = (subRes.data ?? []).find((s) => s.id === subjectId);
+      if (sub) setSubjectName(sub.name);
     })();
   }, [subjectId]);
 
@@ -53,10 +61,13 @@ export function StudentLevels() {
       nav={[...studentNav]}
       sidebarKicker="Student"
     >
-      <Link to="/student/skills" className="text-brand-600 text-sm font-medium">
-        Back to subjects
+      <Link to={`/student/part/${subjectId}`} className="text-brand-600 text-sm font-medium">
+        ← {subjectName || "Back"}
       </Link>
-      <h1 className="text-2xl font-bold text-slate-900 mt-2">Levels</h1>
+      <h1 className="text-2xl font-bold text-slate-900 mt-2">Test</h1>
+      <p className="mt-1 text-slate-600">
+        {subjectName ? `${subjectName} — pick a level` : "Pick a level to start"}
+      </p>
       {err && <p className="text-red-600 mt-2">{err}</p>}
       <ul className="mt-6 space-y-3">
         {levels.map((lv) => (
@@ -72,7 +83,11 @@ export function StudentLevels() {
                 {lv.questionCount != null ? `${lv.questionCount} questions` : "—"} ·{" "}
                 {lv.lastPercentage != null ? `Last: ${lv.lastPercentage.toFixed(0)}%` : "Not attempted"}
               </p>
-              {!lv.unlocked && <p className="text-amber-700 text-sm mt-1">Unlock by scoring above 80% on the previous level.</p>}
+              {!lv.unlocked && (
+                <p className="text-amber-700 text-sm mt-1">
+                  Unlock by scoring above 80% on the previous level.
+                </p>
+              )}
             </div>
             {lv.unlocked ? (
               <button

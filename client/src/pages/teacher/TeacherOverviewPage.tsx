@@ -67,12 +67,12 @@ export function TeacherOverviewPage() {
           <p className="text-sm text-slate-600 mt-1">Level tests: analytics, weak topics, and scores.</p>
         </Link>
         <Link
-          to="/teacher/syllabus"
-          className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm block lg:col-span-1"
+          to="/teacher/daily-practice"
+          className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm block"
         >
-          <p className="font-semibold text-emerald-900">Syllabus tests</p>
+          <p className="font-semibold text-emerald-900">Daily practice</p>
           <p className="text-sm text-emerald-800 mt-1">
-            Chapter-based practice: who took tests and their marks.
+            Who practiced today and each student’s practice streak.
           </p>
         </Link>
       </section>

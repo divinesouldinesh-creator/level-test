@@ -13,6 +13,7 @@ import {
   saveStudentAccounts,
 } from "../services/studentAccounts.js";
 import { updateStudentNameSchema } from "../schemas/student.js";
+import { addIstDays, istDayKey, istDayUtcRange, istInclusiveDayRangeUtc, previousIstDayKey } from "../services/engagementCalendar.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("TEACHER"));
@@ -571,6 +572,219 @@ router.get("/analytics/students", async (req, res) => {
     });
 
   res.json(out);
+});
+
+/** Completed skill tests for a class on one IST day or a recent range (last 7 / 30 days). */
+router.get("/analytics/tests-by-date", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId : "";
+  const subjectId = typeof req.query.subjectId === "string" ? req.query.subjectId : "";
+  const levelId = typeof req.query.levelId === "string" ? req.query.levelId : "";
+  const preset = typeof req.query.preset === "string" ? req.query.preset : "today";
+  const dateParam = typeof req.query.date === "string" ? req.query.date : "";
+  const scopedClassId = classId && classId !== "ALL" ? classId : "";
+
+  const today = istDayKey();
+  let fromDayKey: string;
+  let toDayKey: string;
+
+  if (preset === "yesterday") {
+    fromDayKey = previousIstDayKey(today);
+    toDayKey = fromDayKey;
+  } else if (preset === "last7") {
+    const from = addIstDays(today, -6);
+    if (!from) {
+      res.status(400).json({ error: "Invalid date range" });
+      return;
+    }
+    fromDayKey = from;
+    toDayKey = today;
+  } else if (preset === "last30") {
+    const from = addIstDays(today, -29);
+    if (!from) {
+      res.status(400).json({ error: "Invalid date range" });
+      return;
+    }
+    fromDayKey = from;
+    toDayKey = today;
+  } else if (preset === "custom" || (dateParam && preset !== "today")) {
+    fromDayKey = dateParam || today;
+    toDayKey = fromDayKey;
+  } else {
+    fromDayKey = today;
+    toDayKey = today;
+  }
+
+  const range =
+    fromDayKey === toDayKey
+      ? istDayUtcRange(fromDayKey)
+      : istInclusiveDayRangeUtc(fromDayKey, toDayKey);
+  if (!range) {
+    res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    return;
+  }
+
+  const tests = await prisma.test.findMany({
+    where: {
+      status: "COMPLETED",
+      completedAt: { gte: range.start, lt: range.end },
+      ...(scopedClassId ? { student: { classId: scopedClassId } } : {}),
+      ...(subjectId ? { subjectId } : {}),
+      ...(levelId ? { levelId } : {}),
+    },
+    include: {
+      student: {
+        select: {
+          id: true,
+          fullName: true,
+          user: { select: { studentLoginId: true } },
+          schoolClass: { select: { id: true, name: true } },
+        },
+      },
+      subject: { select: { id: true, name: true, code: true } },
+      level: { select: { id: true, name: true, order: true } },
+      attempts: { select: { percentage: true, score: true, maxScore: true } },
+    },
+    orderBy: [{ completedAt: "desc" }, { student: { fullName: "asc" } }],
+    take: 1000,
+  });
+
+  res.json({
+    dayKey: fromDayKey === toDayKey ? fromDayKey : `${fromDayKey} → ${toDayKey}`,
+    fromDayKey,
+    toDayKey,
+    count: tests.length,
+    items: tests.map((t) => ({
+      testId: t.id,
+      studentId: t.student.id,
+      studentName: t.student.fullName,
+      studentLoginId: t.student.user.studentLoginId,
+      classId: t.student.schoolClass.id,
+      className: t.student.schoolClass.name,
+      subjectId: t.subject.id,
+      subjectName: t.subject.name,
+      subjectCode: t.subject.code,
+      levelId: t.level.id,
+      levelName: t.level.name,
+      percentage: t.attempts[0]?.percentage ?? null,
+      score: t.attempts[0]?.score ?? null,
+      maxScore: t.attempts[0]?.maxScore ?? null,
+      completedAt: t.completedAt,
+    })),
+  });
+});
+
+/** Per-student practice streaks and whether they practiced on a chosen IST day. */
+router.get("/analytics/daily-practice", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId : "";
+  const scopedClassId = classId && classId !== "ALL" ? classId : "";
+  const preset = typeof req.query.preset === "string" ? req.query.preset : "today";
+  const dateParam = typeof req.query.date === "string" ? req.query.date : "";
+  const status = typeof req.query.status === "string" ? req.query.status : "all";
+  // all | practiced | not_practiced
+
+  const today = istDayKey();
+  let dayKey = today;
+  if (preset === "yesterday") dayKey = previousIstDayKey(today);
+  else if (preset === "custom") dayKey = dateParam || today;
+
+  const range = istDayUtcRange(dayKey);
+  if (!range) {
+    res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    return;
+  }
+
+  const students = await prisma.student.findMany({
+    where: scopedClassId ? { classId: scopedClassId } : undefined,
+    include: {
+      schoolClass: { select: { id: true, name: true } },
+      user: { select: { studentLoginId: true } },
+      engagement: true,
+    },
+    orderBy: [{ schoolClass: { name: "asc" } }, { fullName: "asc" }],
+  });
+
+  const studentIds = students.map((s) => s.id);
+
+  const [dailyDone, testsDone, masteryDone] =
+    studentIds.length === 0
+      ? [[], [], []]
+      : await Promise.all([
+          prisma.dailyChallenge.findMany({
+            where: { studentId: { in: studentIds }, dayKey, status: "COMPLETED" },
+            select: { studentId: true, percentage: true },
+          }),
+          prisma.test.findMany({
+            where: {
+              studentId: { in: studentIds },
+              status: "COMPLETED",
+              completedAt: { gte: range.start, lt: range.end },
+            },
+            select: { studentId: true },
+            distinct: ["studentId"],
+          }),
+          prisma.masterySession.findMany({
+            where: {
+              studentId: { in: studentIds },
+              status: "COMPLETED",
+              completedAt: { gte: range.start, lt: range.end },
+            },
+            select: { studentId: true },
+            distinct: ["studentId"],
+          }),
+        ]);
+
+  const dailyByStudent = new Map(dailyDone.map((d) => [d.studentId, d]));
+  const testedSet = new Set(testsDone.map((t) => t.studentId));
+  const masterySet = new Set(masteryDone.map((m) => m.studentId));
+
+  const items = students.map((s) => {
+    const eng = s.engagement;
+    const daily = dailyByStudent.get(s.id);
+    const practicedOnDay =
+      eng?.lastPracticeDay === dayKey ||
+      Boolean(daily) ||
+      testedSet.has(s.id) ||
+      masterySet.has(s.id);
+
+    return {
+      studentId: s.id,
+      studentName: s.fullName,
+      studentLoginId: s.user.studentLoginId,
+      classId: s.schoolClass.id,
+      className: s.schoolClass.name,
+      practiceStreak: eng?.practiceStreak ?? 0,
+      bestPracticeStreak: eng?.bestPracticeStreak ?? 0,
+      lastPracticeDay: eng?.lastPracticeDay ?? null,
+      practicedOnDay,
+      dailyChallengeCompleted: Boolean(daily),
+      dailyChallengePct: daily?.percentage ?? null,
+      levelTestCompleted: testedSet.has(s.id),
+      masteryCompleted: masterySet.has(s.id),
+      xpTotal: eng?.xpTotal ?? 0,
+    };
+  });
+
+  const filtered =
+    status === "practiced"
+      ? items.filter((i) => i.practicedOnDay)
+      : status === "not_practiced"
+        ? items.filter((i) => !i.practicedOnDay)
+        : items;
+
+  filtered.sort((a, b) => {
+    if (b.practiceStreak !== a.practiceStreak) return b.practiceStreak - a.practiceStreak;
+    return a.studentName.localeCompare(b.studentName);
+  });
+
+  const practicedCount = items.filter((i) => i.practicedOnDay).length;
+
+  res.json({
+    dayKey,
+    totalStudents: items.length,
+    practicedCount,
+    notPracticedCount: items.length - practicedCount,
+    items: filtered,
+  });
 });
 
 router.get("/analytics/student/:studentId/detail", async (req, res) => {

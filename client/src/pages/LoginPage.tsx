@@ -39,6 +39,7 @@ export function LoginPage() {
     if (role === "STUDENT") nav("/student");
     else if (role === "TEACHER") nav("/teacher");
     else if (role === "ADMIN") nav("/admin");
+    else if (role === "OFFICE") nav("/office");
   }
 
   return (
@@ -49,8 +50,9 @@ export function LoginPage() {
 
         <p className="mt-4 text-xs text-slate-500 text-center leading-relaxed">
           <strong className="text-slate-600">Students:</strong> use your printed student ID here (e.g.{" "}
-          <span className="font-mono">C12001</span>), not email. <strong className="text-slate-600">Teachers / admins:</strong>{" "}
-          switch to the other tab and sign in with your school email.
+          <span className="font-mono">C12001</span>), not email.{" "}
+          <strong className="text-slate-600">Teachers / office / admins:</strong> switch to the other tab and
+          sign in with your school email.
         </p>
 
         <div className="flex gap-2 mt-6">
@@ -70,7 +72,7 @@ export function LoginPage() {
             }`}
             onClick={() => setMode("staff")}
           >
-            Teacher / Admin
+            Staff
           </button>
         </div>
 

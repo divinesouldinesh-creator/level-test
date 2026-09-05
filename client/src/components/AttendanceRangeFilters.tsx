@@ -31,8 +31,10 @@ export function AttendanceRangeFilters({
         onChange={(e) => onRangeChange(e.target.value as AttendanceRange)}
       >
         <option value="daily">Daily</option>
-        <option value="weekly">Weekly</option>
-        <option value="monthly">Monthly</option>
+        <option value="last_7_days">Last 7 days</option>
+        <option value="weekly">This week</option>
+        <option value="last_month">Last month</option>
+        <option value="monthly">This month</option>
         <option value="academic_year">Academic year (from 1 April)</option>
         <option value="custom">Custom range</option>
       </select>

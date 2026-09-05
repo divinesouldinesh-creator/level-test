@@ -19,106 +19,143 @@ function normalizeLoginInput(parsed: z.infer<typeof loginSchema>) {
   return { studentId, email, password };
 }
 
-router.post("/login", async (req, res) => {
-  const body = req.body as Record<string, unknown> | undefined;
-  if (body && typeof body === "object") {
-    if (typeof body.studentId === "string") body.studentId = body.studentId.trim();
-    if (typeof body.email === "string") body.email = body.email.trim();
-  }
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-  const { password, studentId, email } = normalizeLoginInput(parsed.data);
+type ProfileInput = {
+  studentLoginId: string | null;
+  role: string;
+  student: { fullName: string; schoolClass?: { name: string } | null } | null;
+  teacher: { fullName: string } | null;
+  admin: { fullName: string } | null;
+  office: { fullName: string } | null;
+};
 
-  let user = null;
-  if (studentId) {
-    user = await prisma.user.findFirst({
-      where: { studentLoginId: studentId, role: "STUDENT" },
+function profileFromUser(user: ProfileInput, className?: string | null) {
+  if (user.student) {
+    return {
+      type: "student" as const,
+      fullName: user.student.fullName,
+      studentId: user.studentLoginId,
+      className: className ?? user.student.schoolClass?.name,
+    };
+  }
+  if (user.teacher) {
+    return { type: "teacher" as const, fullName: user.teacher.fullName };
+  }
+  if (user.admin) {
+    return { type: "admin" as const, fullName: user.admin.fullName };
+  }
+  if (user.office) {
+    return { type: "office" as const, fullName: user.office.fullName };
+  }
+  if (user.role === "OFFICE") {
+    return { type: "office" as const, fullName: "Office" };
+  }
+  return null;
+}
+
+async function loadOfficeProfile(userId: string): Promise<{ fullName: string } | null> {
+  try {
+    return await prisma.office.findUnique({
+      where: { userId },
+      select: { fullName: true },
+    });
+  } catch {
+    // Office table / role may not be migrated yet
+    return null;
+  }
+}
+
+router.post("/login", async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown> | undefined;
+    if (body && typeof body === "object") {
+      if (typeof body.studentId === "string") body.studentId = body.studentId.trim();
+      if (typeof body.email === "string") body.email = body.email.trim();
+    }
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const { password, studentId, email } = normalizeLoginInput(parsed.data);
+
+    let user = null;
+    if (studentId) {
+      user = await prisma.user.findFirst({
+        where: { studentLoginId: studentId, role: "STUDENT" },
+        include: { student: { include: { schoolClass: true } }, teacher: true, admin: true },
+      });
+    } else if (email) {
+      user = await prisma.user.findFirst({
+        where: { email },
+        include: {
+          teacher: true,
+          admin: true,
+          student: { include: { schoolClass: true } },
+        },
+      });
+    } else {
+      res.status(400).json({ error: "Provide studentId or email" });
+      return;
+    }
+
+    if (!user) {
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) {
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
+    }
+
+    const office = user.role === "OFFICE" ? await loadOfficeProfile(user.id) : null;
+
+    const token = signToken(user.id, user.role);
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        role: user.role,
+        email: user.email,
+        studentLoginId: user.studentLoginId,
+        profile: profileFromUser(
+          { ...user, office },
+          user.student?.schoolClass?.name
+        ),
+      },
+    });
+  } catch (err) {
+    console.error("login failed", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+router.get("/me", authMiddleware, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
       include: { student: { include: { schoolClass: true } }, teacher: true, admin: true },
     });
-  } else if (email) {
-    user = await prisma.user.findFirst({
-      where: { email },
-      include: { teacher: true, admin: true, student: true },
-    });
-  } else {
-    res.status(400).json({ error: "Provide studentId or email" });
-    return;
-  }
-
-  if (!user) {
-    res.status(401).json({ error: "Invalid credentials" });
-    return;
-  }
-
-  const ok = await bcrypt.compare(password, user.passwordHash);
-  if (!ok) {
-    res.status(401).json({ error: "Invalid credentials" });
-    return;
-  }
-
-  const studentWithClass = user.student
-    ? await prisma.student.findUnique({
-        where: { userId: user.id },
-        include: { schoolClass: true },
-      })
-    : null;
-
-  const token = signToken(user.id, user.role);
-  res.json({
-    token,
-    user: {
+    if (!user) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const office = user.role === "OFFICE" ? await loadOfficeProfile(user.id) : null;
+    res.json({
       id: user.id,
       role: user.role,
       email: user.email,
       studentLoginId: user.studentLoginId,
-      profile:
-        user.student
-          ? {
-              type: "student" as const,
-              fullName: user.student.fullName,
-              studentId: user.studentLoginId,
-              className: studentWithClass?.schoolClass.name,
-            }
-          : user.teacher
-            ? { type: "teacher" as const, fullName: user.teacher.fullName }
-            : user.admin
-              ? { type: "admin" as const, fullName: user.admin.fullName }
-              : null,
-    },
-  });
-});
-
-router.get("/me", authMiddleware, async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: { include: { schoolClass: true } }, teacher: true, admin: true },
-  });
-  if (!user) {
-    res.status(404).json({ error: "Not found" });
-    return;
+      profile: profileFromUser(
+        { ...user, office },
+        user.student?.schoolClass?.name
+      ),
+    });
+  } catch (err) {
+    console.error("auth/me failed", err);
+    res.status(500).json({ error: "Server error" });
   }
-  res.json({
-    id: user.id,
-    role: user.role,
-    email: user.email,
-    studentLoginId: user.studentLoginId,
-    profile:
-      user.student
-        ? {
-            type: "student" as const,
-            fullName: user.student.fullName,
-            studentId: user.studentLoginId,
-            className: user.student.schoolClass.name,
-          }
-        : user.teacher
-          ? { type: "teacher" as const, fullName: user.teacher.fullName }
-          : user.admin
-            ? { type: "admin" as const, fullName: user.admin.fullName }
-            : null,
-  });
 });
 
 const changePasswordSchema = z.object({

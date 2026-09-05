@@ -6,7 +6,7 @@ import { sendBrandingError } from "../utils/brandingErrors.js";
 
 const router = Router();
 
-router.get("/school", authMiddleware, requireRole("ADMIN", "TEACHER"), async (_req, res) => {
+router.get("/school", authMiddleware, requireRole("ADMIN", "TEACHER", "OFFICE"), async (_req, res) => {
   try {
     const branding = await getSchoolBranding(prisma);
     res.json(branding);

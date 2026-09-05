@@ -194,10 +194,10 @@ export function StudentMasteryPage() {
           )}
           <button
             type="button"
-            onClick={() => navigate("/student")}
+            onClick={() => navigate("/student/subjects")}
             className="rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-medium"
           >
-            Back to Home
+            Back to Subjects
           </button>
         </div>
       </AppShell>
@@ -287,8 +287,8 @@ export function StudentMasteryPage() {
       nav={[...studentNav]}
       sidebarKicker="Student"
     >
-      <Link to="/student" className="text-sm font-medium text-brand-700">
-        ← Home
+      <Link to="/student/subjects" className="text-sm font-medium text-brand-700">
+        ← Subjects
       </Link>
       {!detail ? (
         <p className="mt-4 text-slate-500">{err ?? "Loading…"}</p>

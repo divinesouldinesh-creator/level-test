@@ -10,15 +10,13 @@ export function AdminLayout() {
       onLogout={logout}
       nav={[
         { to: "/admin", label: "Dashboard", end: true },
-        { to: "/admin/curriculum", label: "Skill Curriculum" },
-        { to: "/admin/question-bank", label: "Skill Question Bank" },
+        { to: "/admin/curriculum", label: "Curriculum" },
+        { to: "/admin/question-bank", label: "Question Bank" },
         { to: "/admin/topic-lessons", label: "Topic lessons" },
-        { to: "/admin/syllabus/curriculum", label: "Syllabus Curriculum" },
-        { to: "/admin/syllabus/question-bank", label: "Syllabus Question Bank" },
         { to: "/admin/coverage", label: "Coverage" },
         { to: "/admin/students", label: "Students" },
         { to: "/admin/attendance", label: "Attendance" },
-        { to: "/admin/teachers", label: "Teachers" },
+        { to: "/admin/staff", label: "Staff" },
         { to: "/admin/branding", label: "School branding" },
         { to: "/admin/security", label: "Security" },
       ]}

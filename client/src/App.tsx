@@ -1,24 +1,26 @@
-import { Navigate, Route, Routes, useParams } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { AdminLayout } from "./layouts/AdminLayout";
+import { OfficeLayout } from "./layouts/OfficeLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { StudentHomePage } from "./pages/student/StudentHomePage";
-import { StudentSubjects } from "./pages/student/StudentSubjects";
+import { StudentSubjectAreasPage } from "./pages/student/StudentSubjectAreasPage";
+import { StudentSubjectAreaPage } from "./pages/student/StudentSubjectAreaPage";
+import { StudentSubjectFixPage } from "./pages/student/StudentSubjectFixPage";
+import { StudentPartHubPage } from "./pages/student/StudentPartHubPage";
+import { StudentPartLearnPage } from "./pages/student/StudentPartLearnPage";
 import { StudentLevels } from "./pages/student/StudentLevels";
 import { StudentTest } from "./pages/student/StudentTest";
+import { StudentDailyChallengeHubPage } from "./pages/student/StudentDailyChallengeHubPage";
 import { StudentDailyChallengePage } from "./pages/student/StudentDailyChallengePage";
 import { StudentMasteryPage } from "./pages/student/StudentMasteryPage";
-import { SyllabusSubjects } from "./pages/student/SyllabusSubjects";
-import { SyllabusChapterPractice } from "./pages/student/SyllabusChapterPractice";
-import { SyllabusTakeTest } from "./pages/student/SyllabusTakeTest";
 import { StudentAttendancePage } from "./pages/student/StudentAttendancePage";
 import { AdminHome } from "./pages/admin/AdminHome";
 import { AdminStudentsPage } from "./pages/admin/AdminStudentsPage";
 import { AdminCurriculumPage } from "./pages/admin/AdminCurriculumPage";
 import { AdminCoveragePage } from "./pages/admin/AdminCoveragePage";
 import { AdminQuestionBankPage } from "./pages/admin/AdminQuestionBankPage";
-import { SyllabusCurriculumPage } from "./pages/admin/SyllabusCurriculumPage";
-import { SyllabusQuestionBankPage } from "./pages/admin/SyllabusQuestionBankPage";
+import { AdminStaffPage } from "./pages/admin/AdminStaffPage";
 import { AdminTeachersPage } from "./pages/admin/AdminTeachersPage";
 import { AdminSecurityPage } from "./pages/admin/AdminSecurityPage";
 import { AdminSchoolBrandingPage } from "./pages/admin/AdminSchoolBrandingPage";
@@ -27,19 +29,13 @@ import { AdminAttendancePage } from "./pages/admin/AdminAttendancePage";
 import { TeacherOverviewPage } from "./pages/teacher/TeacherOverviewPage";
 import { TeacherAttendancePage } from "./pages/teacher/TeacherAttendancePage";
 import { TeacherAnalyticsPage } from "./pages/teacher/TeacherAnalyticsPage";
-import { TeacherSyllabusPage } from "./pages/teacher/TeacherSyllabusPage";
-
-function LegacySyllabusTestUrlRedirect() {
-  const { testId } = useParams();
-  if (!testId) return <Navigate to="/student/syllabus" replace />;
-  return <Navigate to={`/student/syllabus/practice/${testId}`} replace />;
-}
+import { TeacherDailyPracticePage } from "./pages/teacher/TeacherDailyPracticePage";
 
 function Guard({
   role,
   children,
 }: {
-  role: "ADMIN" | "TEACHER" | "STUDENT";
+  role: "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE";
   children: React.ReactNode;
 }) {
   const { auth } = useAuth();
@@ -69,10 +65,62 @@ function AppRoutes() {
         }
       />
       <Route
-        path="/student/skills"
+        path="/student/subjects"
         element={
           <Guard role="STUDENT">
-            <StudentSubjects />
+            <StudentSubjectAreasPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/subjects/:area/fix"
+        element={
+          <Guard role="STUDENT">
+            <StudentSubjectFixPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/subjects/:area"
+        element={
+          <Guard role="STUDENT">
+            <StudentSubjectAreaPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/part/:subjectId"
+        element={
+          <Guard role="STUDENT">
+            <StudentPartHubPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/part/:subjectId/learn"
+        element={
+          <Guard role="STUDENT">
+            <StudentPartLearnPage />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/part/:subjectId/test"
+        element={
+          <Guard role="STUDENT">
+            <StudentLevels />
+          </Guard>
+        }
+      />
+      <Route
+        path="/student/skills"
+        element={<Navigate to="/student/subjects" replace />}
+      />
+      <Route
+        path="/student/daily"
+        element={
+          <Guard role="STUDENT">
+            <StudentDailyChallengeHubPage />
           </Guard>
         }
       />
@@ -117,36 +165,8 @@ function AppRoutes() {
         }
       />
       <Route
-        path="/student/syllabus"
-        element={
-          <Guard role="STUDENT">
-            <SyllabusSubjects />
-          </Guard>
-        }
-      />
-      <Route
-        path="/student/syllabus/subject/:subjectId"
-        element={
-          <Guard role="STUDENT">
-            <SyllabusChapterPractice />
-          </Guard>
-        }
-      />
-      <Route
-        path="/student/syllabus/practice/:testId"
-        element={
-          <Guard role="STUDENT">
-            <SyllabusTakeTest />
-          </Guard>
-        }
-      />
-      <Route
-        path="/student/syllabus/test/:testId"
-        element={
-          <Guard role="STUDENT">
-            <LegacySyllabusTestUrlRedirect />
-          </Guard>
-        }
+        path="/student/syllabus/*"
+        element={<Navigate to="/student/subjects" replace />}
       />
       <Route
         path="/teacher"
@@ -174,13 +194,14 @@ function AppRoutes() {
         }
       />
       <Route
-        path="/teacher/syllabus"
+        path="/teacher/daily-practice"
         element={
           <Guard role="TEACHER">
-            <TeacherSyllabusPage />
+            <TeacherDailyPracticePage />
           </Guard>
         }
       />
+      <Route path="/teacher/syllabus" element={<Navigate to="/teacher" replace />} />
       <Route
         path="/admin"
         element={
@@ -194,13 +215,25 @@ function AppRoutes() {
         <Route path="coverage" element={<AdminCoveragePage />} />
         <Route path="question-bank" element={<AdminQuestionBankPage />} />
         <Route path="topic-lessons" element={<AdminTopicLessonsPage />} />
-        <Route path="syllabus/curriculum" element={<SyllabusCurriculumPage />} />
-        <Route path="syllabus/question-bank" element={<SyllabusQuestionBankPage />} />
+        <Route path="students" element={<AdminStudentsPage />} />
+        <Route path="attendance" element={<AdminAttendancePage />} />
+        <Route path="staff" element={<AdminStaffPage />} />
+        <Route path="teachers" element={<Navigate to="/admin/staff" replace />} />
+        <Route path="branding" element={<AdminSchoolBrandingPage />} />
+        <Route path="security" element={<AdminSecurityPage />} />
+      </Route>
+      <Route
+        path="/office"
+        element={
+          <Guard role="OFFICE">
+            <OfficeLayout />
+          </Guard>
+        }
+      >
+        <Route index element={<Navigate to="students" replace />} />
         <Route path="students" element={<AdminStudentsPage />} />
         <Route path="attendance" element={<AdminAttendancePage />} />
         <Route path="teachers" element={<AdminTeachersPage />} />
-        <Route path="branding" element={<AdminSchoolBrandingPage />} />
-        <Route path="security" element={<AdminSecurityPage />} />
       </Route>
       <Route path="/" element={<Navigate to="/login" replace />} />
     </Routes>

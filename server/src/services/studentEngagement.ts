@@ -189,6 +189,41 @@ export async function getEngagementSummary(prisma: PrismaClient, studentId: stri
   };
 }
 
+/** Mark that the student practiced today (streak). Idempotent within the same IST day. */
+export async function recordDailyPractice(prisma: PrismaClient, studentId: string) {
+  const today = istDayKey();
+  await ensureEngagement(prisma, studentId);
+  const engagement = await prisma.studentEngagement.findUniqueOrThrow({ where: { studentId } });
+
+  if (engagement.lastPracticeDay === today) {
+    return {
+      alreadyPracticed: true as const,
+      practiceStreak: engagement.practiceStreak,
+      bestPracticeStreak: engagement.bestPracticeStreak,
+      dayKey: today,
+    };
+  }
+
+  const practiceStreak = nextStreak(engagement.lastPracticeDay, today, engagement.practiceStreak);
+  const bestPracticeStreak = Math.max(engagement.bestPracticeStreak, practiceStreak);
+
+  const updated = await prisma.studentEngagement.update({
+    where: { studentId },
+    data: {
+      practiceStreak,
+      bestPracticeStreak,
+      lastPracticeDay: today,
+    },
+  });
+
+  return {
+    alreadyPracticed: false as const,
+    practiceStreak: updated.practiceStreak,
+    bestPracticeStreak: updated.bestPracticeStreak,
+    dayKey: today,
+  };
+}
+
 /** Award XP for topic practice pass or mastery; also bumps practice streak. */
 export async function awardMasteryRelatedXp(
   prisma: PrismaClient,

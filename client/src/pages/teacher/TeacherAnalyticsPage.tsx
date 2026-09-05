@@ -35,6 +35,30 @@ type StudentDetail = {
   lastTestAttempt: string | null;
 };
 
+type TestsByDateItem = {
+  testId: string;
+  studentId: string;
+  studentName: string;
+  studentLoginId: string | null;
+  classId: string;
+  className: string;
+  subjectName: string;
+  subjectCode: string | null;
+  levelName: string;
+  percentage: number | null;
+  completedAt: string | null;
+};
+
+type TestsByDateResponse = {
+  dayKey: string;
+  fromDayKey: string;
+  toDayKey: string;
+  count: number;
+  items: TestsByDateItem[];
+};
+
+type DatePreset = "today" | "yesterday" | "last7" | "last30" | "custom";
+
 function formatTestDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -48,12 +72,20 @@ function formatTestDate(iso: string | null | undefined): string {
   });
 }
 
+function todayLocalYmd(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function TeacherAnalyticsPage() {
   const { logout, auth } = useAuth();
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [subjects, setSubjects] = useState<SubjectRow[]>([]);
   const [classId, setClassId] = useState("ALL");
-  const [subjectId, setSubjectId] = useState<string>("");
+  const [subjectId, setSubjectId] = useState<string>("ALL");
   const [levelId, setLevelId] = useState("ALL");
   const [subjectSearch, setSubjectSearch] = useState("");
   const [status, setStatus] = useState("ALL");
@@ -68,6 +100,11 @@ export function TeacherAnalyticsPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const historyPanelRef = useRef<HTMLElement | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [datePreset, setDatePreset] = useState<DatePreset>("today");
+  const [customDate, setCustomDate] = useState(todayLocalYmd);
+  const [testsByDate, setTestsByDate] = useState<TestsByDateResponse | null>(null);
+  const [testsByDateLoading, setTestsByDateLoading] = useState(false);
+  const [testsByDateErr, setTestsByDateErr] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -82,8 +119,9 @@ export function TeacherAnalyticsPage() {
         const list = subj.data ?? [];
         setSubjects(list);
         setSubjectId((prev) => {
+          if (prev === "ALL") return "ALL";
           if (prev && list.some((s) => s.id === prev)) return prev;
-          return list[0]?.id ?? "";
+          return "ALL";
         });
       }
     })();
@@ -98,7 +136,7 @@ export function TeacherAnalyticsPage() {
             s.name.toLowerCase().includes(q) ||
             (s.code && s.code.toLowerCase().includes(q))
         );
-    if (subjectId && !list.some((s) => s.id === subjectId)) {
+    if (subjectId && subjectId !== "ALL" && !list.some((s) => s.id === subjectId)) {
       const cur = subjects.find((s) => s.id === subjectId);
       if (cur) return [cur, ...list];
     }
@@ -106,11 +144,16 @@ export function TeacherAnalyticsPage() {
   }, [subjects, subjectSearch, subjectId]);
 
   const levelsForSubject = useMemo(() => {
+    if (subjectId === "ALL") return [];
     const s = subjects.find((x) => x.id === subjectId);
     return s?.levels ?? [];
   }, [subjects, subjectId]);
 
   useEffect(() => {
+    if (subjectId === "ALL") {
+      setLevelId("ALL");
+      return;
+    }
     setLevelId((prev) => {
       if (prev === "ALL") return "ALL";
       return levelsForSubject.some((l) => l.id === prev) ? prev : "ALL";
@@ -119,7 +162,7 @@ export function TeacherAnalyticsPage() {
 
   useEffect(() => {
     void (async () => {
-      if (!subjectId) {
+      if (!subjectId || subjectId === "ALL") {
         setWeakTopics([]);
         setStudents([]);
         return;
@@ -154,6 +197,27 @@ export function TeacherAnalyticsPage() {
   }, [classId, search]);
 
   useEffect(() => {
+    void (async () => {
+      setTestsByDateLoading(true);
+      setTestsByDateErr(null);
+      const q = new URLSearchParams();
+      if (classId !== "ALL") q.set("classId", classId);
+      q.set("preset", datePreset);
+      if (datePreset === "custom") q.set("date", customDate);
+      if (subjectId && subjectId !== "ALL") q.set("subjectId", subjectId);
+      if (levelId !== "ALL" && subjectId !== "ALL") q.set("levelId", levelId);
+      const r = await api<TestsByDateResponse>(`/api/v1/teacher/analytics/tests-by-date?${q.toString()}`);
+      setTestsByDateLoading(false);
+      if (!r.ok) {
+        setTestsByDate(null);
+        setTestsByDateErr(r.error ?? "Could not load tests for this date");
+        return;
+      }
+      setTestsByDate(r.data ?? null);
+    })();
+  }, [classId, datePreset, customDate, subjectId, levelId]);
+
+  useEffect(() => {
     setDetailStudent(null);
     setDetailError(null);
     setDetailLoadingId(null);
@@ -167,13 +231,16 @@ export function TeacherAnalyticsPage() {
   }, [detailStudent]);
 
   async function openStudentDetail(studentId: string) {
-    if (!subjectId) return;
     setDetailStudent(null);
     setDetailError(null);
     setDetailLoadingId(studentId);
     try {
+      const q =
+        subjectId && subjectId !== "ALL"
+          ? `?subjectId=${encodeURIComponent(subjectId)}`
+          : "";
       const r = await api<StudentDetail>(
-        `/api/v1/teacher/analytics/student/${encodeURIComponent(studentId)}/detail?subjectId=${encodeURIComponent(subjectId)}`
+        `/api/v1/teacher/analytics/student/${encodeURIComponent(studentId)}/detail${q}`
       );
       if (r.ok && r.data) {
         setDetailStudent(r.data);
@@ -200,7 +267,8 @@ export function TeacherAnalyticsPage() {
     >
       <h1 className="text-2xl font-bold text-slate-900">Skill tests</h1>
       <p className="text-slate-600 mt-1">
-        Filter by class, subject, and level. See each student&apos;s last completed test for the current filters.
+        Filter by class, subject, and level (All classes / All subjects supported for Tests by date). Open a
+        student&apos;s history from the date table or the list below.
       </p>
       {err ? <p className="text-red-600 mt-3">{err}</p> : null}
 
@@ -230,24 +298,22 @@ export function TeacherAnalyticsPage() {
             setSubjectId(e.target.value);
             setLevelId("ALL");
           }}
-          disabled={filteredSubjects.length === 0}
+          disabled={subjects.length === 0}
         >
-          {filteredSubjects.length === 0 ? (
-            <option value="">No subjects</option>
-          ) : (
-            filteredSubjects.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-                {s.code ? ` (${s.code})` : ""}
-              </option>
-            ))
-          )}
+          <option value="ALL">All subjects</option>
+          {filteredSubjects.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+              {s.code ? ` (${s.code})` : ""}
+            </option>
+          ))}
         </select>
         <select
           className="rounded-lg border px-3 py-2"
           value={levelId}
           onChange={(e) => setLevelId(e.target.value)}
-          disabled={!subjectId || levelsForSubject.length === 0}
+          disabled={subjectId === "ALL" || levelsForSubject.length === 0}
+          title={subjectId === "ALL" ? "Pick a subject to filter by level" : undefined}
         >
           <option value="ALL">All levels</option>
           {levelsForSubject.map((l) => (
@@ -256,6 +322,130 @@ export function TeacherAnalyticsPage() {
             </option>
           ))}
         </select>
+      </section>
+
+      <section className="mt-5 rounded-xl border bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-slate-900">Tests by date</h2>
+            <p className="text-sm text-slate-600 mt-1">
+              Who completed a skill test today, yesterday, last 7 days, last 30 days, or on a date you pick
+              (school day, IST). Uses the class / subject / level filters above — All classes and All subjects
+              are supported.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ["today", "Today"],
+                ["yesterday", "Yesterday"],
+                ["last7", "Last 7 days"],
+                ["last30", "Last 30 days"],
+                ["custom", "Pick date"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setDatePreset(value)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
+                  datePreset === value
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-300 bg-white text-slate-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            {datePreset === "custom" ? (
+              <input
+                type="date"
+                value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)}
+                className="rounded-lg border px-3 py-1.5 text-sm"
+              />
+            ) : null}
+          </div>
+        </div>
+
+        {testsByDateLoading ? (
+          <p className="mt-4 text-sm text-slate-600">Loading…</p>
+        ) : testsByDateErr ? (
+          <p className="mt-4 text-sm text-red-600">{testsByDateErr}</p>
+        ) : testsByDate ? (
+          <>
+            <p className="mt-3 text-sm text-slate-700">
+              <span className="font-medium">{testsByDate.count}</span> completed test
+              {testsByDate.count === 1 ? "" : "s"}
+              {classId === "ALL" ? " across all classes" : ""}
+              {subjectId === "ALL" ? " and all subjects" : ""}
+              {testsByDate.fromDayKey === testsByDate.toDayKey ? (
+                <>
+                  {" "}
+                  on <span className="font-medium">{testsByDate.fromDayKey}</span>
+                </>
+              ) : (
+                <>
+                  {" "}
+                  from <span className="font-medium">{testsByDate.fromDayKey}</span> to{" "}
+                  <span className="font-medium">{testsByDate.toDayKey}</span>
+                </>
+              )}
+            </p>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left p-2">Student</th>
+                    <th className="text-left p-2">Class</th>
+                    <th className="text-left p-2">Subject</th>
+                    <th className="text-left p-2">Level</th>
+                    <th className="text-right p-2">Score %</th>
+                    <th className="text-left p-2">Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {testsByDate.items.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-3 text-slate-500">
+                        No completed skill tests for this filter in that period.
+                      </td>
+                    </tr>
+                  ) : (
+                    testsByDate.items.map((t) => (
+                      <tr key={t.testId} className="border-t border-slate-100">
+                        <td className="p-2">
+                          <button
+                            type="button"
+                            className="text-left font-medium text-indigo-700 hover:underline"
+                            onClick={() => void openStudentDetail(t.studentId)}
+                          >
+                            {t.studentName}
+                          </button>
+                          {t.studentLoginId ? (
+                            <span className="block text-xs text-slate-500">{t.studentLoginId}</span>
+                          ) : null}
+                        </td>
+                        <td className="p-2">{t.className}</td>
+                        <td className="p-2">
+                          {t.subjectName}
+                          {t.subjectCode ? (
+                            <span className="text-xs text-slate-500"> ({t.subjectCode})</span>
+                          ) : null}
+                        </td>
+                        <td className="p-2">{t.levelName}</td>
+                        <td className="p-2 text-right">
+                          {t.percentage != null ? t.percentage.toFixed(1) : "—"}
+                        </td>
+                        <td className="p-2 whitespace-nowrap">{formatTestDate(t.completedAt)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
       </section>
 
       <section className="mt-3 grid gap-3 md:grid-cols-2">
@@ -362,7 +552,7 @@ export function TeacherAnalyticsPage() {
                   <button
                     type="button"
                     className="text-indigo-700 underline text-left disabled:opacity-50"
-                    disabled={!subjectId || detailLoadingId !== null}
+                    disabled={detailLoadingId !== null}
                     onClick={() => void openStudentDetail(s.id)}
                   >
                     {detailLoadingId === s.id ? "Loading…" : "View history"}
@@ -373,7 +563,9 @@ export function TeacherAnalyticsPage() {
             {shownStudents.length === 0 ? (
               <tr>
                 <td className="p-3 text-slate-500" colSpan={8}>
-                  {subjectId ? "No students found." : "Select a subject to load analytics."}
+                  {subjectId && subjectId !== "ALL"
+                    ? "No students found."
+                    : "Select a subject to load student analytics (Tests by date still works with All subjects)."}
                 </td>
               </tr>
             ) : null}

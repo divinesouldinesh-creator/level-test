@@ -123,8 +123,8 @@ export function StudentDailyChallengePage() {
     return (
       <AppShell title="Daily 5" onLogout={logout} nav={[...studentNav]} sidebarKicker="Student">
         <p className="text-red-600">{err ?? "Challenge not found"}</p>
-        <Link to="/student" className="mt-3 inline-block text-brand-700 font-medium">
-          ← Home
+        <Link to="/student/daily" className="mt-3 inline-block text-brand-700 font-medium">
+          ← Daily Challenge
         </Link>
       </AppShell>
     );
@@ -160,10 +160,10 @@ export function StudentDailyChallengePage() {
         <div className="mt-6 flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => navigate("/student")}
+            onClick={() => navigate("/student/daily")}
             className="rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white"
           >
-            Back to Home
+            Back to Daily Challenge
           </button>
         </div>
       </AppShell>

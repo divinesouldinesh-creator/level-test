@@ -1,8 +1,18 @@
 import { z } from "zod";
 
+const attendanceRangeEnum = z.enum([
+  "daily",
+  "weekly",
+  "last_7_days",
+  "monthly",
+  "last_month",
+  "academic_year",
+  "custom",
+]);
+
 const attendanceReportQueryBase = z.object({
   studentId: z.string().min(1).optional(),
-  range: z.enum(["daily", "weekly", "monthly", "academic_year", "custom"]).default("daily"),
+  range: attendanceRangeEnum.default("daily"),
   date: z.string().optional(),
   from: z.string().optional(),
   to: z.string().optional(),
@@ -36,7 +46,7 @@ export const attendanceSummaryQuerySchema = refineCustomRange(
   z.object({
     classId: z.string().min(1),
     sectionId: z.string().min(1),
-    range: z.enum(["daily", "weekly", "monthly", "academic_year", "custom"]).default("academic_year"),
+    range: attendanceRangeEnum.default("academic_year"),
     date: z.string().optional(),
     from: z.string().optional(),
     to: z.string().optional(),

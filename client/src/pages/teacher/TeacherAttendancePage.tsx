@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { useAuth } from "../../auth";
 import { api } from "../../api";
@@ -33,10 +33,14 @@ type AttendanceReport = {
   from: string;
   to: string;
   summary: { totalDays: number; present: number; absent: number; attendancePct: number | null };
+  records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
 };
+
+type AttendanceTab = "mark" | "class" | "individual";
 
 export function TeacherAttendancePage() {
   const { logout, auth } = useAuth();
+  const [tab, setTab] = useState<AttendanceTab>("mark");
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -48,7 +52,8 @@ export function TeacherAttendancePage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reportStudentId, setReportStudentId] = useState("");
-  const [reportRange, setReportRange] = useState<AttendanceRange>("weekly");
+  const [studentSearch, setStudentSearch] = useState("");
+  const [reportRange, setReportRange] = useState<AttendanceRange>("last_7_days");
   const [reportDate, setReportDate] = useState(() => todayIso());
   const [reportCustomFrom, setReportCustomFrom] = useState(() => academicYearStartIso(todayIso()));
   const [reportCustomTo, setReportCustomTo] = useState(() => todayIso());
@@ -123,8 +128,25 @@ export function TeacherAttendancePage() {
   }, [classId, sectionId, date, attendanceRefresh]);
 
   useEffect(() => {
-    setReportStudentId((prev) => (prev && rows.some((r) => r.id === prev) ? prev : rows[0]?.id ?? ""));
-  }, [rows]);
+    setStudentSearch("");
+  }, [classId, sectionId]);
+
+  const filteredReportStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.fullName.toLowerCase().includes(q) ||
+        (r.studentLoginId && r.studentLoginId.toLowerCase().includes(q))
+    );
+  }, [rows, studentSearch]);
+
+  useEffect(() => {
+    setReportStudentId((prev) => {
+      if (prev && filteredReportStudents.some((r) => r.id === prev)) return prev;
+      return filteredReportStudents[0]?.id ?? "";
+    });
+  }, [filteredReportStudents]);
 
   function handleReportRangeChange(next: AttendanceRange) {
     setReportRange(next);
@@ -136,6 +158,7 @@ export function TeacherAttendancePage() {
   }
 
   useEffect(() => {
+    if (tab !== "individual") return;
     void (async () => {
       if (!reportStudentId) {
         setReport(null);
@@ -160,7 +183,7 @@ export function TeacherAttendancePage() {
       }
       setReport(r.data);
     })();
-  }, [reportStudentId, reportRange, reportDate, reportCustomFrom, reportCustomTo]);
+  }, [tab, reportStudentId, reportRange, reportDate, reportCustomFrom, reportCustomTo]);
 
   async function saveAttendance() {
     if (!classId || !sectionId || !date || rows.length === 0) return;
@@ -256,6 +279,38 @@ export function TeacherAttendancePage() {
     setAttendanceRefresh((n) => n + 1);
   }
 
+  const classSectionSelectors = (
+    <div className="grid gap-3 md:grid-cols-2">
+      <label className="text-sm">
+        <span className="block text-slate-600 mb-1">Class</span>
+        <select className="w-full rounded-lg border px-3 py-2" value={classId} onChange={(e) => setClassId(e.target.value)}>
+          <option value="">Select class</option>
+          {classes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="text-sm">
+        <span className="block text-slate-600 mb-1">Section</span>
+        <select
+          className="w-full rounded-lg border px-3 py-2"
+          value={sectionId}
+          onChange={(e) => setSectionId(e.target.value)}
+          disabled={!classId || sections.length === 0}
+        >
+          <option value="">Select section</option>
+          {sections.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+
   return (
     <AppShell
       title={auth.profile?.fullName ?? "Teacher"}
@@ -263,208 +318,264 @@ export function TeacherAttendancePage() {
       nav={[...teacherPortalNav]}
     >
       <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
-      <p className="text-slate-600 mt-1">Mark attendance quickly by class, section and date.</p>
+      <p className="text-slate-600 mt-1">Mark the day, or check class and individual attendance reports.</p>
 
-      <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-4">
-          <select className="rounded-lg border px-3 py-2" value={classId} onChange={(e) => setClassId(e.target.value)}>
-            <option value="">Select class</option>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-lg border px-3 py-2"
-            value={sectionId}
-            onChange={(e) => setSectionId(e.target.value)}
-            disabled={!classId || sections.length === 0}
-          >
-            <option value="">Select section</option>
-            {sections.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <input type="date" className="rounded-lg border px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+      <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
+        {(
+          [
+            ["mark", "Mark"],
+            ["class", "Class"],
+            ["individual", "Individual"],
+          ] as const
+        ).map(([id, label]) => (
           <button
+            key={id}
             type="button"
-            className="rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
-            onClick={() => void saveAttendance()}
-            disabled={saving || !classId || !sectionId || rows.length === 0}
+            onClick={() => setTab(id)}
+            className={`flex-1 min-w-[100px] rounded-lg px-4 py-2.5 text-sm font-medium transition-colors min-h-[44px] ${
+              tab === id
+                ? "bg-white text-brand-900 shadow-sm border border-slate-200"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
           >
-            {saving ? "Saving..." : "Save attendance"}
+            {label}
           </button>
-        </div>
-        <textarea
-          className="mt-3 w-full rounded-lg border px-3 py-2 text-sm"
-          rows={2}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Optional notes"
-        />
-        {loading ? <p className="mt-3 text-sm text-slate-500">Loading students...</p> : null}
-        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
-        {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+        ))}
+      </div>
 
-        <form onSubmit={addStudent} className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
-          <p className="text-sm font-medium text-slate-900">Add a new student to this class</p>
-          <p className="mt-1 text-xs text-slate-600">
-            Uses the selected class and section. Login ID and password are generated automatically.
-          </p>
-          <div className="mt-3 flex flex-col sm:flex-row gap-2">
-            <input
-              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              placeholder="Student full name"
-              value={newStudentName}
-              onChange={(e) => setNewStudentName(e.target.value)}
-              disabled={addingStudent || !classId || !sectionId}
-            />
-            <button
-              type="submit"
-              disabled={addingStudent || !classId || !sectionId || !newStudentName.trim()}
-              className="rounded-lg border border-indigo-600 bg-white text-indigo-700 px-4 py-2 text-sm font-medium disabled:opacity-50"
-            >
-              {addingStudent ? "Adding…" : "Add student"}
-            </button>
-          </div>
-          {createdStudent ? (
-            <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-              <p className="font-medium">{createdStudent.fullName}</p>
-              <p className="mt-1">
-                Class: {createdStudent.className} · Section: {createdStudent.sectionName}
-              </p>
-              <p className="mt-1 font-mono">
-                Login: {createdStudent.studentLoginId} · Password: {createdStudent.password}
-              </p>
+      {tab === "mark" ? (
+        <>
+          <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Mark attendance</h2>
+              <p className="mt-1 text-sm text-slate-600">Choose class, section and date, then save.</p>
             </div>
-          ) : null}
-        </form>
-      </section>
+            {classSectionSelectors}
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="text-sm">
+                <span className="block text-slate-600 mb-1">Date</span>
+                <input
+                  type="date"
+                  className="w-full rounded-lg border px-3 py-2"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                />
+              </label>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  className="w-full rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+                  onClick={() => void saveAttendance()}
+                  disabled={saving || !classId || !sectionId || rows.length === 0}
+                >
+                  {saving ? "Saving..." : "Save attendance"}
+                </button>
+              </div>
+            </div>
+            <textarea
+              className="w-full rounded-lg border px-3 py-2 text-sm"
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Optional notes"
+            />
+            {loading ? <p className="text-sm text-slate-500">Loading students...</p> : null}
+            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
 
-      {rows.length > 0 ? (
-        <section className="mt-4 rounded-xl border bg-white shadow-sm overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="text-left p-3">Student</th>
-                <th className="text-left p-3">Login ID</th>
-                <th className="text-left p-3">Status</th>
-                <th className="text-left p-3">Remark</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-t border-slate-100">
-                  <td className="p-3">
-                    {renamingId === row.id ? (
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          className="rounded border px-2 py-1 flex-1 min-w-[140px]"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          disabled={renameSaving}
-                          autoFocus
-                        />
-                        <div className="flex gap-1">
-                          <button
-                            type="button"
-                            className="rounded border border-indigo-600 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-800 disabled:opacity-50"
-                            disabled={renameSaving || !renameValue.trim()}
-                            onClick={() => void saveRename(row.id)}
-                          >
-                            {renameSaving ? "Saving…" : "Save"}
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded border px-2 py-1 text-xs font-medium text-slate-600"
-                            disabled={renameSaving}
-                            onClick={cancelRename}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <span>{row.fullName}</span>
-                        <button
-                          type="button"
-                          className="rounded border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
-                          onClick={() => startRename(row)}
+            <form onSubmit={addStudent} className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+              <p className="text-sm font-medium text-slate-900">Add a new student to this class</p>
+              <p className="mt-1 text-xs text-slate-600">
+                Uses the selected class and section. Login ID and password are generated automatically.
+              </p>
+              <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                <input
+                  className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Student full name"
+                  value={newStudentName}
+                  onChange={(e) => setNewStudentName(e.target.value)}
+                  disabled={addingStudent || !classId || !sectionId}
+                />
+                <button
+                  type="submit"
+                  disabled={addingStudent || !classId || !sectionId || !newStudentName.trim()}
+                  className="rounded-lg border border-indigo-600 bg-white text-indigo-700 px-4 py-2 text-sm font-medium disabled:opacity-50"
+                >
+                  {addingStudent ? "Adding…" : "Add student"}
+                </button>
+              </div>
+              {createdStudent ? (
+                <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                  <p className="font-medium">{createdStudent.fullName}</p>
+                  <p className="mt-1">
+                    Class: {createdStudent.className} · Section: {createdStudent.sectionName}
+                  </p>
+                  <p className="mt-1 font-mono">
+                    Login: {createdStudent.studentLoginId} · Password: {createdStudent.password}
+                  </p>
+                </div>
+              ) : null}
+            </form>
+          </section>
+
+          {rows.length > 0 ? (
+            <section className="mt-4 rounded-xl border bg-white shadow-sm overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left p-3">Student</th>
+                    <th className="text-left p-3">Login ID</th>
+                    <th className="text-left p-3">Status</th>
+                    <th className="text-left p-3">Remark</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.id} className="border-t border-slate-100">
+                      <td className="p-3">
+                        {renamingId === row.id ? (
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              className="rounded border px-2 py-1 flex-1 min-w-[140px]"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              disabled={renameSaving}
+                              autoFocus
+                            />
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                className="rounded border border-indigo-600 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-800 disabled:opacity-50"
+                                disabled={renameSaving || !renameValue.trim()}
+                                onClick={() => void saveRename(row.id)}
+                              >
+                                {renameSaving ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded border px-2 py-1 text-xs font-medium text-slate-600"
+                                disabled={renameSaving}
+                                onClick={cancelRename}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span>{row.fullName}</span>
+                            <button
+                              type="button"
+                              className="rounded border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+                              onClick={() => startRename(row)}
+                            >
+                              Rename
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-3">{row.studentLoginId ?? "—"}</td>
+                      <td className="p-3">
+                        <select
+                          className="rounded border px-2 py-1"
+                          value={row.status}
+                          onChange={(e) =>
+                            setRows((prev) =>
+                              prev.map((r) =>
+                                r.id === row.id ? { ...r, status: e.target.value as AttendanceStatus } : r
+                              )
+                            )
+                          }
                         >
-                          Rename
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-3">{row.studentLoginId ?? "—"}</td>
-                  <td className="p-3">
-                    <select
-                      className="rounded border px-2 py-1"
-                      value={row.status}
-                      onChange={(e) =>
-                        setRows((prev) =>
-                          prev.map((r) => (r.id === row.id ? { ...r, status: e.target.value as AttendanceStatus } : r))
-                        )
-                      }
-                    >
-                      <option value="PRESENT">Present</option>
-                      <option value="ABSENT">Absent</option>
-                    </select>
-                  </td>
-                  <td className="p-3">
-                    <input
-                      className="rounded border px-2 py-1 w-full"
-                      placeholder="Optional"
-                      value={row.remark ?? ""}
-                      onChange={(e) =>
-                        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, remark: e.target.value } : r)))
-                      }
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+                          <option value="PRESENT">Present</option>
+                          <option value="ABSENT">Absent</option>
+                        </select>
+                      </td>
+                      <td className="p-3">
+                        <input
+                          className="rounded border px-2 py-1 w-full"
+                          placeholder="Optional"
+                          value={row.remark ?? ""}
+                          onChange={(e) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, remark: e.target.value } : r))
+                            )
+                          }
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          ) : null}
+        </>
       ) : null}
 
-      <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Class attendance summary</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Attendance percentages for all students in the selected class and section, with filters.
-        </p>
-        <div className="mt-4">
+      {tab === "class" ? (
+        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Class summary</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Attendance % for every student in the class and section, with filters and certificates.
+            </p>
+          </div>
+          {classSectionSelectors}
           <ClassAttendanceSummaryPanel
             apiPrefix="/api/v1/teacher"
             classId={classId}
             sectionId={sectionId}
           />
-        </div>
-      </section>
+        </section>
+      ) : null}
 
-      <section className="mt-6 rounded-xl border bg-white p-4 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">Student attendance report</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Daily, weekly, monthly, academic-year, or custom-range report for a selected student.
-        </p>
-        <div className="mt-3 space-y-3">
-          <select
-            className="rounded-lg border px-3 py-2 w-full md:max-w-md"
-            value={reportStudentId}
-            onChange={(e) => setReportStudentId(e.target.value)}
-            disabled={rows.length === 0}
-          >
-            {rows.length === 0 ? <option value="">No students</option> : null}
-            {rows.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.fullName}
-              </option>
-            ))}
-          </select>
+      {tab === "individual" ? (
+        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Individual student</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Choose a student and date range to see present, absent, and attendance %.
+            </p>
+          </div>
+          {classSectionSelectors}
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="text-sm block">
+              <span className="block text-slate-600 mb-1">Search by name</span>
+              <input
+                type="search"
+                className="w-full rounded-lg border px-3 py-2"
+                placeholder="Type student name or login ID…"
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+                disabled={rows.length === 0}
+              />
+            </label>
+            <label className="text-sm block">
+              <span className="block text-slate-600 mb-1">Student</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={reportStudentId}
+                onChange={(e) => setReportStudentId(e.target.value)}
+                disabled={filteredReportStudents.length === 0}
+              >
+                {filteredReportStudents.length === 0 ? (
+                  <option value="">{rows.length === 0 ? "No students" : "No matches"}</option>
+                ) : null}
+                {filteredReportStudents.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.fullName}
+                    {r.studentLoginId ? ` (${r.studentLoginId})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {rows.length === 0 && classId && sectionId ? (
+            <p className="text-sm text-slate-500">No students found for this class and section.</p>
+          ) : null}
+          {rows.length > 0 && filteredReportStudents.length === 0 ? (
+            <p className="text-sm text-slate-500">No students match “{studentSearch.trim()}”.</p>
+          ) : null}
           <AttendanceRangeFilters
             range={reportRange}
             onRangeChange={handleReportRangeChange}
@@ -476,26 +587,65 @@ export function TeacherAttendancePage() {
             onCustomToChange={setReportCustomTo}
             rangeHint={report ? `${report.from} to ${report.to}` : undefined}
           />
-        </div>
-        {reportLoading ? <p className="mt-3 text-sm text-slate-500">Loading report…</p> : null}
-        {reportError ? <p className="mt-3 text-sm text-rose-700">{reportError}</p> : null}
-        {report ? (
-          <>
-            <p className="mt-3 text-sm text-slate-600">
-              {report.student.fullName} ({report.student.studentLoginId ?? "—"}) • {report.from} to {report.to}
-            </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <MiniCard label="Total" value={String(report.summary.totalDays)} />
-              <MiniCard label="Present" value={String(report.summary.present)} />
-              <MiniCard label="Absent" value={String(report.summary.absent)} />
-              <MiniCard
-                label="Attendance %"
-                value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"}
-              />
-            </div>
-          </>
-        ) : null}
-      </section>
+          {reportLoading ? <p className="text-sm text-slate-500">Loading report…</p> : null}
+          {reportError ? <p className="text-sm text-rose-700">{reportError}</p> : null}
+          {report ? (
+            <>
+              <p className="text-sm text-slate-600">
+                {report.student.fullName} ({report.student.studentLoginId ?? "—"}) · {report.from} to {report.to}
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <MiniCard label="Total" value={String(report.summary.totalDays)} />
+                <MiniCard label="Present" value={String(report.summary.present)} />
+                <MiniCard label="Absent" value={String(report.summary.absent)} />
+                <MiniCard
+                  label="Attendance %"
+                  value={report.summary.attendancePct != null ? `${report.summary.attendancePct}%` : "—"}
+                />
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="text-left p-3">Date</th>
+                      <th className="text-left p-3">Status</th>
+                      <th className="text-left p-3">Remark</th>
+                      <th className="text-left p-3">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.records.map((r) => (
+                      <tr key={`${r.date}-${r.status}-${r.remark}`} className="border-t border-slate-100">
+                        <td className="p-3 whitespace-nowrap">{r.date}</td>
+                        <td className="p-3">
+                          <span
+                            className={
+                              r.status === "PRESENT"
+                                ? "text-emerald-700 font-medium"
+                                : "text-rose-700 font-medium"
+                            }
+                          >
+                            {r.status === "PRESENT" ? "Present" : "Absent"}
+                          </span>
+                        </td>
+                        <td className="p-3">{r.remark || "—"}</td>
+                        <td className="p-3">{r.notes || "—"}</td>
+                      </tr>
+                    ))}
+                    {report.records.length === 0 ? (
+                      <tr>
+                        <td className="p-3 text-slate-500" colSpan={4}>
+                          No attendance records in this range.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+        </section>
+      ) : null}
     </AppShell>
   );
 }

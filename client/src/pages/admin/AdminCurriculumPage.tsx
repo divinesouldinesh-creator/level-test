@@ -36,13 +36,26 @@ type CurriculumSubject = {
   id: string;
   name: string;
   code: string | null;
+  areaId: string | null;
+  area: { id: string; name: string; code: string | null } | null;
   levels: CurriculumLevel[];
+  topics: { id: string; name: string; levelId: string }[];
 };
 const NO_TOPICS: CurriculumTopic[] = [];
+
+type SubjectAreaRow = {
+  id: string;
+  name: string;
+  code: string | null;
+  sortOrder: number;
+  branchCount: number;
+  branches: { id: string; name: string; code: string | null }[];
+};
 
 export function AdminCurriculumPage() {
   const [classes, setClasses] = useState<SchoolClassMeta[]>([]);
   const [subjects, setSubjects] = useState<CurriculumSubject[]>([]);
+  const [areas, setAreas] = useState<SubjectAreaRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -51,14 +64,17 @@ export function AdminCurriculumPage() {
 
   const refresh = useCallback(async () => {
     setErr(null);
-    const [c, s] = await Promise.all([
+    const [c, s, a] = await Promise.all([
       api<SchoolClassMeta[]>("/api/v1/admin/classes"),
       api<CurriculumSubject[]>("/api/v1/admin/subjects"),
+      api<SubjectAreaRow[]>("/api/v1/admin/subject-areas"),
     ]);
     if (!c.ok) setErr(c.error ?? "Failed to load classes");
     else if (c.data) setClasses(c.data);
-    if (!s.ok) setErr(s.error ?? "Failed to load subjects");
+    if (!s.ok) setErr(s.error ?? "Failed to load branches");
     else if (s.data) setSubjects(s.data);
+    if (!a.ok) setErr(a.error ?? "Failed to load subjects");
+    else if (a.data) setAreas(a.data);
   }, []);
 
   useEffect(() => {
@@ -75,9 +91,8 @@ export function AdminCurriculumPage() {
     <>
       <h1 className="text-2xl font-bold text-slate-900">Curriculum &amp; classes</h1>
       <p className="text-slate-600 mt-1">
-        Create school classes and sections, assign subjects to each class, then define subjects, levels, chapters
-        (topics), and how each level test draws questions from those chapters. Students only see subjects linked to
-        their class.
+        Create classes, then add subjects (Maths, English), branches under each subject, and configure Learn and Test.
+        Test uses the same levels and topics as before. Students only see branches linked to their class.
       </p>
       {err && <p className="text-red-600 mt-4">{err}</p>}
       {loading ? (
@@ -93,8 +108,9 @@ export function AdminCurriculumPage() {
             onChanged={refresh}
             requestConfirm={requestConfirm}
           />
-          <SubjectsPanel
+          <AreasPanel
             classes={classes}
+            areas={areas}
             subjects={subjects}
             busy={busy}
             setBusy={setBusy}
@@ -331,8 +347,9 @@ function ClassesPanel({
   );
 }
 
-function SubjectsPanel({
+function AreasPanel({
   classes,
+  areas,
   subjects,
   busy,
   setBusy,
@@ -341,6 +358,7 @@ function SubjectsPanel({
   requestConfirm,
 }: {
   classes: SchoolClassMeta[];
+  areas: SubjectAreaRow[];
   subjects: CurriculumSubject[];
   busy: boolean;
   setBusy: (v: boolean) => void;
@@ -348,42 +366,151 @@ function SubjectsPanel({
   onChanged: () => Promise<void>;
   requestConfirm: RequestConfirm;
 }) {
-  const [subName, setSubName] = useState("");
-  const [subCode, setSubCode] = useState("");
-  const [subClassId, setSubClassId] = useState("");
+  const [areaName, setAreaName] = useState("");
+  const [areaCode, setAreaCode] = useState("");
+  const [branchName, setBranchName] = useState("");
+  const [branchCode, setBranchCode] = useState("");
+  const [branchAreaId, setBranchAreaId] = useState("");
+  const [branchClassId, setBranchClassId] = useState("");
 
-  async function addSubject(e: React.FormEvent) {
+  const subjectsById = useMemo(() => {
+    const m = new Map<string, CurriculumSubject>();
+    for (const s of subjects) m.set(s.id, s);
+    return m;
+  }, [subjects]);
+
+  async function addArea(e: React.FormEvent) {
     e.preventDefault();
-    if (!subName.trim() || !subClassId) return;
+    if (!areaName.trim()) return;
     setBusy(true);
     setErr(null);
-    const r = await api(`/api/v1/admin/classes/${subClassId}/subjects/create`, {
+    const r = await api("/api/v1/admin/subject-areas", {
       method: "POST",
-      json: { name: subName.trim(), code: subCode.trim() || undefined },
+      json: { name: areaName.trim(), code: areaCode.trim() || undefined },
     });
     setBusy(false);
     if (!r.ok) setErr(r.error ?? "Could not create subject");
     else {
-      setSubName("");
-      setSubCode("");
-      setSubClassId("");
+      setAreaName("");
+      setAreaCode("");
       await onChanged();
     }
   }
 
+  async function addBranch(e: React.FormEvent) {
+    e.preventDefault();
+    if (!branchName.trim() || !branchAreaId) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subject-areas/${branchAreaId}/branches`, {
+      method: "POST",
+      json: {
+        name: branchName.trim(),
+        code: branchCode.trim() || undefined,
+        classId: branchClassId || undefined,
+      },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not create branch");
+    else {
+      setBranchName("");
+      setBranchCode("");
+      await onChanged();
+    }
+  }
+
+  async function deleteArea(area: SubjectAreaRow) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subject-areas/${area.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not delete subject");
+    else await onChanged();
+  }
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="font-semibold text-lg text-slate-900">Subjects, levels &amp; tests</h2>
-      <form onSubmit={addSubject} className="mt-4 flex flex-wrap gap-2 items-end">
+      <h2 className="font-semibold text-lg text-slate-900">Subjects → Branches → Learn / Test</h2>
+      <p className="mt-1 text-sm text-slate-600">
+        Add a subject (Maths, English), then branches under it. Open a branch to edit Learn or Test.
+      </p>
+
+      <form onSubmit={addArea} className="mt-4 flex flex-wrap gap-2 items-end">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Class</span>
+          <span className="text-slate-600">New subject</span>
+          <input
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[160px]"
+            value={areaName}
+            onChange={(e) => setAreaName(e.target.value)}
+            placeholder="e.g. Maths"
+            disabled={busy}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Code</span>
+          <input
+            className="rounded-lg border border-slate-300 px-3 py-2 w-24 text-base"
+            value={areaCode}
+            onChange={(e) => setAreaCode(e.target.value)}
+            placeholder="MATHS"
+            disabled={busy}
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={busy || !areaName.trim()}
+          className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+        >
+          Add subject
+        </button>
+      </form>
+
+      <form onSubmit={addBranch} className="mt-3 flex flex-wrap gap-2 items-end border-t border-slate-100 pt-3">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Under subject</span>
           <select
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[170px]"
-            value={subClassId}
-            onChange={(e) => setSubClassId(e.target.value)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[150px]"
+            value={branchAreaId}
+            onChange={(e) => setBranchAreaId(e.target.value)}
             disabled={busy}
           >
-            <option value="">Select class</option>
+            <option value="">Select subject</option>
+            {areas.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Branch name</span>
+          <input
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[180px]"
+            value={branchName}
+            onChange={(e) => setBranchName(e.target.value)}
+            placeholder="e.g. Basic Mathematics"
+            disabled={busy}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Code</span>
+          <input
+            className="rounded-lg border border-slate-300 px-3 py-2 w-24 text-base"
+            value={branchCode}
+            onChange={(e) => setBranchCode(e.target.value)}
+            placeholder="MATH"
+            disabled={busy}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Link to class (optional)</span>
+          <select
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[150px]"
+            value={branchClassId}
+            onChange={(e) => setBranchClassId(e.target.value)}
+            disabled={busy}
+          >
+            <option value="">None yet</option>
             {classes.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -392,47 +519,103 @@ function SubjectsPanel({
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Subject name</span>
-          <input
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[200px]"
-            value={subName}
-            onChange={(e) => setSubName(e.target.value)}
-            placeholder="e.g. Science"
-            disabled={busy}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Code (optional)</span>
-          <input
-            className="rounded-lg border border-slate-300 px-3 py-2 w-28 text-base"
-            value={subCode}
-            onChange={(e) => setSubCode(e.target.value)}
-            placeholder="SCI"
-            disabled={busy}
-          />
-        </label>
         <button
           type="submit"
-          disabled={busy || !subClassId || !subName.trim()}
-          className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+          disabled={busy || !branchAreaId || !branchName.trim()}
+          className="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
         >
-          Add subject
+          Add branch
         </button>
       </form>
 
       <div className="mt-6 space-y-4">
-        {subjects.map((su) => (
-          <SubjectCard
-            key={su.id}
-            subject={su}
-            busy={busy}
-            setBusy={setBusy}
-            setErr={setErr}
-            onChanged={onChanged}
-            requestConfirm={requestConfirm}
-          />
-        ))}
+        {areas.length === 0 ? (
+          <p className="text-sm text-slate-500">No subjects yet. Add Maths or English above.</p>
+        ) : (
+          areas.map((area) => (
+            <details key={area.id} className="rounded-lg border border-slate-200 bg-slate-50 open:bg-white" open>
+              <summary className="cursor-pointer list-none px-3 py-3 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  <span className="font-semibold text-slate-900">{area.name}</span>
+                  {area.code && <span className="ml-2 text-xs text-slate-500">{area.code}</span>}
+                  <span className="ml-2 text-xs text-slate-500">
+                    {area.branchCount} branch{area.branchCount === 1 ? "" : "es"}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  disabled={busy || area.branchCount > 0}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    requestConfirm({
+                      title: "Delete subject",
+                      message: `Delete subject "${area.name}"? Only empty subjects can be deleted.`,
+                      confirmLabel: "Delete",
+                      onConfirm: () => deleteArea(area),
+                    });
+                  }}
+                  className="text-xs rounded border border-rose-300 text-rose-700 bg-white px-2 py-1 disabled:opacity-40"
+                >
+                  Delete subject
+                </button>
+              </summary>
+              <div className="border-t border-slate-100 px-3 pb-3 space-y-3">
+                {area.branches.length === 0 ? (
+                  <p className="text-sm text-slate-500 pt-2">No branches yet. Add one above.</p>
+                ) : (
+                  area.branches.map((b) => {
+                    const full = subjectsById.get(b.id);
+                    if (!full) {
+                      return (
+                        <p key={b.id} className="text-sm text-slate-500 pt-2">
+                          {b.name}
+                        </p>
+                      );
+                    }
+                    return (
+                      <SubjectCard
+                        key={full.id}
+                        subject={full}
+                        areas={areas}
+                        busy={busy}
+                        setBusy={setBusy}
+                        setErr={setErr}
+                        onChanged={onChanged}
+                        requestConfirm={requestConfirm}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            </details>
+          ))
+        )}
+
+        {subjects.some((s) => !s.areaId) && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-medium text-amber-900">Unassigned branches</p>
+            <p className="text-xs text-amber-800 mt-1">
+              Assign each branch to Maths or English using Rename / Set subject.
+            </p>
+            <div className="mt-2 space-y-2">
+              {subjects
+                .filter((s) => !s.areaId)
+                .map((full) => (
+                  <SubjectCard
+                    key={full.id}
+                    subject={full}
+                    areas={areas}
+                    busy={busy}
+                    setBusy={setBusy}
+                    setErr={setErr}
+                    onChanged={onChanged}
+                    requestConfirm={requestConfirm}
+                  />
+                ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -440,6 +623,7 @@ function SubjectsPanel({
 
 function SubjectCard({
   subject,
+  areas = [],
   busy,
   setBusy,
   setErr,
@@ -447,16 +631,19 @@ function SubjectCard({
   requestConfirm,
 }: {
   subject: CurriculumSubject;
+  areas?: SubjectAreaRow[];
   busy: boolean;
   setBusy: (v: boolean) => void;
   setErr: (e: string | null) => void;
   onChanged: () => Promise<void>;
   requestConfirm: RequestConfirm;
 }) {
+  const [section, setSection] = useState<"learn" | "test">("test");
   const [levelName, setLevelName] = useState("");
   const [editingSubject, setEditingSubject] = useState(false);
   const [editingSubjectName, setEditingSubjectName] = useState(subject.name);
   const [editingSubjectCode, setEditingSubjectCode] = useState(subject.code ?? "");
+  const [editingAreaId, setEditingAreaId] = useState(subject.areaId ?? "");
   const [editingLevelId, setEditingLevelId] = useState<string | null>(null);
   const [editingLevelName, setEditingLevelName] = useState("");
   const [openLevelId, setOpenLevelId] = useState<string | null>(null);
@@ -529,10 +716,14 @@ function SubjectCard({
     setErr(null);
     const r = await api(`/api/v1/admin/subjects/${subject.id}`, {
       method: "PATCH",
-      json: { name: nextName, code: editingSubjectCode.trim() || null },
+      json: {
+        name: nextName,
+        code: editingSubjectCode.trim() || null,
+        areaId: editingAreaId || null,
+      },
     });
     setBusy(false);
-    if (!r.ok) setErr(r.error ?? "Could not rename subject");
+    if (!r.ok) setErr(r.error ?? "Could not rename branch");
     else {
       setEditingSubject(false);
       await onChanged();
@@ -540,9 +731,17 @@ function SubjectCard({
   }
 
   return (
-    <details className="rounded-lg border border-slate-200 open:shadow-sm group">
+    <details className="rounded-lg border border-slate-200 open:shadow-sm group bg-white">
       <summary className="cursor-pointer list-none px-4 py-3 font-medium text-slate-900 flex justify-between items-center hover:bg-slate-50 rounded-lg">
-        <span>{subject.name}{subject.code ? <span className="text-slate-500 font-normal ml-2">({subject.code})</span> : null}</span>
+        <span>
+          {subject.name}
+          {subject.code ? <span className="text-slate-500 font-normal ml-2">({subject.code})</span> : null}
+          {subject.area ? (
+            <span className="ml-2 text-xs font-normal text-slate-500">· {subject.area.name}</span>
+          ) : (
+            <span className="ml-2 text-xs font-normal text-amber-700">· no subject</span>
+          )}
+        </span>
         <span className="inline-flex items-center gap-3">
           <button
             type="button"
@@ -553,10 +752,11 @@ function SubjectCard({
               setEditingSubject(true);
               setEditingSubjectName(subject.name);
               setEditingSubjectCode(subject.code ?? "");
+              setEditingAreaId(subject.areaId ?? "");
             }}
             className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-1 disabled:opacity-50"
           >
-            Rename subject
+            Rename branch
           </button>
           <button
             type="button"
@@ -565,16 +765,16 @@ function SubjectCard({
               e.preventDefault();
               e.stopPropagation();
               requestConfirm({
-                title: "Delete subject permanently",
-                message: `This will permanently delete subject "${subject.name}" and all its levels, chapters, questions, and student history. This cannot be undone.`,
+                title: "Delete branch permanently",
+                message: `This will permanently delete branch "${subject.name}" and all its levels, topics, questions, and student history. This cannot be undone.`,
                 requireTypedText: subject.name,
-                confirmLabel: "Delete subject",
+                confirmLabel: "Delete branch",
                 onConfirm: () => removeSubject(true),
               });
             }}
             className="text-xs rounded border border-rose-500 bg-white text-rose-800 px-2 py-1 disabled:opacity-50"
           >
-            Delete subject
+            Delete branch
           </button>
           <span className="text-slate-400 text-sm group-open:hidden">Expand</span>
           <span className="text-slate-400 text-sm hidden group-open:inline">Collapse</span>
@@ -584,7 +784,7 @@ function SubjectCard({
         {editingSubject ? (
           <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 flex flex-wrap gap-2 items-end">
             <label className="text-sm">
-              <span className="block text-slate-600 mb-1">Subject name</span>
+              <span className="block text-slate-600 mb-1">Branch name</span>
               <input
                 className="rounded border border-slate-300 px-2 py-1.5 text-sm min-w-[200px]"
                 value={editingSubjectName}
@@ -601,6 +801,24 @@ function SubjectCard({
                 disabled={busy}
               />
             </label>
+            {areas.length > 0 && (
+              <label className="text-sm">
+                <span className="block text-slate-600 mb-1">Subject</span>
+                <select
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm min-w-[140px]"
+                  value={editingAreaId}
+                  onChange={(e) => setEditingAreaId(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="">Unassigned</option>
+                  {areas.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button
               type="button"
               disabled={busy || !editingSubjectName.trim()}
@@ -616,6 +834,7 @@ function SubjectCard({
                 setEditingSubject(false);
                 setEditingSubjectName(subject.name);
                 setEditingSubjectCode(subject.code ?? "");
+                setEditingAreaId(subject.areaId ?? "");
               }}
               className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-50"
             >
@@ -623,6 +842,32 @@ function SubjectCard({
             </button>
           </div>
         ) : null}
+
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setSection("learn")}
+            className={`rounded-lg px-4 py-2 text-sm font-medium ${
+              section === "learn" ? "bg-indigo-600 text-white" : "border border-slate-300 bg-white text-slate-700"
+            }`}
+          >
+            Learn
+          </button>
+          <button
+            type="button"
+            onClick={() => setSection("test")}
+            className={`rounded-lg px-4 py-2 text-sm font-medium ${
+              section === "test" ? "bg-slate-900 text-white" : "border border-slate-300 bg-white text-slate-700"
+            }`}
+          >
+            Test
+          </button>
+        </div>
+
+        {section === "learn" ? (
+          <BranchLearnPanel subject={subject} busy={busy} setBusy={setBusy} setErr={setErr} onChanged={onChanged} />
+        ) : (
+          <>
         <form onSubmit={addLevel} className="mt-3 flex flex-wrap gap-2 items-end">
           <input
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm flex-1 min-w-[200px]"
@@ -738,8 +983,167 @@ function SubjectCard({
             );
           })}
         </ol>
+          </>
+        )}
       </div>
     </details>
+  );
+}
+
+function BranchLearnPanel({
+  subject,
+  busy,
+  setBusy,
+  setErr,
+  onChanged,
+}: {
+  subject: CurriculumSubject;
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  setErr: (e: string | null) => void;
+  onChanged: () => Promise<void>;
+}) {
+  const topics = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    for (const t of subject.topics ?? []) {
+      map.set(t.id, { id: t.id, name: t.name });
+    }
+    for (const lvl of subject.levels) {
+      for (const p of lvl.levelTopicParticipations) {
+        map.set(p.topic.id, p.topic);
+      }
+    }
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [subject]);
+
+  const [lessons, setLessons] = useState<
+    Record<string, { title: string; body: string } | null>
+  >({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+
+  useEffect(() => {
+    void (async () => {
+      const next: Record<string, { title: string; body: string } | null> = {};
+      await Promise.all(
+        topics.map(async (t) => {
+          const r = await api<{
+            lesson: { title: string; body: string } | null;
+          }>(`/api/v1/admin/topics/${t.id}/lesson`);
+          next[t.id] = r.ok ? r.data?.lesson ?? null : null;
+        })
+      );
+      setLessons(next);
+    })();
+  }, [topics]);
+
+  async function saveLesson(topicId: string, topicName: string) {
+    if (!title.trim() || !body.trim()) {
+      setErr("Lesson title and body are required");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/topics/${topicId}/lesson`, {
+      method: "PUT",
+      json: {
+        title: title.trim() || `Learn: ${topicName}`,
+        body: body.trim(),
+      },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not save lesson");
+    else {
+      setEditingId(null);
+      await onChanged();
+      setLessons((prev) => ({
+        ...prev,
+        [topicId]: { title: title.trim(), body: body.trim() },
+      }));
+    }
+  }
+
+  return (
+    <div className="mt-4">
+      <p className="text-sm text-slate-600">
+        Write short lessons for topics in this branch. Students see these in Learn / Fix these topics.
+      </p>
+      {topics.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">
+          No topics yet. Open Test, add levels and topics, then come back to Learn.
+        </p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {topics.map((t) => {
+            const lesson = lessons[t.id];
+            const editing = editingId === t.id;
+            return (
+              <li key={t.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-slate-900">{t.name}</p>
+                    <p className="text-xs text-slate-500">
+                      {lesson ? `Lesson: ${lesson.title}` : "No lesson yet"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs rounded border border-slate-300 bg-white px-2 py-1"
+                    disabled={busy}
+                    onClick={() => {
+                      setEditingId(t.id);
+                      setTitle(lesson?.title ?? `Learn: ${t.name}`);
+                      setBody(
+                        lesson?.body ??
+                          `Key points for ${t.name}:\n\n1. ...\n2. ...\n3. ...`
+                      );
+                    }}
+                  >
+                    {lesson ? "Edit lesson" : "Add lesson"}
+                  </button>
+                </div>
+                {editing && (
+                  <div className="mt-3 space-y-2">
+                    <input
+                      className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      disabled={busy}
+                    />
+                    <textarea
+                      className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                      rows={8}
+                      value={body}
+                      onChange={(e) => setBody(e.target.value)}
+                      disabled={busy}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void saveLesson(t.id, t.name)}
+                        className="rounded bg-indigo-600 text-white px-3 py-1.5 text-sm disabled:opacity-50"
+                      >
+                        Save lesson
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setEditingId(null)}
+                        className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

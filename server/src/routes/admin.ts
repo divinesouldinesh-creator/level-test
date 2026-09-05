@@ -31,7 +31,40 @@ import {
 import { sendBrandingError } from "../utils/brandingErrors.js";
 
 const router = Router();
-router.use(authMiddleware, requireRole("ADMIN"));
+router.use(authMiddleware, requireRole("ADMIN", "OFFICE"));
+
+/** Office may use people/attendance admin APIs only; curriculum stays ADMIN-only. */
+function officeMayAccessAdminRoute(method: string, path: string): boolean {
+  const p = path.split("?")[0] || "/";
+  const prefixes = [
+    "/students",
+    "/teachers",
+    "/attendance",
+    "/generate-students",
+    "/upload-students",
+    "/save-students",
+  ];
+  if (prefixes.some((prefix) => p === prefix || p.startsWith(`${prefix}/`))) {
+    return true;
+  }
+  // Class list for filters / student create — read only
+  if (p === "/classes" || p.startsWith("/classes/")) {
+    return method.toUpperCase() === "GET";
+  }
+  return false;
+}
+
+router.use((req, res, next) => {
+  if (req.user?.role === "ADMIN") {
+    next();
+    return;
+  }
+  if (req.user?.role === "OFFICE" && officeMayAccessAdminRoute(req.method, req.path)) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Forbidden" });
+});
 
 const uploadDir = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -353,12 +386,20 @@ router.post("/classes/:classId/subjects", async (req, res) => {
 
 router.post("/classes/:classId/subjects/create", async (req, res) => {
   const classId = req.params.classId;
-  const schema = z.object({ name: z.string().min(1), code: z.string().optional() });
+  const schema = z.object({
+    name: z.string().min(1),
+    code: z.string().optional(),
+    areaId: z.string().optional(),
+  });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
   const created = await prisma.$transaction(async (tx) => {
     const subject = await tx.subject.create({
-      data: { name: p.data.name.trim(), code: p.data.code?.trim() || undefined },
+      data: {
+        name: p.data.name.trim(),
+        code: p.data.code?.trim() || undefined,
+        areaId: p.data.areaId || undefined,
+      },
     });
     await tx.classSubject.create({
       data: { classId, subjectId: subject.id },
@@ -408,6 +449,7 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
           p.data.code !== undefined
             ? p.data.code.trim() || null
             : sourceSubject.code,
+        areaId: sourceSubject.areaId,
       },
     });
     await tx.classSubject.create({
@@ -485,11 +527,137 @@ router.delete("/classes/:classId/subjects/:subjectId", async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Subject areas (Maths / English) → branches (skill subjects) ---
+router.get("/subject-areas", async (_req, res) => {
+  const areas = await prisma.subjectArea.findMany({
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    include: {
+      subjects: {
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, code: true },
+      },
+      _count: { select: { subjects: true } },
+    },
+  });
+  res.json(
+    areas.map((a) => ({
+      id: a.id,
+      name: a.name,
+      code: a.code,
+      sortOrder: a.sortOrder,
+      branchCount: a._count.subjects,
+      branches: a.subjects,
+    }))
+  );
+});
+
+router.post("/subject-areas", async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1),
+    code: z.string().optional(),
+    sortOrder: z.number().int().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const name = p.data.name.trim();
+  const dup = await prisma.subjectArea.findFirst({
+    where: { name: { equals: name, mode: "insensitive" } },
+  });
+  if (dup) return res.status(400).json({ error: "Subject already exists" });
+  const agg = await prisma.subjectArea.aggregate({ _max: { sortOrder: true } });
+  const area = await prisma.subjectArea.create({
+    data: {
+      name,
+      code: p.data.code?.trim() || undefined,
+      sortOrder: p.data.sortOrder ?? (agg._max.sortOrder ?? -1) + 1,
+    },
+  });
+  res.json(area);
+});
+
+router.patch("/subject-areas/:areaId", async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1).optional(),
+    code: z.string().nullable().optional(),
+    sortOrder: z.number().int().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const existing = await prisma.subjectArea.findUnique({ where: { id: req.params.areaId } });
+  if (!existing) return res.status(404).json({ error: "Subject not found" });
+  if (p.data.name) {
+    const next = p.data.name.trim();
+    const dup = await prisma.subjectArea.findFirst({
+      where: {
+        name: { equals: next, mode: "insensitive" },
+        id: { not: existing.id },
+      },
+    });
+    if (dup) return res.status(400).json({ error: "Subject name already exists" });
+  }
+  const area = await prisma.subjectArea.update({
+    where: { id: existing.id },
+    data: {
+      ...(p.data.name !== undefined ? { name: p.data.name.trim() } : {}),
+      ...(p.data.code !== undefined ? { code: p.data.code?.trim() || null } : {}),
+      ...(p.data.sortOrder !== undefined ? { sortOrder: p.data.sortOrder } : {}),
+    },
+  });
+  res.json(area);
+});
+
+router.delete("/subject-areas/:areaId", async (req, res) => {
+  const areaId = req.params.areaId;
+  const count = await prisma.subject.count({ where: { areaId } });
+  if (count > 0) {
+    return res.status(400).json({
+      error: "Move or delete all branches under this subject first",
+    });
+  }
+  try {
+    await prisma.subjectArea.delete({ where: { id: areaId } });
+  } catch {
+    return res.status(404).json({ error: "Subject not found" });
+  }
+  res.json({ ok: true });
+});
+
+router.post("/subject-areas/:areaId/branches", async (req, res) => {
+  const areaId = req.params.areaId;
+  const schema = z.object({
+    name: z.string().min(1),
+    code: z.string().optional(),
+    classId: z.string().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const area = await prisma.subjectArea.findUnique({ where: { id: areaId } });
+  if (!area) return res.status(404).json({ error: "Subject not found" });
+
+  const created = await prisma.$transaction(async (tx) => {
+    const subject = await tx.subject.create({
+      data: {
+        name: p.data.name.trim(),
+        code: p.data.code?.trim() || undefined,
+        areaId,
+      },
+    });
+    if (p.data.classId) {
+      await tx.classSubject.create({
+        data: { classId: p.data.classId, subjectId: subject.id },
+      });
+    }
+    return subject;
+  });
+  res.json(created);
+});
+
 // --- Subjects / levels / topics ---
 router.get("/subjects", async (_req, res) => {
   const list = await prisma.subject.findMany({
     orderBy: { name: "asc" },
     include: {
+      area: { select: { id: true, name: true, code: true } },
       classSubjects: {
         include: {
           schoolClass: {
@@ -624,10 +792,22 @@ router.delete("/topics/:topicId/lesson", async (req, res) => {
 });
 
 router.post("/subjects", async (req, res) => {
-  const schema = z.object({ name: z.string(), code: z.string().optional() });
+  const schema = z.object({
+    name: z.string(),
+    code: z.string().optional(),
+    areaId: z.string().optional(),
+  });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
-  res.json(await prisma.subject.create({ data: p.data }));
+  res.json(
+    await prisma.subject.create({
+      data: {
+        name: p.data.name.trim(),
+        code: p.data.code?.trim() || undefined,
+        areaId: p.data.areaId || undefined,
+      },
+    })
+  );
 });
 
 router.post("/subjects/:subjectId/levels", async (req, res) => {
@@ -721,6 +901,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
   const schema = z.object({
     name: z.string().optional(),
     code: z.string().nullable().optional(),
+    areaId: z.string().nullable().optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -747,6 +928,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
     data: {
       ...(p.data.name !== undefined ? { name: nextName } : {}),
       ...(p.data.code !== undefined ? { code: nextCode } : {}),
+      ...(p.data.areaId !== undefined ? { areaId: p.data.areaId } : {}),
     },
   });
   res.json(s);
@@ -1654,6 +1836,93 @@ router.delete("/teachers/:teacherId", async (req, res) => {
   const teacher = await prisma.teacher.findUnique({ where: { id: teacherId } });
   if (!teacher) return res.status(404).json({ error: "Teacher not found" });
   await prisma.user.delete({ where: { id: teacher.userId } });
+  res.json({ ok: true });
+});
+
+// --- Office staff (ADMIN only; not in OFFICE allowlist) ---
+
+router.post("/office-users", async (req, res) => {
+  const schema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+    fullName: z.string().min(1),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const email = p.data.email.toLowerCase();
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) return res.status(409).json({ error: "Email already in use" });
+  try {
+    const passwordHash = await bcrypt.hash(p.data.password, 10);
+    const user = await prisma.user.create({
+      data: {
+        email,
+        passwordHash,
+        role: "OFFICE",
+        office: { create: { fullName: p.data.fullName.trim() } },
+      },
+      include: { office: true },
+    });
+    res.json({ id: user.office!.id });
+  } catch (err) {
+    console.error("create office user failed", err);
+    res.status(500).json({
+      error: "Could not create office user. Ensure the Office DB migration has been applied.",
+    });
+  }
+});
+
+router.get("/office-users", async (_req, res) => {
+  try {
+    const rows = await prisma.office.findMany({
+      include: { user: { select: { email: true } } },
+      orderBy: { fullName: "asc" },
+    });
+    res.json({
+      officeUsers: rows.map((o) => ({
+        id: o.id,
+        userId: o.userId,
+        fullName: o.fullName,
+        email: o.user.email ?? "",
+      })),
+    });
+  } catch (err) {
+    console.error("list office users failed", err);
+    res.status(500).json({
+      error: "Could not load office users. Ensure the Office DB migration has been applied.",
+    });
+  }
+});
+
+router.patch("/office-users/:officeId/reset-password", async (req, res) => {
+  const p = resetPasswordSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const officeId = req.params.officeId;
+  const office = await prisma.office.findUnique({
+    where: { id: officeId },
+    include: { user: true },
+  });
+  if (!office) return res.status(404).json({ error: "Office user not found" });
+  const passwordHash = await bcrypt.hash(p.data.password, 10);
+  await prisma.user.update({
+    where: { id: office.userId },
+    data: { passwordHash },
+  });
+  res.json({
+    password: p.data.password,
+    officeUser: {
+      id: office.id,
+      fullName: office.fullName,
+      email: office.user.email,
+    },
+  });
+});
+
+router.delete("/office-users/:officeId", async (req, res) => {
+  const officeId = req.params.officeId;
+  const office = await prisma.office.findUnique({ where: { id: officeId } });
+  if (!office) return res.status(404).json({ error: "Office user not found" });
+  await prisma.user.delete({ where: { id: office.userId } });
   res.json({ ok: true });
 });
 

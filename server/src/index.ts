@@ -6,10 +6,7 @@ import path from "path";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import teacherRoutes from "./routes/teacher.js";
-import teacherSyllabusRoutes from "./routes/teacherSyllabus.js";
 import studentRoutes from "./routes/student.js";
-import syllabusAdminRoutes from "./routes/syllabusAdmin.js";
-import syllabusStudentRoutes from "./routes/syllabusStudent.js";
 import settingsRoutes from "./routes/settings.js";
 
 const app = express();
@@ -54,11 +51,8 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/admin", adminRoutes);
-app.use("/api/v1/admin/syllabus", syllabusAdminRoutes);
 app.use("/api/v1/teacher", teacherRoutes);
-app.use("/api/v1/teacher/syllabus", teacherSyllabusRoutes);
 app.use("/api/v1/student", studentRoutes);
-app.use("/api/v1/student/syllabus", syllabusStudentRoutes);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);

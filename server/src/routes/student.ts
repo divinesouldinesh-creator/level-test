@@ -12,7 +12,7 @@ import {
   getChallengeForStudent,
   submitDailyChallenge,
 } from "../services/dailyChallenge.js";
-import { getEngagementSummary, performCheckIn } from "../services/studentEngagement.js";
+import { getEngagementSummary, performCheckIn, recordDailyPractice } from "../services/studentEngagement.js";
 import {
   getMasteryDetail,
   getMasterySession,
@@ -302,15 +302,65 @@ router.get("/subjects", async (req, res) => {
   }
   const classSubjects = await prisma.classSubject.findMany({
     where: { classId: user.student.classId },
-    include: { subject: true },
+    include: {
+      subject: {
+        include: { area: { select: { id: true, name: true, code: true } } },
+      },
+    },
   });
   res.json(
     classSubjects.map((cs) => ({
       id: cs.subject.id,
       name: cs.subject.name,
       code: cs.subject.code,
+      areaId: cs.subject.areaId,
+      areaName: cs.subject.area?.name ?? null,
+      areaCode: cs.subject.area?.code ?? null,
     }))
   );
+});
+
+router.get("/subject-areas", async (req, res) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.sub },
+    include: { student: true },
+  });
+  if (!user?.student) {
+    res.status(400).json({ error: "Not a student" });
+    return;
+  }
+  const classSubjects = await prisma.classSubject.findMany({
+    where: { classId: user.student.classId },
+    include: {
+      subject: {
+        include: { area: true },
+      },
+    },
+  });
+  const byArea = new Map<
+    string,
+    { id: string; name: string; code: string | null; branches: { id: string; name: string; code: string | null }[] }
+  >();
+  for (const cs of classSubjects) {
+    const area = cs.subject.area;
+    const areaKey = area?.id ?? "__none__";
+    const areaName = area?.name ?? "Other";
+    const areaCode = area?.code ?? null;
+    if (!byArea.has(areaKey)) {
+      byArea.set(areaKey, {
+        id: areaKey,
+        name: areaName,
+        code: areaCode,
+        branches: [],
+      });
+    }
+    byArea.get(areaKey)!.branches.push({
+      id: cs.subject.id,
+      name: cs.subject.name,
+      code: cs.subject.code,
+    });
+  }
+  res.json([...byArea.values()].sort((a, b) => a.name.localeCompare(b.name)));
 });
 
 router.get("/attendance/report", async (req, res) => {
@@ -737,6 +787,8 @@ router.post("/tests/:testId/submit", async (req, res) => {
       topicScores,
     });
 
+    const practice = await recordDailyPractice(prisma, studentRecordId);
+
     const topicWise = await Promise.all(
       [...topicScores.entries()].map(async ([topicId, v]) => {
         const topic = await prisma.topic.findUnique({ where: { id: topicId } });
@@ -762,6 +814,8 @@ router.post("/tests/:testId/submit", async (req, res) => {
       topicWise,
       strongTopics,
       weakTopics,
+      practiceStreak: practice.practiceStreak,
+      practicedToday: true,
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
