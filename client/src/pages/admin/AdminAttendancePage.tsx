@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters";
+import { AttendanceMarkingStatusPanel } from "../../components/attendance/AttendanceMarkingStatusPanel";
 import { ClassAttendanceSummaryPanel } from "../../components/ClassAttendanceSummaryPanel";
 import {
   type AttendanceRange,
@@ -28,10 +29,10 @@ type AttendanceReport = {
   records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
 };
 
-type AttendanceTab = "individual" | "class";
+type AttendanceTab = "marking" | "individual" | "class";
 
 export function AdminAttendancePage() {
-  const [tab, setTab] = useState<AttendanceTab>("individual");
+  const [tab, setTab] = useState<AttendanceTab>("marking");
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -154,12 +155,13 @@ export function AdminAttendancePage() {
     <div>
       <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
       <p className="text-slate-600 mt-1">
-        Check one student&apos;s attendance, or see the whole class summary and certificates.
+        See who has marked today, check one student, or view a class summary.
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
         {(
           [
+            ["marking", "Marking status"],
             ["individual", "Individual"],
             ["class", "Class"],
           ] as const
@@ -168,7 +170,7 @@ export function AdminAttendancePage() {
             key={id}
             type="button"
             onClick={() => setTab(id)}
-            className={`flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm font-medium transition-colors min-h-[44px] ${
+            className={`flex-1 min-w-[120px] rounded-lg px-4 py-2.5 text-sm font-medium transition-colors min-h-[44px] ${
               tab === id
                 ? "bg-white text-brand-900 shadow-sm border border-slate-200"
                 : "text-slate-600 hover:text-slate-900"
@@ -179,7 +181,9 @@ export function AdminAttendancePage() {
         ))}
       </div>
 
-      {tab === "individual" ? (
+      {tab === "marking" ? (
+        <AttendanceMarkingStatusPanel />
+      ) : tab === "individual" ? (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Individual student</h2>

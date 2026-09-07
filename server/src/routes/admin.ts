@@ -349,6 +349,100 @@ router.get("/attendance/summary", async (req, res) => {
   res.json(summary);
 });
 
+function attendanceDateOnly(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const d = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+function staffDisplayName(user: {
+  email: string | null;
+  teacher: { fullName: string } | null;
+  admin: { fullName: string } | null;
+  office: { fullName: string } | null;
+} | null): string | null {
+  if (!user) return null;
+  return (
+    user.teacher?.fullName ??
+    user.admin?.fullName ??
+    user.office?.fullName ??
+    user.email ??
+    null
+  );
+}
+
+/** Which class sections have attendance marked for a calendar day. */
+router.get("/attendance/marking-status", async (req, res) => {
+  const dateInput = typeof req.query.date === "string" ? req.query.date : "";
+  const date = attendanceDateOnly(dateInput);
+  if (!date) {
+    res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    return;
+  }
+
+  const [classes, sessions] = await Promise.all([
+    prisma.schoolClass.findMany({
+      include: { sections: { orderBy: { name: "asc" } } },
+      orderBy: { name: "asc" },
+    }),
+    prisma.attendanceSession.findMany({
+      where: { date },
+      include: {
+        takenBy: {
+          select: {
+            email: true,
+            teacher: { select: { fullName: true } },
+            admin: { select: { fullName: true } },
+            office: { select: { fullName: true } },
+          },
+        },
+        _count: { select: { entries: true } },
+      },
+    }),
+  ]);
+
+  const sessionByKey = new Map(
+    sessions.map((s) => [`${s.classId}:${s.sectionId}`, s] as const)
+  );
+
+  const rows: {
+    classId: string;
+    className: string;
+    sectionId: string;
+    sectionName: string;
+    marked: boolean;
+    markedBy: string | null;
+    markedAt: string | null;
+    entryCount: number;
+  }[] = [];
+
+  for (const c of classes) {
+    for (const sec of c.sections) {
+      const session = sessionByKey.get(`${c.id}:${sec.id}`);
+      rows.push({
+        classId: c.id,
+        className: c.name,
+        sectionId: sec.id,
+        sectionName: sec.name,
+        marked: !!session,
+        markedBy: session ? staffDisplayName(session.takenBy) : null,
+        markedAt: session?.updatedAt?.toISOString() ?? null,
+        entryCount: session?._count.entries ?? 0,
+      });
+    }
+  }
+
+  const markedCount = rows.filter((r) => r.marked).length;
+  res.json({
+    date: dateInput,
+    totalSections: rows.length,
+    markedCount,
+    unmarkedCount: rows.length - markedCount,
+    rows,
+  });
+});
+
 router.post("/classes", async (req, res) => {
   const schema = z.object({ name: z.string(), grade: z.string().optional() });
   const p = schema.safeParse(req.body);
