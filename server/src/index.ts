@@ -62,3 +62,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(PORT, HOST, () => {
   console.log(`API listening on http://${HOST}:${PORT}`);
 });
+
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection", reason);
+});

@@ -5,6 +5,7 @@ import { api } from "../../api";
 import { teacherPortalNav } from "./teacherPortalNav";
 import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters";
 import { ClassAttendanceSummaryPanel } from "../../components/ClassAttendanceSummaryPanel";
+import { AttendanceMonthCalendar } from "../../components/attendance/AttendanceMonthCalendar";
 import {
   type AttendanceRange,
   academicYearStartIso,
@@ -44,7 +45,7 @@ export function TeacherAttendancePage() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => todayIso());
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
@@ -70,6 +71,7 @@ export function TeacherAttendancePage() {
     sectionName: string;
   } | null>(null);
   const [attendanceRefresh, setAttendanceRefresh] = useState(0);
+  const [calendarRefresh, setCalendarRefresh] = useState(0);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameSaving, setRenameSaving] = useState(false);
@@ -210,6 +212,7 @@ export function TeacherAttendancePage() {
       return;
     }
     setMessage("Attendance saved.");
+    setCalendarRefresh((n) => n + 1);
   }
 
   async function addStudent(e: React.FormEvent) {
@@ -348,30 +351,30 @@ export function TeacherAttendancePage() {
           <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Mark attendance</h2>
-              <p className="mt-1 text-sm text-slate-600">Choose class, section and date, then save.</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Green days are already marked. Amber weekdays still need attendance.
+              </p>
             </div>
             {classSectionSelectors}
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="text-sm">
-                <span className="block text-slate-600 mb-1">Date</span>
-                <input
-                  type="date"
-                  className="w-full rounded-lg border px-3 py-2"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                />
-              </label>
-              <div className="flex items-end">
-                <button
-                  type="button"
-                  className="w-full rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
-                  onClick={() => void saveAttendance()}
-                  disabled={saving || !classId || !sectionId || rows.length === 0}
-                >
-                  {saving ? "Saving..." : "Save attendance"}
-                </button>
-              </div>
+            <div>
+              <p className="text-sm text-slate-600 mb-2">Date</p>
+              <AttendanceMonthCalendar
+                classId={classId}
+                sectionId={sectionId}
+                selectedDate={date}
+                onSelectDate={setDate}
+                refreshKey={calendarRefresh}
+                disabled={!classId || !sectionId}
+              />
             </div>
+            <button
+              type="button"
+              className="w-full rounded-lg bg-indigo-600 text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 min-h-[44px]"
+              onClick={() => void saveAttendance()}
+              disabled={saving || !classId || !sectionId || rows.length === 0}
+            >
+              {saving ? "Saving..." : "Save attendance"}
+            </button>
             <textarea
               className="w-full rounded-lg border px-3 py-2 text-sm"
               rows={2}

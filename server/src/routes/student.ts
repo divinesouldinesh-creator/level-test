@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { prisma } from "../lib/prisma.js";
+import { prisma, isDatabaseUnreachable } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { pickQuestionsForTest } from "../services/testGenerator.js";
 import { bandFromPercentage, applyAttemptResults } from "../services/resultAnalysis.js";
@@ -27,28 +27,31 @@ const router = Router();
 router.use(authMiddleware, requireRole("STUDENT"));
 
 async function requireStudent(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { student: true },
-  });
-  return user?.student ?? null;
+  return prisma.student.findUnique({ where: { userId } });
+}
+
+function sendRouteError(res: import("express").Response, error: unknown, fallback: string) {
+  console.error(error);
+  if (isDatabaseUnreachable(error)) {
+    res.status(503).json({ error: "Database is unreachable. Try again in a moment." });
+    return;
+  }
+  res.status(500).json({ error: fallback });
 }
 
 router.get("/home", async (req, res) => {
-  const student = await requireStudent(req.user!.sub);
-  if (!student) return res.status(400).json({ error: "Not a student" });
+  try {
+    const student = await requireStudent(req.user!.sub);
+    if (!student) return res.status(400).json({ error: "Not a student" });
 
-  const [engagement, challenge, masteryQueue] = await Promise.all([
-    getEngagementSummary(prisma, student.id),
-    getOrCreateTodayChallenge(prisma, student.id, student.classId),
-    listMasteryQueue(prisma, student.id, student.classId),
-  ]);
+    const engagement = await getEngagementSummary(prisma, student.id);
 
-  res.json({
-    engagement,
-    dailyChallenge: challenge,
-    masteryQueue,
-  });
+    res.json({
+      engagement,
+    });
+  } catch (error) {
+    sendRouteError(res, error, "Server error");
+  }
 });
 
 router.post("/check-in", async (req, res) => {
@@ -292,16 +295,13 @@ router.post("/mastery/sessions/:sessionId/submit", async (req, res) => {
 });
 
 router.get("/subjects", async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: true },
-  });
-  if (!user?.student) {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) {
     res.status(400).json({ error: "Not a student" });
     return;
   }
   const classSubjects = await prisma.classSubject.findMany({
-    where: { classId: user.student.classId },
+    where: { classId: student.classId },
     include: {
       subject: {
         include: { area: { select: { id: true, name: true, code: true } } },
@@ -321,16 +321,13 @@ router.get("/subjects", async (req, res) => {
 });
 
 router.get("/subject-areas", async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: true },
-  });
-  if (!user?.student) {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) {
     res.status(400).json({ error: "Not a student" });
     return;
   }
   const classSubjects = await prisma.classSubject.findMany({
-    where: { classId: user.student.classId },
+    where: { classId: student.classId },
     include: {
       subject: {
         include: { area: true },
@@ -383,17 +380,14 @@ router.get("/attendance/report", async (req, res) => {
 });
 
 router.get("/subjects/:subjectId/levels", async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: true },
-  });
-  if (!user?.student) {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) {
     res.status(400).json({ error: "Not a student" });
     return;
   }
   const subjectId = req.params.subjectId;
   const allowed = await prisma.classSubject.findFirst({
-    where: { classId: user.student.classId, subjectId },
+    where: { classId: student.classId, subjectId },
   });
   if (!allowed) {
     res.status(403).json({ error: "Subject not available for your class" });
@@ -410,7 +404,7 @@ router.get("/subjects/:subjectId/levels", async (req, res) => {
   });
 
   const progress = await prisma.studentProgress.findMany({
-    where: { studentId: user.student.id, subjectId },
+    where: { studentId: student.id, subjectId },
   });
   const progressByLevel = new Map(progress.map((p) => [p.levelId, p]));
 
@@ -452,17 +446,14 @@ router.post("/tests/start", async (req, res) => {
   }
   const { subjectId, levelId } = parsed.data;
 
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: true },
-  });
-  if (!user?.student) {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) {
     res.status(400).json({ error: "Not a student" });
     return;
   }
 
   const allowed = await prisma.classSubject.findFirst({
-    where: { classId: user.student.classId, subjectId },
+    where: { classId: student.classId, subjectId },
   });
   if (!allowed) {
     res.status(403).json({ error: "Subject not allowed" });
@@ -477,7 +468,7 @@ router.post("/tests/start", async (req, res) => {
 
   const existing = await prisma.test.findFirst({
     where: {
-      studentId: user.student.id,
+      studentId: student.id,
       subjectId,
       levelId,
       status: "IN_PROGRESS",
@@ -500,7 +491,7 @@ router.post("/tests/start", async (req, res) => {
 
   const test = await prisma.test.create({
     data: {
-      studentId: user.student.id,
+      studentId: student.id,
       subjectId,
       levelId,
       status: "IN_PROGRESS",
@@ -536,82 +527,90 @@ function stripQuestion(q: {
 }
 
 router.get("/tests/:testId", async (req, res) => {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.sub },
-    include: { student: true },
-  });
-  if (!user?.student) {
-    res.status(400).json({ error: "Not a student" });
-    return;
-  }
-
-  const test = await prisma.test.findFirst({
-    where: { id: req.params.testId, studentId: user.student.id },
-    include: {
-      subject: true,
-      level: true,
-      testQuestions: {
-        orderBy: { orderIndex: "asc" },
-        include: { question: { include: { topic: true } } },
-      },
-      attempts: true,
-    },
-  });
-
-  if (!test) {
-    res.status(404).json({ error: "Test not found" });
-    return;
-  }
-
-  if (test.status === "COMPLETED" && test.attempts[0]) {
-    const attempt = test.attempts[0];
-    const answers = await prisma.studentAnswer.findMany({
-      where: { testAttemptId: attempt.id },
-      include: { question: { include: { topic: true } } },
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.sub },
+      include: { student: true },
     });
-
-    const topicMap = new Map<string, { correct: number; total: number; name: string }>();
-    for (const a of answers) {
-      const tid = a.question.topicId;
-      const cur = topicMap.get(tid) ?? { correct: 0, total: 0, name: a.question.topic.name };
-      cur.total += 1;
-      if (a.isCorrect) cur.correct += 1;
-      topicMap.set(tid, cur);
+    if (!user?.student) {
+      res.status(400).json({ error: "Not a student" });
+      return;
     }
 
-    const topicWise = [...topicMap.entries()].map(([topicId, v]) => ({
-      topicId,
-      topicName: v.name,
-      correct: v.correct,
-      total: v.total,
-      percentage: v.total ? Math.round((100 * v.correct) / v.total) : 0,
-    }));
+    const test = await prisma.test.findFirst({
+      where: { id: req.params.testId, studentId: user.student.id },
+      include: {
+        subject: true,
+        level: true,
+        testQuestions: {
+          orderBy: { orderIndex: "asc" },
+          include: { question: { include: { topic: true } } },
+        },
+        attempts: true,
+      },
+    });
 
-    const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
-    const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);
+    if (!test) {
+      res.status(404).json({ error: "Test not found" });
+      return;
+    }
+
+    if (test.status === "COMPLETED" && test.attempts[0]) {
+      const attempt = test.attempts[0];
+      const answers = await prisma.studentAnswer.findMany({
+        where: { testAttemptId: attempt.id },
+        include: { question: { include: { topic: true } } },
+      });
+
+      const topicMap = new Map<string, { correct: number; total: number; name: string }>();
+      for (const a of answers) {
+        const tid = a.question.topicId;
+        const cur = topicMap.get(tid) ?? { correct: 0, total: 0, name: a.question.topic.name };
+        cur.total += 1;
+        if (a.isCorrect) cur.correct += 1;
+        topicMap.set(tid, cur);
+      }
+
+      const topicWise = [...topicMap.entries()].map(([topicId, v]) => ({
+        topicId,
+        topicName: v.name,
+        correct: v.correct,
+        total: v.total,
+        percentage: v.total ? Math.round((100 * v.correct) / v.total) : 0,
+      }));
+
+      const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
+      const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);
+
+      res.json({
+        status: "completed",
+        score: attempt.score,
+        maxScore: attempt.maxScore,
+        percentage: attempt.percentage,
+        band: attempt.band,
+        suggestedNextLevelId: attempt.suggestedNextLevelId,
+        topicWise,
+        strongTopics,
+        weakTopics,
+        subjectId: test.subjectId,
+        levelId: test.levelId,
+        subject: test.subject.name,
+        level: test.level.name,
+      });
+      return;
+    }
 
     res.json({
-      status: "completed",
-      score: attempt.score,
-      maxScore: attempt.maxScore,
-      percentage: attempt.percentage,
-      band: attempt.band,
-      suggestedNextLevelId: attempt.suggestedNextLevelId,
-      topicWise,
-      strongTopics,
-      weakTopics,
+      status: "in_progress",
+      subjectId: test.subjectId,
+      levelId: test.levelId,
       subject: test.subject.name,
       level: test.level.name,
+      questions: test.testQuestions.map((tq) => stripQuestion(tq.question)),
     });
-    return;
+  } catch (error) {
+    sendRouteError(res, error, "Failed to load test");
   }
-
-  res.json({
-    status: "in_progress",
-    subject: test.subject.name,
-    level: test.level.name,
-    questions: test.testQuestions.map((tq) => stripQuestion(tq.question)),
-  });
 });
 
 router.get("/tests/:testId/review", async (req, res) => {
@@ -814,6 +813,8 @@ router.post("/tests/:testId/submit", async (req, res) => {
       topicWise,
       strongTopics,
       weakTopics,
+      subjectId: test.subjectId,
+      levelId: test.levelId,
       practiceStreak: practice.practiceStreak,
       practicedToday: true,
     });

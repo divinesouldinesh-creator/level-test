@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -41,27 +41,59 @@ type ReviewPayload = {
 
 type PracticeState = { picks: number[]; solved: boolean };
 
+type TestResult = {
+  score: number;
+  maxScore: number;
+  percentage: number;
+  band: string;
+  topicWise: { topicName: string; correct: number; total: number; percentage: number }[];
+  strongTopics: string[];
+  weakTopics: string[];
+  suggestedNextLevelId: string | null;
+  subjectId: string;
+  levelId: string;
+};
+
 function progressKey(testId?: string): string | null {
   return testId ? `student-test-progress:${testId}` : null;
 }
 
+function BackToTests({ subjectId }: { subjectId: string | null }) {
+  const to = subjectId ? `/student/part/${subjectId}/test` : "/student/subjects";
+  return (
+    <Link to={to} className="text-brand-600 text-sm font-medium">
+      ← Back to tests
+    </Link>
+  );
+}
+
+function parseTestResult(data: Record<string, unknown>): TestResult | null {
+  const subjectId = typeof data.subjectId === "string" ? data.subjectId : "";
+  const levelId = typeof data.levelId === "string" ? data.levelId : "";
+  if (!subjectId || !levelId) return null;
+  return {
+    score: data.score as number,
+    maxScore: data.maxScore as number,
+    percentage: data.percentage as number,
+    band: data.band as string,
+    topicWise: (data.topicWise as TestResult["topicWise"]) ?? [],
+    strongTopics: (data.strongTopics as string[]) ?? [],
+    weakTopics: (data.weakTopics as string[]) ?? [],
+    suggestedNextLevelId: (data.suggestedNextLevelId as string | null) ?? null,
+    subjectId,
+    levelId,
+  };
+}
+
 export function StudentTest() {
   const { testId } = useParams();
+  const navigate = useNavigate();
   const { logout, auth } = useAuth();
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState<Q[]>([]);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [idx, setIdx] = useState(0);
-  const [done, setDone] = useState<null | {
-    score: number;
-    maxScore: number;
-    percentage: number;
-    band: string;
-    topicWise: { topicName: string; correct: number; total: number; percentage: number }[];
-    strongTopics: string[];
-    weakTopics: string[];
-    suggestedNextLevelId: string | null;
-  }>(null);
+  const [done, setDone] = useState<TestResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -71,6 +103,8 @@ export function StudentTest() {
   const [reviewErr, setReviewErr] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<"wrong" | "all">("wrong");
   const [practice, setPractice] = useState<Record<string, PracticeState>>({});
+  const [startingLevel, setStartingLevel] = useState<string | null>(null);
+  const [subjectId, setSubjectId] = useState<string | null>(null);
 
   useEffect(() => {
     function blockCopyHotkeys(e: KeyboardEvent) {
@@ -125,33 +159,50 @@ export function StudentTest() {
   }, [testId, questions, answers, idx, done]);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setDone(null);
+    setQuestions([]);
+    setAnswers({});
+    setIdx(0);
+    setErr(null);
+    setReviewOpen(false);
+    setReviewItems(null);
+    setReviewErr(null);
+    setReviewFilter("wrong");
+    setPractice({});
+    setStartingLevel(null);
+    setSubjectId(null);
+
     void (async () => {
       const r = await api<unknown>(`/api/v1/student/tests/${testId}`);
+      if (cancelled) return;
       setLoading(false);
       if (!r.ok) {
         setErr(r.error ?? "Failed");
         return;
       }
       const data = r.data as Record<string, unknown>;
+      if (typeof data.subjectId === "string") setSubjectId(data.subjectId);
       if (data.status === "completed") {
         const key = progressKey(testId);
         if (key) localStorage.removeItem(key);
-        setDone({
-          score: data.score as number,
-          maxScore: data.maxScore as number,
-          percentage: data.percentage as number,
-          band: data.band as string,
-          topicWise: (data.topicWise as { topicName: string; correct: number; total: number; percentage: number }[]) ?? [],
-          strongTopics: (data.strongTopics as string[]) ?? [],
-          weakTopics: (data.weakTopics as string[]) ?? [],
-          suggestedNextLevelId: (data.suggestedNextLevelId as string | null) ?? null,
-        });
+        const result = parseTestResult(data);
+        if (!result) {
+          setErr("Could not load results");
+          return;
+        }
+        setDone(result);
         return;
       }
       const qs = (data.questions as Q[]) ?? [];
       setQuestions(qs);
       setIdx(0);
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [testId]);
 
   const current = questions[idx];
@@ -199,16 +250,7 @@ export function StudentTest() {
     }
     setSubmitting(true);
     setErr(null);
-    const r = await api<{
-      score: number;
-      maxScore: number;
-      percentage: number;
-      band: string;
-      topicWise: { topicName: string; correct: number; total: number; percentage: number }[];
-      strongTopics: string[];
-      weakTopics: string[];
-      suggestedNextLevelId: string | null;
-    }>(`/api/v1/student/tests/${testId}/submit`, {
+    const r = await api<Record<string, unknown>>(`/api/v1/student/tests/${testId}/submit`, {
       method: "POST",
       json: {
         answers: questions.map((q) => ({ questionId: q.id, selectedOption: answers[q.id]! })),
@@ -219,9 +261,31 @@ export function StudentTest() {
       setErr(r.error ?? "Submit failed");
       return;
     }
+    const result = parseTestResult(r.data);
+    if (!result) {
+      setErr("Could not load results");
+      return;
+    }
     const key = progressKey(testId);
     if (key) localStorage.removeItem(key);
-    setDone(r.data);
+    setSubjectId(result.subjectId);
+    setDone(result);
+  }
+
+  async function startLevel(levelId: string) {
+    if (!done) return;
+    setStartingLevel(levelId);
+    setErr(null);
+    const r = await api<{ testId: string }>("/api/v1/student/tests/start", {
+      method: "POST",
+      json: { subjectId: done.subjectId, levelId },
+    });
+    setStartingLevel(null);
+    if (!r.ok || !r.data?.testId) {
+      setErr(r.error ?? "Could not start test");
+      return;
+    }
+    navigate(`/student/test/${r.data.testId}`);
   }
 
   if (loading) {
@@ -244,7 +308,8 @@ export function StudentTest() {
         nav={[...studentNav]}
         sidebarKicker="Student"
       >
-        <h1 className="text-2xl font-bold">Your result</h1>
+        <BackToTests subjectId={done.subjectId || subjectId} />
+        <h1 className="text-2xl font-bold mt-2">Your result</h1>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div className="rounded-xl bg-white border p-4 shadow-sm">
             <p className="text-sm text-slate-500">Score</p>
@@ -285,8 +350,12 @@ export function StudentTest() {
             <p className="text-rose-800 mt-1">{done.weakTopics.length ? done.weakTopics.join(", ") : "—"}</p>
           </div>
         </div>
-        {done.suggestedNextLevelId && (
-          <p className="mt-4 text-brand-800 font-medium">Next level unlocked — open Levels to continue.</p>
+        {done.suggestedNextLevelId ? (
+          <p className="mt-4 text-brand-800 font-medium">Next level unlocked. Start it now, or retest this level.</p>
+        ) : done.percentage > 80 ? (
+          <p className="mt-4 text-slate-600">This is the highest level. You can retest it any time.</p>
+        ) : (
+          <p className="mt-4 text-slate-600">Score above 80% to unlock the next level, or retest this one.</p>
         )}
 
         {!reviewOpen ? (
@@ -511,12 +580,27 @@ export function StudentTest() {
           </div>
         )}
 
-        <Link
-          to="/student/subjects"
-          className="mt-8 inline-flex rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] items-center"
-        >
-          Back to subjects
-        </Link>
+        {err && <p className="text-red-600 mt-4">{err}</p>}
+        <div className="mt-8 flex flex-col sm:flex-row gap-3">
+          {done.suggestedNextLevelId ? (
+            <button
+              type="button"
+              disabled={startingLevel !== null}
+              onClick={() => void startLevel(done.suggestedNextLevelId!)}
+              className="rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-60"
+            >
+              {startingLevel === done.suggestedNextLevelId ? "Starting…" : "Go to next level"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={startingLevel !== null}
+            onClick={() => void startLevel(done.levelId)}
+            className="rounded-xl border border-slate-300 bg-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-60"
+          >
+            {startingLevel === done.levelId ? "Starting…" : "Retest this level"}
+          </button>
+        </div>
       </AppShell>
     );
   }
@@ -525,14 +609,12 @@ export function StudentTest() {
     return (
       <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[...studentNav]}
         sidebarKicker="Student">
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+        <BackToTests subjectId={subjectId} />
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="font-semibold text-amber-900">No questions available for this test.</p>
           <p className="text-amber-800 text-sm mt-1">
             {err ?? "This test does not have question rows yet. Please go back and start a new test."}
           </p>
-          <Link to="/student/subjects" className="mt-3 inline-block text-brand-700 font-medium">
-            Back to subjects
-          </Link>
         </div>
       </AppShell>
     );
@@ -543,7 +625,8 @@ export function StudentTest() {
   return (
     <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[...studentNav]}
         sidebarKicker="Student">
-      <div className="mb-4">
+      <BackToTests subjectId={subjectId} />
+      <div className="mb-4 mt-4">
         <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
           <div className="h-full bg-brand-500 transition-all" style={{ width: `${progress}%` }} />
         </div>

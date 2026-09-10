@@ -9,11 +9,13 @@ export const XP_TOPIC_PRACTICE = 10;
 export const XP_TOPIC_MASTERY = 25;
 
 export async function ensureEngagement(prisma: PrismaClient, studentId: string) {
-  return prisma.studentEngagement.upsert({
-    where: { studentId },
-    create: { studentId },
-    update: {},
-  });
+  const existing = await prisma.studentEngagement.findUnique({ where: { studentId } });
+  if (existing) return existing;
+  try {
+    return await prisma.studentEngagement.create({ data: { studentId } });
+  } catch {
+    return prisma.studentEngagement.findUniqueOrThrow({ where: { studentId } });
+  }
 }
 
 function nextStreak(lastDay: string | null | undefined, today: string, current: number): number {

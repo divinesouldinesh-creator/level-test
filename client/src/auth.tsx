@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api, getToken, setToken } from "./api";
 
-type Role = "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE";
+export type Role = "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE";
 
 export type AuthState = {
   role: Role | null;
@@ -16,11 +16,27 @@ export type AuthState = {
 const Ctx = createContext<{
   auth: AuthState;
   refresh: () => Promise<void>;
+  applySession: (role: Role, profile: AuthState["profile"]) => void;
   logout: () => void;
 } | null>(null);
 
+function profileFromLogin(
+  p: { fullName?: string; studentId?: string; className?: string } | null
+): AuthState["profile"] {
+  if (!p) return null;
+  return {
+    fullName: p.fullName,
+    studentId: p.studentId,
+    className: p.className,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<AuthState>({ role: null, loading: true, profile: null });
+
+  const applySession = useCallback((role: Role, profile: AuthState["profile"]) => {
+    setAuth({ role, loading: false, profile: profileFromLogin(profile) });
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!getToken()) {
@@ -40,9 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuth({
       role: r.data.role,
       loading: false,
-      profile: p
-        ? { fullName: p.fullName, studentId: p.studentId, className: p.className }
-        : null,
+      profile: profileFromLogin(p),
     });
   }, []);
 
@@ -55,7 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuth({ role: null, loading: false, profile: null });
   }, []);
 
-  return <Ctx.Provider value={{ auth, refresh, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ auth, refresh, applySession, logout }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {

@@ -99,53 +99,92 @@ export async function listMasteryQueue(
     where: { classId },
     include: { subject: true },
   });
+  if (classSubjects.length === 0) return [];
 
-  const items: MasteryQueueItem[] = [];
-
-  for (const cs of classSubjects) {
-    const levels = await prisma.level.findMany({
-      where: { subjectId: cs.subjectId },
+  const subjectIds = classSubjects.map((cs) => cs.subjectId);
+  const [allLevels, allProgress] = await Promise.all([
+    prisma.level.findMany({
+      where: { subjectId: { in: subjectIds } },
       orderBy: { order: "asc" },
       select: { id: true, name: true, order: true, subjectId: true },
-    });
-    if (levels.length === 0) continue;
+    }),
+    prisma.studentProgress.findMany({ where: { studentId } }),
+  ]);
 
-    const progress = await prisma.studentProgress.findMany({
-      where: { studentId, subjectId: cs.subjectId },
-    });
+  const levelsBySubject = new Map<string, LevelRow[]>();
+  for (const level of allLevels) {
+    const list = levelsBySubject.get(level.subjectId) ?? [];
+    list.push(level);
+    levelsBySubject.set(level.subjectId, list);
+  }
+
+  const currentBySubject = new Map<string, LevelRow>();
+  for (const cs of classSubjects) {
+    const levels = levelsBySubject.get(cs.subjectId) ?? [];
     const progressByLevel = new Map(
-      progress.map((p) => [p.levelId, { unlocked: p.unlocked, lastPercentage: p.lastPercentage }])
+      allProgress
+        .filter((p) => p.subjectId === cs.subjectId)
+        .map((p) => [p.levelId, { unlocked: p.unlocked, lastPercentage: p.lastPercentage }])
     );
     const level = currentLevelForSubject(levels, progressByLevel);
+    if (level) currentBySubject.set(cs.subjectId, level);
+  }
+
+  const currentLevels = [...currentBySubject.values()];
+  if (currentLevels.length === 0) return [];
+
+  const levelIds = [...new Set(currentLevels.map((l) => l.id))];
+  const parts = await prisma.levelTopicParticipation.findMany({
+    where: { levelId: { in: levelIds } },
+    include: { topic: { include: { lesson: true } } },
+  });
+  if (parts.length === 0) return [];
+
+  const topicIds = [...new Set(parts.map((p) => p.topicId))];
+  const [perfs, counts, existingMasteries] = await Promise.all([
+    prisma.topicPerformance.findMany({
+      where: { studentId, topicId: { in: topicIds } },
+    }),
+    prisma.question.groupBy({
+      by: ["levelId", "topicId"],
+      where: { levelId: { in: levelIds }, topicId: { in: topicIds } },
+      _count: { _all: true },
+    }),
+    prisma.topicMastery.findMany({
+      where: { studentId, levelId: { in: levelIds }, topicId: { in: topicIds } },
+    }),
+  ]);
+
+  const perfByTopic = new Map(perfs.map((p) => [p.topicId, p]));
+  const countByLevelTopic = new Map(counts.map((c) => [`${c.levelId}:${c.topicId}`, c._count._all]));
+  let masteryByLevelTopic = new Map(existingMasteries.map((m) => [`${m.levelId}:${m.topicId}`, m]));
+
+  const toCreate: {
+    studentId: string;
+    topicId: string;
+    subjectId: string;
+    levelId: string;
+    status: TopicMasteryStatus;
+  }[] = [];
+  const toDemote: string[] = [];
+
+  type WorkItem = {
+    part: (typeof parts)[number];
+    subjectId: string;
+    subjectName: string;
+    level: LevelRow;
+    qCount: number;
+    accuracy: number | null;
+    key: string;
+  };
+  const work: WorkItem[] = [];
+
+  for (const cs of classSubjects) {
+    const level = currentBySubject.get(cs.subjectId);
     if (!level) continue;
-
-    const parts = await prisma.levelTopicParticipation.findMany({
-      where: { levelId: level.id },
-      include: { topic: { include: { lesson: true } } },
-    });
-    if (parts.length === 0) continue;
-
-    const topicIds = parts.map((p) => p.topicId);
-    const [perfs, counts, existingMasteries] = await Promise.all([
-      prisma.topicPerformance.findMany({
-        where: { studentId, topicId: { in: topicIds } },
-      }),
-      prisma.question.groupBy({
-        by: ["topicId"],
-        where: { levelId: level.id, topicId: { in: topicIds } },
-        _count: { _all: true },
-      }),
-      prisma.topicMastery.findMany({
-        where: { studentId, levelId: level.id, topicId: { in: topicIds } },
-      }),
-    ]);
-
-    const perfByTopic = new Map(perfs.map((p) => [p.topicId, p]));
-    const countByTopic = new Map(counts.map((c) => [c.topicId, c._count._all]));
-    const masteryByTopic = new Map(existingMasteries.map((m) => [m.topicId, m]));
-
     for (const part of parts) {
-      const qCount = countByTopic.get(part.topicId) ?? 0;
+      if (part.levelId !== level.id) continue;
+      const qCount = countByLevelTopic.get(`${level.id}:${part.topicId}`) ?? 0;
       if (qCount < MIN_QUESTIONS_FOR_PATH) continue;
 
       const perf = perfByTopic.get(part.topicId);
@@ -154,48 +193,68 @@ export async function listMasteryQueue(
       const accuracy = attempted > 0 ? correct / attempted : null;
       const isWeak =
         accuracy != null && attempted >= MIN_ATTEMPTS_FOR_WEAK && accuracy < WEAK_ACCURACY;
-
-      let mastery = masteryByTopic.get(part.topicId) ?? null;
+      const key = `${level.id}:${part.topicId}`;
+      const mastery = masteryByLevelTopic.get(key) ?? null;
 
       if (!mastery && isWeak) {
-        mastery = await prisma.topicMastery.create({
-          data: {
-            studentId,
-            topicId: part.topicId,
-            subjectId: cs.subjectId,
-            levelId: level.id,
-            status: TopicMasteryStatus.NEEDS_WORK,
-          },
+        toCreate.push({
+          studentId,
+          topicId: part.topicId,
+          subjectId: cs.subjectId,
+          levelId: level.id,
+          status: TopicMasteryStatus.NEEDS_WORK,
         });
+      } else if (mastery && mastery.status === TopicMasteryStatus.MASTERED && isWeak) {
+        toDemote.push(mastery.id);
       }
 
-      // Demote mastered topics that became weak again.
-      if (mastery && mastery.status === TopicMasteryStatus.MASTERED && isWeak) {
-        mastery = await prisma.topicMastery.update({
-          where: { id: mastery.id },
-          data: { status: TopicMasteryStatus.NEEDS_WORK, masteredAt: null },
-        });
-      }
-
-      if (!mastery) continue;
-      if (mastery.status === TopicMasteryStatus.MASTERED) continue;
-
-      const learnDone = !!mastery.learnCompletedAt;
-      items.push({
-        masteryId: mastery.id,
-        topicId: part.topicId,
-        topicName: part.topic.name,
+      work.push({
+        part,
         subjectId: cs.subjectId,
         subjectName: cs.subject.name,
-        levelId: level.id,
-        levelName: level.name,
-        status: mastery.status,
-        accuracyPct: accuracy != null ? Math.round(accuracy * 1000) / 10 : null,
-        questionCount: qCount,
-        hasLesson: !!part.topic.lesson,
-        nextStep: nextStepFor(mastery.status, learnDone),
+        level,
+        qCount,
+        accuracy,
+        key,
       });
     }
+  }
+
+  if (toCreate.length) {
+    await prisma.topicMastery.createMany({ data: toCreate, skipDuplicates: true });
+  }
+  if (toDemote.length) {
+    await prisma.topicMastery.updateMany({
+      where: { id: { in: toDemote } },
+      data: { status: TopicMasteryStatus.NEEDS_WORK, masteredAt: null },
+    });
+  }
+  if (toCreate.length || toDemote.length) {
+    const refreshed = await prisma.topicMastery.findMany({
+      where: { studentId, levelId: { in: levelIds }, topicId: { in: topicIds } },
+    });
+    masteryByLevelTopic = new Map(refreshed.map((m) => [`${m.levelId}:${m.topicId}`, m]));
+  }
+
+  const items: MasteryQueueItem[] = [];
+  for (const row of work) {
+    const mastery = masteryByLevelTopic.get(row.key);
+    if (!mastery) continue;
+    if (mastery.status === TopicMasteryStatus.MASTERED) continue;
+    items.push({
+      masteryId: mastery.id,
+      topicId: row.part.topicId,
+      topicName: row.part.topic.name,
+      subjectId: row.subjectId,
+      subjectName: row.subjectName,
+      levelId: row.level.id,
+      levelName: row.level.name,
+      status: mastery.status,
+      accuracyPct: row.accuracy != null ? Math.round(row.accuracy * 1000) / 10 : null,
+      questionCount: row.qCount,
+      hasLesson: !!row.part.topic.lesson,
+      nextStep: nextStepFor(mastery.status, !!mastery.learnCompletedAt),
+    });
   }
 
   items.sort((a, b) => {

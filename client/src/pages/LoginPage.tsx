@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, setToken } from "../api";
-import { useAuth } from "../auth";
+import { useAuth, type Role } from "../auth";
 
 export function LoginPage() {
   const nav = useNavigate();
-  const { refresh } = useAuth();
+  const { applySession } = useAuth();
   const [mode, setMode] = useState<"student" | "staff">("student");
   const [studentId, setStudentId] = useState("");
   const [email, setEmail] = useState("");
@@ -24,7 +24,13 @@ export function LoginPage() {
       mode === "student"
         ? { studentId: sid, password: pwd }
         : { email: em, password: pwd };
-    const r = await api<{ token: string; user: { role: string } }>("/api/v1/auth/login", {
+    const r = await api<{
+      token: string;
+      user: {
+        role: Role;
+        profile: { fullName?: string; studentId?: string; className?: string } | null;
+      };
+    }>("/api/v1/auth/login", {
       method: "POST",
       json: body,
     });
@@ -34,7 +40,7 @@ export function LoginPage() {
       return;
     }
     setToken(r.data.token);
-    await refresh();
+    applySession(r.data.user.role, r.data.user.profile ?? null);
     const role = r.data.user.role;
     if (role === "STUDENT") nav("/student");
     else if (role === "TEACHER") nav("/teacher");

@@ -178,6 +178,7 @@ router.get("/attendance", async (req, res) => {
     classId,
     sectionId,
     date: dateInput,
+    marked: Boolean(session),
     notes: session?.notes ?? "",
     students: students.map((s) => ({
       id: s.id,
@@ -186,6 +187,41 @@ router.get("/attendance", async (req, res) => {
       status: statusMap.get(s.id)?.status ?? "PRESENT",
       remark: statusMap.get(s.id)?.remark ?? "",
     })),
+  });
+});
+
+router.get("/attendance/marked-dates", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId : "";
+  const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
+  const fromInput = typeof req.query.from === "string" ? req.query.from : "";
+  const toInput = typeof req.query.to === "string" ? req.query.to : "";
+  if (!classId || !sectionId || !fromInput || !toInput) {
+    res.status(400).json({ error: "classId, sectionId, from and to are required" });
+    return;
+  }
+  const from = dateOnly(fromInput);
+  const to = dateOnly(toInput);
+  if (!from || !to) {
+    res.status(400).json({ error: "from and to must be YYYY-MM-DD" });
+    return;
+  }
+  if (from.getTime() > to.getTime()) {
+    res.status(400).json({ error: "from must be on or before to" });
+    return;
+  }
+
+  const sessions = await prisma.attendanceSession.findMany({
+    where: { classId, sectionId, date: { gte: from, lte: to } },
+    select: { date: true },
+    orderBy: { date: "asc" },
+  });
+
+  res.json({
+    classId,
+    sectionId,
+    from: fromInput,
+    to: toInput,
+    dates: sessions.map((s) => s.date.toISOString().slice(0, 10)),
   });
 });
 
