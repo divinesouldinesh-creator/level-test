@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
@@ -13,7 +13,6 @@ import {
 export function StudentSubjectAreaPage() {
   const { area: areaParam } = useParams();
   const { logout, auth } = useAuth();
-  const navigate = useNavigate();
   const [subjects, setSubjects] = useState<SubjectWithArea[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,25 +50,12 @@ export function StudentSubjectAreaPage() {
         ← Subjects
       </Link>
       <h1 className="mt-2 text-2xl font-bold text-slate-900">{title}</h1>
-      <p className="mt-1 text-slate-600">Fix weak topics or open a part to Learn and Test.</p>
+      <p className="mt-1 text-slate-600">Open a part to Learn and Test.</p>
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
       {loading ? (
         <p className="mt-6 text-slate-500">Loading…</p>
       ) : (
         <ul className="mt-6 space-y-3">
-          <li>
-            <button
-              type="button"
-              onClick={() => navigate(`/student/subjects/${encodeURIComponent(areaParam)}/fix`)}
-              className="flex w-full items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 text-left shadow-sm hover:border-rose-400"
-            >
-              <div>
-                <p className="font-semibold text-slate-900">Fix these topics</p>
-                <p className="mt-0.5 text-sm text-slate-600">Practice topics you missed on tests</p>
-              </div>
-              <span className="text-slate-400">→</span>
-            </button>
-          </li>
           {subjects.length === 0 ? (
             <li className="rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm text-slate-600">
               No {title} parts assigned to your class yet.
