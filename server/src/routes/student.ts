@@ -22,12 +22,15 @@ import {
   submitMasterySession,
 } from "../services/topicMastery.js";
 import { MasterySessionKind } from "@prisma/client";
+import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateStudentMastery } from "../lib/memoryCache.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("STUDENT"));
 
 async function requireStudent(userId: string) {
-  return prisma.student.findUnique({ where: { userId } });
+  return cacheGetOrSet(CACHE_KEY.studentByUser(userId), CACHE_TTL_MS.studentProfile, () =>
+    prisma.student.findUnique({ where: { userId } })
+  );
 }
 
 function sendRouteError(res: import("express").Response, error: unknown, fallback: string) {
@@ -160,7 +163,28 @@ router.post("/daily-challenge/:challengeId/submit", async (req, res) => {
 router.get("/mastery", async (req, res) => {
   const student = await requireStudent(req.user!.sub);
   if (!student) return res.status(400).json({ error: "Not a student" });
-  const queue = await listMasteryQueue(prisma, student.id, student.classId);
+  const raw =
+    typeof req.query.subjectId === "string"
+      ? req.query.subjectId
+      : typeof req.query.subjectIds === "string"
+        ? req.query.subjectIds
+        : "";
+  const subjectIds = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const filterKey = subjectIds.length ? [...subjectIds].sort().join(",") : "all";
+  const queue = await cacheGetOrSet(
+    CACHE_KEY.studentMastery(student.id, filterKey),
+    CACHE_TTL_MS.studentMastery,
+    () =>
+      listMasteryQueue(
+        prisma,
+        student.id,
+        student.classId,
+        subjectIds.length ? { subjectIds } : undefined
+      )
+  );
   res.json({ items: queue });
 });
 
@@ -180,6 +204,7 @@ router.post("/mastery/:masteryId/learn", async (req, res) => {
     if (result.error === "not_found") return res.status(404).json({ error: "Not found" });
     return res.status(400).json({ error: "Already mastered" });
   }
+  invalidateStudentMastery(student.id);
   res.json(result);
 });
 
@@ -291,6 +316,7 @@ router.post("/mastery/sessions/:sessionId/submit", async (req, res) => {
     }
     return res.status(400).json({ error: "Answer every question" });
   }
+  invalidateStudentMastery(student.id);
   res.json(result);
 });
 
@@ -300,24 +326,29 @@ router.get("/subjects", async (req, res) => {
     res.status(400).json({ error: "Not a student" });
     return;
   }
-  const classSubjects = await prisma.classSubject.findMany({
-    where: { classId: student.classId },
-    include: {
-      subject: {
-        include: { area: { select: { id: true, name: true, code: true } } },
-      },
-    },
-  });
-  res.json(
-    classSubjects.map((cs) => ({
-      id: cs.subject.id,
-      name: cs.subject.name,
-      code: cs.subject.code,
-      areaId: cs.subject.areaId,
-      areaName: cs.subject.area?.name ?? null,
-      areaCode: cs.subject.area?.code ?? null,
-    }))
+  const payload = await cacheGetOrSet(
+    CACHE_KEY.studentSubjects(student.classId),
+    CACHE_TTL_MS.catalog,
+    async () => {
+      const classSubjects = await prisma.classSubject.findMany({
+        where: { classId: student.classId },
+        include: {
+          subject: {
+            include: { area: { select: { id: true, name: true, code: true } } },
+          },
+        },
+      });
+      return classSubjects.map((cs) => ({
+        id: cs.subject.id,
+        name: cs.subject.name,
+        code: cs.subject.code,
+        areaId: cs.subject.areaId,
+        areaName: cs.subject.area?.name ?? null,
+        areaCode: cs.subject.area?.code ?? null,
+      }));
+    }
   );
+  res.json(payload);
 });
 
 router.get("/subject-areas", async (req, res) => {
@@ -326,38 +357,45 @@ router.get("/subject-areas", async (req, res) => {
     res.status(400).json({ error: "Not a student" });
     return;
   }
-  const classSubjects = await prisma.classSubject.findMany({
-    where: { classId: student.classId },
-    include: {
-      subject: {
-        include: { area: true },
-      },
-    },
-  });
-  const byArea = new Map<
-    string,
-    { id: string; name: string; code: string | null; branches: { id: string; name: string; code: string | null }[] }
-  >();
-  for (const cs of classSubjects) {
-    const area = cs.subject.area;
-    const areaKey = area?.id ?? "__none__";
-    const areaName = area?.name ?? "Other";
-    const areaCode = area?.code ?? null;
-    if (!byArea.has(areaKey)) {
-      byArea.set(areaKey, {
-        id: areaKey,
-        name: areaName,
-        code: areaCode,
-        branches: [],
+  const payload = await cacheGetOrSet(
+    CACHE_KEY.studentAreas(student.classId),
+    CACHE_TTL_MS.catalog,
+    async () => {
+      const classSubjects = await prisma.classSubject.findMany({
+        where: { classId: student.classId },
+        include: {
+          subject: {
+            include: { area: true },
+          },
+        },
       });
+      const byArea = new Map<
+        string,
+        { id: string; name: string; code: string | null; branches: { id: string; name: string; code: string | null }[] }
+      >();
+      for (const cs of classSubjects) {
+        const area = cs.subject.area;
+        const areaKey = area?.id ?? "__none__";
+        const areaName = area?.name ?? "Other";
+        const areaCode = area?.code ?? null;
+        if (!byArea.has(areaKey)) {
+          byArea.set(areaKey, {
+            id: areaKey,
+            name: areaName,
+            code: areaCode,
+            branches: [],
+          });
+        }
+        byArea.get(areaKey)!.branches.push({
+          id: cs.subject.id,
+          name: cs.subject.name,
+          code: cs.subject.code,
+        });
+      }
+      return [...byArea.values()].sort((a, b) => a.name.localeCompare(b.name));
     }
-    byArea.get(areaKey)!.branches.push({
-      id: cs.subject.id,
-      name: cs.subject.name,
-      code: cs.subject.code,
-    });
-  }
-  res.json([...byArea.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  );
+  res.json(payload);
 });
 
 router.get("/attendance/report", async (req, res) => {
@@ -785,6 +823,7 @@ router.post("/tests/:testId/submit", async (req, res) => {
       percentage,
       topicScores,
     });
+    invalidateStudentMastery(studentRecordId);
 
     const practice = await recordDailyPractice(prisma, studentRecordId);
 

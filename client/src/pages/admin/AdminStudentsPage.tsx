@@ -29,10 +29,14 @@ export function AdminStudentsPage() {
   const [uploadPreview, setUploadPreview] = useState<StudentPreviewRow[]>([]);
 
   const [allStudents, setAllStudents] = useState<StudentListRow[]>([]);
+  const [studentTotal, setStudentTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
   const [classMeta, setClassMeta] = useState<SchoolClassMeta[]>([]);
   const [filterClassId, setFilterClassId] = useState("");
   const [filterSectionId, setFilterSectionId] = useState("");
   const [searchText, setSearchText] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [passwordHints, setPasswordHints] = useState<Record<string, string>>({});
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
@@ -49,22 +53,45 @@ export function AdminStudentsPage() {
     window.setTimeout(() => setToast(null), 4500);
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchText.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchText]);
+
+  const studentQuery = useCallback(
+    (opts?: { all?: boolean; page?: number }) => {
+      const q = new URLSearchParams();
+      if (filterClassId) q.set("classId", filterClassId);
+      if (filterSectionId) q.set("sectionId", filterSectionId);
+      if (debouncedSearch) q.set("q", debouncedSearch);
+      if (opts?.all) q.set("all", "1");
+      else {
+        q.set("page", String(opts?.page ?? page));
+        q.set("pageSize", String(PAGE_SIZE));
+      }
+      return `/api/v1/admin/students?${q}`;
+    },
+    [filterClassId, filterSectionId, debouncedSearch, page]
+  );
+
   const loadStudents = useCallback(async () => {
-    const q = new URLSearchParams();
-    if (filterClassId) q.set("classId", filterClassId);
-    if (filterSectionId) q.set("sectionId", filterSectionId);
-    const path = `/api/v1/admin/students${q.toString() ? `?${q}` : ""}`;
-    const r = await api<{ students: StudentListRow[] }>(path);
+    const r = await api<{ students: StudentListRow[]; total?: number }>(studentQuery());
     if (!r.ok) {
       showToast({ type: "err", message: r.error ?? "Failed to load students" });
       return;
     }
     setAllStudents(r.data?.students ?? []);
-  }, [filterClassId, filterSectionId, showToast]);
+    setStudentTotal(r.data?.total ?? r.data?.students?.length ?? 0);
+  }, [studentQuery, showToast]);
 
   useEffect(() => {
+    if (tab !== "list") return;
     void loadStudents();
-  }, [loadStudents]);
+  }, [loadStudents, tab]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterClassId, filterSectionId, debouncedSearch]);
 
   useEffect(() => {
     setPasswordHints((prev) => {
@@ -109,20 +136,7 @@ export function AdminStudentsPage() {
     return out;
   }, [classMeta, filterClassId]);
 
-  const visibleStudents = useMemo(() => {
-    const q = searchText.trim().toLowerCase();
-    if (!q) return allStudents;
-    return allStudents.filter((s) => {
-      const password = (passwordHints[s.id] ?? s.password ?? "").toLowerCase();
-      return (
-        s.fullName.toLowerCase().includes(q) ||
-        s.username.toLowerCase().includes(q) ||
-        s.classLabel.toLowerCase().includes(q) ||
-        s.sectionName.toLowerCase().includes(q) ||
-        password.includes(q)
-      );
-    });
-  }, [allStudents, passwordHints, searchText]);
+  const visibleStudents = allStudents;
 
   useEffect(() => {
     if (filterSectionId && !filterSectionOptions.find((o) => o.id === filterSectionId)) {
@@ -174,14 +188,24 @@ export function AdminStudentsPage() {
     });
   }
 
-  function printFilteredClass() {
+  async function fetchMatchingStudents() {
+    const r = await api<{ students: StudentListRow[] }>(studentQuery({ all: true }));
+    if (!r.ok) {
+      showToast({ type: "err", message: r.error ?? "Failed to load students" });
+      return [];
+    }
+    return r.data?.students ?? [];
+  }
+
+  async function printFilteredClass() {
+    const rows = await fetchMatchingStudents();
     openPrintWindow(
-      allStudents.map((r) => ({
+      rows.map((r) => ({
         name: r.fullName,
         class: r.classLabel,
         section: r.sectionName,
         username: r.username,
-        password: passwordHints[r.id],
+        password: passwordHints[r.id] ?? r.password,
       })),
       filterClassId || filterSectionId ? "Class login cards" : "All students — login cards"
     );
@@ -401,7 +425,11 @@ export function AdminStudentsPage() {
           onResetPassword={(id) => void resetPassword(id)}
           onRename={(id) => renameStudent(id)}
           onDelete={(id) => void deleteStudent(id)}
-          onPrintClass={() => printFilteredClass()}
+          onPrintClass={() => void printFilteredClass()}
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={studentTotal}
+          onPage={setPage}
         />
       )}
 

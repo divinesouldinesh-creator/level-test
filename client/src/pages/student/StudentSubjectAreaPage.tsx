@@ -10,17 +10,11 @@ import {
   type SubjectWithArea,
 } from "../../subjectAreas";
 
-type MasteryQueueItem = {
-  masteryId: string;
-  subjectId: string;
-};
-
 export function StudentSubjectAreaPage() {
   const { area: areaParam } = useParams();
   const { logout, auth } = useAuth();
   const navigate = useNavigate();
   const [subjects, setSubjects] = useState<SubjectWithArea[]>([]);
-  const [weakCount, setWeakCount] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -28,21 +22,14 @@ export function StudentSubjectAreaPage() {
     if (!areaParam) return;
     void (async () => {
       setLoading(true);
-      const [subRes, mastRes] = await Promise.all([
-        api<SubjectWithArea[]>("/api/v1/student/subjects"),
-        api<{ items: MasteryQueueItem[] }>("/api/v1/student/mastery"),
-      ]);
+      const subRes = await api<SubjectWithArea[]>("/api/v1/student/subjects");
       setLoading(false);
       if (!subRes.ok) {
         setErr(subRes.error ?? "Failed to load subjects");
         return;
       }
       const all = subRes.data ?? [];
-      const inArea = all.filter((s) => subjectMatchesArea(s, areaParam));
-      setSubjects(inArea);
-      const items = mastRes.ok ? mastRes.data?.items ?? [] : [];
-      const subjectIds = new Set(inArea.map((s) => s.id));
-      setWeakCount(items.filter((i) => subjectIds.has(i.subjectId)).length);
+      setSubjects(all.filter((s) => subjectMatchesArea(s, areaParam)));
       setErr(null);
     })();
   }, [areaParam]);
@@ -78,11 +65,7 @@ export function StudentSubjectAreaPage() {
             >
               <div>
                 <p className="font-semibold text-slate-900">Fix these topics</p>
-                <p className="mt-0.5 text-sm text-slate-600">
-                  {weakCount === 0
-                    ? "No weak topics right now"
-                    : `${weakCount} topic${weakCount === 1 ? "" : "s"} to practice`}
-                </p>
+                <p className="mt-0.5 text-sm text-slate-600">Practice topics you missed on tests</p>
               </div>
               <span className="text-slate-400">→</span>
             </button>

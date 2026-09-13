@@ -36,28 +36,44 @@ export function StudentSubjectFixPage() {
   const [items, setItems] = useState<MasteryQueueItem[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [queueLoading, setQueueLoading] = useState(false);
 
   useEffect(() => {
     if (!areaParam) return;
+    let cancelled = false;
     void (async () => {
       setLoading(true);
-      const [subRes, mastRes] = await Promise.all([
-        api<SubjectWithArea[]>("/api/v1/student/subjects"),
-        api<{ items: MasteryQueueItem[] }>("/api/v1/student/mastery"),
-      ]);
-      setLoading(false);
-      if (!subRes.ok || !mastRes.ok) {
-        setErr(subRes.error ?? mastRes.error ?? "Failed to load");
+      const subRes = await api<SubjectWithArea[]>("/api/v1/student/subjects");
+      if (cancelled) return;
+      if (!subRes.ok) {
+        setLoading(false);
+        setErr(subRes.error ?? "Failed to load");
         return;
       }
       const all = subRes.data ?? [];
       setSubjects(all);
-      const inArea = new Set(
-        all.filter((s) => subjectMatchesArea(s, areaParam)).map((s) => s.id)
-      );
-      setItems((mastRes.data?.items ?? []).filter((i) => inArea.has(i.subjectId)));
+      setLoading(false);
+      const inArea = all.filter((s) => subjectMatchesArea(s, areaParam)).map((s) => s.id);
+      if (inArea.length === 0) {
+        setItems([]);
+        setErr(null);
+        return;
+      }
+      setQueueLoading(true);
+      const q = inArea.length ? `?subjectIds=${encodeURIComponent(inArea.join(","))}` : "";
+      const mastRes = await api<{ items: MasteryQueueItem[] }>(`/api/v1/student/mastery${q}`);
+      if (cancelled) return;
+      setQueueLoading(false);
+      if (!mastRes.ok) {
+        setErr(mastRes.error ?? "Failed to load");
+        return;
+      }
+      setItems((mastRes.data?.items ?? []).filter((i) => inArea.includes(i.subjectId)));
       setErr(null);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [areaParam]);
 
   if (!areaParam) {
@@ -82,7 +98,7 @@ export function StudentSubjectFixPage() {
       <h1 className="mt-2 text-2xl font-bold text-slate-900">Fix these topics</h1>
       <p className="mt-1 text-slate-600">Weak topics in {title} — practice until you master them.</p>
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
-      {loading ? (
+      {loading || queueLoading ? (
         <p className="mt-6 text-slate-500">Loading…</p>
       ) : items.length === 0 ? (
         <p className="mt-6 rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600">

@@ -93,10 +93,14 @@ function nextStepFor(status: TopicMasteryStatus, learnDone: boolean): MasteryQue
 export async function listMasteryQueue(
   prisma: PrismaClient,
   studentId: string,
-  classId: string
+  classId: string,
+  opts?: { subjectIds?: string[] }
 ): Promise<MasteryQueueItem[]> {
   const classSubjects = await prisma.classSubject.findMany({
-    where: { classId },
+    where: {
+      classId,
+      ...(opts?.subjectIds?.length ? { subjectId: { in: opts.subjectIds } } : {}),
+    },
     include: { subject: true },
   });
   if (classSubjects.length === 0) return [];
@@ -136,7 +140,9 @@ export async function listMasteryQueue(
   const levelIds = [...new Set(currentLevels.map((l) => l.id))];
   const parts = await prisma.levelTopicParticipation.findMany({
     where: { levelId: { in: levelIds } },
-    include: { topic: { include: { lesson: true } } },
+    include: {
+      topic: { select: { id: true, name: true, lesson: { select: { id: true } } } },
+    },
   });
   if (parts.length === 0) return [];
 

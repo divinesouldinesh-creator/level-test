@@ -1,5 +1,3 @@
-import * as XLSX from "xlsx";
-
 export type CredentialExportRow = {
   name: string;
   class: string;
@@ -32,7 +30,8 @@ export function downloadCredentialsCsv(rows: CredentialExportRow[], baseFilename
   URL.revokeObjectURL(url);
 }
 
-export function downloadCredentialsXlsx(rows: CredentialExportRow[], baseFilename: string) {
+export async function downloadCredentialsXlsx(rows: CredentialExportRow[], baseFilename: string) {
+  const XLSX = await import("xlsx");
   const sheetData = rows.map((r) => ({
     Name: r.name,
     Class: r.class,

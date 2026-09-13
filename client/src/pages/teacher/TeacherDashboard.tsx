@@ -47,6 +47,13 @@ type SearchStudent = {
   className: string;
 };
 
+type StudentsPayload = {
+  students: StudentRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export function TeacherDashboard() {
   const { logout, auth } = useAuth();
   const [classes, setClasses] = useState<ClassWithSections[]>([]);
@@ -114,10 +121,10 @@ export function TeacherDashboard() {
       const query = `?${qClass}${qLevel}${qStatus}subjectId=${encodeURIComponent(subjectId)}`;
       const [w, s] = await Promise.all([
         api<{ weakest: TopicWeak[] }>(`/api/v1/teacher/analytics/weak-topics${query}`),
-        api<StudentRow[]>(`/api/v1/teacher/analytics/students${query}`),
+        api<StudentsPayload>(`/api/v1/teacher/analytics/students${query}`),
       ]);
       if (w.ok && w.data?.weakest) setWeak(w.data.weakest);
-      if (s.ok && s.data) setStudents(s.data);
+      if (s.ok && s.data) setStudents(s.data.students ?? []);
     })();
   }, [classId, levelId, status, subjectId]);
 

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, mediaUrl } from "../../api";
-import * as XLSX from "xlsx";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 
 type TopicRow = { id: string; name: string; levelId: string | null };
@@ -533,7 +532,8 @@ export function AdminQuestionBankPage() {
     if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
   }
 
-  function downloadQuestionTemplate() {
+  async function downloadQuestionTemplate() {
+    const XLSX = await import("xlsx");
     const rows = [
       ["question", "optionA", "optionB", "optionC", "optionD", "answer", "difficulty"],
       [
@@ -982,7 +982,7 @@ export function AdminQuestionBankPage() {
           </p>
           <button
             type="button"
-            onClick={downloadQuestionTemplate}
+            onClick={() => void downloadQuestionTemplate()}
             className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm"
           >
             Download sample template (Excel)

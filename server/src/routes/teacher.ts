@@ -14,6 +14,7 @@ import {
 } from "../services/studentAccounts.js";
 import { updateStudentNameSchema } from "../schemas/student.js";
 import { addIstDays, istDayKey, istDayUtcRange, istInclusiveDayRangeUtc, previousIstDayKey } from "../services/engagementCalendar.js";
+import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet } from "../lib/memoryCache.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("TEACHER"));
@@ -54,19 +55,20 @@ async function topicIdsForAnalyticsFilter(subjectId?: string, levelId?: string):
 }
 
 router.get("/classes", async (_req, res) => {
-  const classes = await prisma.schoolClass.findMany({
-    include: { sections: true, _count: { select: { students: true } } },
-    orderBy: { name: "asc" },
-  });
-  res.json(
-    classes.map((c) => ({
+  const payload = await cacheGetOrSet(CACHE_KEY.teacherClasses, CACHE_TTL_MS.teacherClasses, async () => {
+    const classes = await prisma.schoolClass.findMany({
+      include: { sections: true, _count: { select: { students: true } } },
+      orderBy: { name: "asc" },
+    });
+    return classes.map((c) => ({
       id: c.id,
       name: c.name,
       grade: c.grade,
       sections: c.sections.map((s) => ({ id: s.id, name: s.name })),
       studentCount: c._count.students,
-    }))
-  );
+    }));
+  });
+  res.json(payload);
 });
 
 router.get("/sections/:sectionId/students", async (req, res) => {
@@ -373,15 +375,17 @@ router.get("/students/search", async (req, res) => {
 });
 
 router.get("/subjects", async (_req, res) => {
-  const subjects = await prisma.subject.findMany({
-    orderBy: { name: "asc" },
-    select: {
-      id: true,
-      name: true,
-      code: true,
-      levels: { orderBy: { order: "asc" }, select: { id: true, name: true, order: true } },
-    },
-  });
+  const subjects = await cacheGetOrSet(CACHE_KEY.teacherSubjects, CACHE_TTL_MS.catalog, () =>
+    prisma.subject.findMany({
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        levels: { orderBy: { order: "asc" }, select: { id: true, name: true, order: true } },
+      },
+    })
+  );
   res.json(subjects);
 });
 
@@ -482,55 +486,64 @@ router.get("/analytics/students", async (req, res) => {
   const subjectId = req.query.subjectId as string | undefined;
   const levelId = req.query.levelId as string | undefined;
   const status = req.query.status as string | undefined; // RED | YELLOW | GREEN
+  const studentId = typeof req.query.studentId === "string" && req.query.studentId ? req.query.studentId : undefined;
+  const page = Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number.parseInt(String(req.query.pageSize ?? "50"), 10) || 50));
+  const skip = (page - 1) * pageSize;
+  const statusFilter = status && status !== "ALL" ? status : undefined;
+  const studentWhere = {
+    ...(classId ? { classId } : {}),
+    ...(studentId ? { id: studentId } : {}),
+  };
 
-  const students = await prisma.student.findMany({
-    where: classId ? { classId } : undefined,
-    include: {
-      schoolClass: true,
-      user: { select: { studentLoginId: true } },
-    },
-    orderBy: { fullName: "asc" },
-  });
+  const studentSelect = {
+    id: true,
+    fullName: true,
+    schoolClass: { select: { name: true } },
+    user: { select: { studentLoginId: true } },
+  } as const;
+  const paginateInDb = !statusFilter && !studentId;
+
+  const [counted, students] = paginateInDb
+    ? await Promise.all([
+        prisma.student.count({ where: studentWhere }),
+        prisma.student.findMany({
+          where: studentWhere,
+          select: studentSelect,
+          orderBy: { fullName: "asc" },
+          skip,
+          take: pageSize,
+        }),
+      ])
+    : [
+        0,
+        await prisma.student.findMany({
+          where: studentWhere,
+          select: studentSelect,
+          orderBy: { fullName: "asc" },
+        }),
+      ];
 
   const ids = students.map((s) => s.id);
   const topicFilterList = await topicIdsForAnalyticsFilter(subjectId, levelId);
   const topicFilterActive = topicFilterList !== undefined;
   const allowedTopicIds = topicFilterActive ? new Set(topicFilterList) : null;
 
-  const progress = await prisma.studentProgress.findMany({
-    where: {
-      studentId: { in: ids },
-      ...(subjectId ? { subjectId } : {}),
-      ...(levelId ? { levelId } : {}),
-    },
-    include: { level: true, subject: true },
-  });
-  const perf =
-    allowedTopicIds && allowedTopicIds.size === 0
-      ? []
-      : await prisma.topicPerformance.findMany({
-          where: {
-            studentId: { in: ids },
-            ...(allowedTopicIds && allowedTopicIds.size > 0 ? { topicId: { in: [...allowedTopicIds] } } : {}),
-          },
-          include: { topic: true },
-        });
-
-  const lastTestRows =
+  const progress =
     ids.length === 0
       ? []
-      : await prisma.test.groupBy({
-          by: ["studentId"],
+      : await prisma.studentProgress.findMany({
           where: {
             studentId: { in: ids },
-            status: "COMPLETED",
-            completedAt: { not: null },
             ...(subjectId ? { subjectId } : {}),
             ...(levelId ? { levelId } : {}),
           },
-          _max: { completedAt: true },
+          select: {
+            studentId: true,
+            lastPercentage: true,
+            level: { select: { name: true, order: true } },
+          },
         });
-  const lastTestByStudent = new Map(lastTestRows.map((r) => [r.studentId, r._max.completedAt]));
 
   const progressByStudent = new Map<string, typeof progress>();
   for (const p of progress) {
@@ -538,14 +551,8 @@ router.get("/analytics/students", async (req, res) => {
     arr.push(p);
     progressByStudent.set(p.studentId, arr);
   }
-  const perfByStudent = new Map<string, typeof perf>();
-  for (const p of perf) {
-    const arr = perfByStudent.get(p.studentId) ?? [];
-    arr.push(p);
-    perfByStudent.set(p.studentId, arr);
-  }
 
-  const out = students
+  const ranked = students
     .map((s) => {
       const pRows = (progressByStudent.get(s.id) ?? []).sort((a, b) => a.level.order - b.level.order);
       const current = pRows[pRows.length - 1] ?? null;
@@ -556,38 +563,6 @@ router.get("/analytics/students", async (req, res) => {
         else if (latestScore < 80) zone = "YELLOW";
         else zone = "GREEN";
       }
-      const topicRows = (perfByStudent.get(s.id) ?? []).filter(
-        (tp) => !allowedTopicIds || allowedTopicIds.has(tp.topicId)
-      );
-      const weakTopics = topicRows
-        .map((tp) => {
-          const pct = tp.attemptedTotal > 0 ? (100 * tp.correctTotal) / tp.attemptedTotal : 0;
-          return { name: tp.topic.name, pct };
-        })
-        .filter((t) => t.pct < 50)
-        .sort((a, b) => a.pct - b.pct)
-        .slice(0, 3)
-        .map((t) => t.name);
-      const strongTopics = topicRows
-        .map((tp) => {
-          const pct = tp.attemptedTotal > 0 ? (100 * tp.correctTotal) / tp.attemptedTotal : 0;
-          return { name: tp.topic.name, pct };
-        })
-        .filter((t) => t.pct >= 80)
-        .sort((a, b) => b.pct - a.pct)
-        .slice(0, 3)
-        .map((t) => t.name);
-      const suggestedAction =
-        zone === "RED"
-          ? `Retake ${current?.level.name ?? "current level"}`
-          : zone === "YELLOW"
-            ? `Practice ${current?.level.name ?? "current level"}`
-            : zone === "GREEN"
-              ? "Move to next level"
-              : "Start first level";
-
-      const lastCompletedTestAt = lastTestByStudent.get(s.id) ?? null;
-
       return {
         id: s.id,
         studentLoginId: s.user.studentLoginId,
@@ -595,19 +570,99 @@ router.get("/analytics/students", async (req, res) => {
         className: s.schoolClass.name,
         currentLevel: current?.level.name ?? "Not Started",
         latestScore,
-        weakTopics,
-        strongTopics,
         status: zone,
-        suggestedAction,
-        lastCompletedTestAt,
+        suggestedAction:
+          zone === "RED"
+            ? `Retake ${current?.level.name ?? "current level"}`
+            : zone === "YELLOW"
+              ? `Practice ${current?.level.name ?? "current level"}`
+              : zone === "GREEN"
+                ? "Move to next level"
+                : "Start first level",
       };
     })
-    .filter((r) => {
-      if (!status || status === "ALL") return true;
-      return r.status === status;
-    });
+    .filter((r) => (statusFilter ? r.status === statusFilter : true));
 
-  res.json(out);
+  const total = paginateInDb ? counted : ranked.length;
+  const pageRows = paginateInDb || studentId ? ranked : ranked.slice(skip, skip + pageSize);
+  const pageIds = pageRows.map((r) => r.id);
+
+  const emptyPerf: {
+    studentId: string;
+    topicId: string;
+    correctTotal: number;
+    attemptedTotal: number;
+    topic: { name: string };
+  }[] = [];
+  const emptyLast: { studentId: string; _max: { completedAt: Date | null } }[] = [];
+
+  const [perf, lastTestRows] =
+    pageIds.length === 0
+      ? [emptyPerf, emptyLast]
+      : await Promise.all([
+          allowedTopicIds && allowedTopicIds.size === 0
+            ? Promise.resolve(emptyPerf)
+            : prisma.topicPerformance.findMany({
+                where: {
+                  studentId: { in: pageIds },
+                  ...(allowedTopicIds && allowedTopicIds.size > 0 ? { topicId: { in: [...allowedTopicIds] } } : {}),
+                },
+                select: {
+                  studentId: true,
+                  topicId: true,
+                  correctTotal: true,
+                  attemptedTotal: true,
+                  topic: { select: { name: true } },
+                },
+              }),
+          prisma.test.groupBy({
+            by: ["studentId"],
+            where: {
+              studentId: { in: pageIds },
+              status: "COMPLETED",
+              completedAt: { not: null },
+              ...(subjectId ? { subjectId } : {}),
+              ...(levelId ? { levelId } : {}),
+            },
+            _max: { completedAt: true },
+          }),
+        ]);
+
+  const lastTestByStudent = new Map(lastTestRows.map((r) => [r.studentId, r._max.completedAt]));
+  const perfByStudent = new Map<string, typeof perf>();
+  for (const p of perf) {
+    const arr = perfByStudent.get(p.studentId) ?? [];
+    arr.push(p);
+    perfByStudent.set(p.studentId, arr);
+  }
+
+  const out = pageRows.map((s) => {
+    const topicRows = (perfByStudent.get(s.id) ?? []).filter(
+      (tp) => !allowedTopicIds || allowedTopicIds.has(tp.topicId)
+    );
+    const scored = topicRows.map((tp) => {
+      const pct = tp.attemptedTotal > 0 ? (100 * tp.correctTotal) / tp.attemptedTotal : 0;
+      return { name: tp.topic.name, pct };
+    });
+    const weakTopics = scored
+      .filter((t) => t.pct < 50)
+      .sort((a, b) => a.pct - b.pct)
+      .slice(0, 3)
+      .map((t) => t.name);
+    const strongTopics = scored
+      .filter((t) => t.pct >= 80)
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, 3)
+      .map((t) => t.name);
+    return {
+      ...s,
+      weakTopics,
+      strongTopics,
+      lastCompletedTestAt: lastTestByStudent.get(s.id) ?? null,
+    };
+  });
+
+  res.json({ students: out, total, page: studentId ? 1 : page, pageSize: studentId ? out.length : pageSize });
 });
 
 /** Completed skill tests for a class on one IST day or a recent range (last 7 / 30 days). */

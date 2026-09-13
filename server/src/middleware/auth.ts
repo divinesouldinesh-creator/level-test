@@ -1,11 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import type { Role } from "@prisma/client";
-import { prisma, isDatabaseUnreachable } from "../lib/prisma.js";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
-const ROLE_CACHE_TTL_MS = 30_000;
-const roleCache = new Map<string, { role: Role; expiresAt: number }>();
 
 export type JwtPayload = {
   sub: string;
@@ -16,7 +13,7 @@ export function signToken(userId: string, role: Role): string {
   return jwt.sign({ sub: userId, role }, JWT_SECRET, { expiresIn: "7d" });
 }
 
-export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) {
@@ -30,33 +27,12 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     res.status(401).json({ error: "Invalid token" });
     return;
   }
-
-  try {
-    const cached = roleCache.get(decoded.sub);
-    if (cached && cached.expiresAt > Date.now()) {
-      req.user = { sub: decoded.sub, role: cached.role };
-      next();
-      return;
-    }
-    const dbUser = await prisma.user.findUnique({
-      where: { id: decoded.sub },
-      select: { role: true },
-    });
-    if (!dbUser) {
-      roleCache.delete(decoded.sub);
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    roleCache.set(decoded.sub, { role: dbUser.role, expiresAt: Date.now() + ROLE_CACHE_TTL_MS });
-    req.user = { sub: decoded.sub, role: dbUser.role };
-    next();
-  } catch (err) {
-    if (isDatabaseUnreachable(err)) {
-      res.status(503).json({ error: "Database is unreachable. Try again in a moment." });
-      return;
-    }
-    res.status(500).json({ error: "Auth check failed" });
+  if (!decoded.sub || !decoded.role) {
+    res.status(401).json({ error: "Invalid token" });
+    return;
   }
+  req.user = { sub: decoded.sub, role: decoded.role };
+  next();
 }
 
 export function requireRole(...roles: Role[]) {

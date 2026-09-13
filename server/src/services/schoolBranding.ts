@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { CACHE_KEY, CACHE_TTL_MS, cacheGet, cacheSet } from "../lib/memoryCache.js";
 
 export const SCHOOL_BRANDING_ID = "default";
 
@@ -8,12 +9,16 @@ export type SchoolBrandingDto = {
 };
 
 export async function getSchoolBranding(prisma: PrismaClient): Promise<SchoolBrandingDto> {
+  const cached = cacheGet<SchoolBrandingDto>(CACHE_KEY.branding);
+  if (cached) return cached;
   const row = await prisma.schoolBranding.upsert({
     where: { id: SCHOOL_BRANDING_ID },
     create: { id: SCHOOL_BRANDING_ID, schoolName: "Your School" },
     update: {},
   });
-  return { schoolName: row.schoolName, logoUrl: row.logoUrl };
+  const dto = { schoolName: row.schoolName, logoUrl: row.logoUrl };
+  cacheSet(CACHE_KEY.branding, dto, CACHE_TTL_MS.branding);
+  return dto;
 }
 
 export async function updateSchoolName(
@@ -25,7 +30,9 @@ export async function updateSchoolName(
     create: { id: SCHOOL_BRANDING_ID, schoolName },
     update: { schoolName },
   });
-  return { schoolName: row.schoolName, logoUrl: row.logoUrl };
+  const dto = { schoolName: row.schoolName, logoUrl: row.logoUrl };
+  cacheSet(CACHE_KEY.branding, dto, CACHE_TTL_MS.branding);
+  return dto;
 }
 
 export async function updateSchoolLogo(
@@ -37,5 +44,7 @@ export async function updateSchoolLogo(
     create: { id: SCHOOL_BRANDING_ID, schoolName: "Your School", logoUrl },
     update: { logoUrl },
   });
-  return { schoolName: row.schoolName, logoUrl: row.logoUrl };
+  const dto = { schoolName: row.schoolName, logoUrl: row.logoUrl };
+  cacheSet(CACHE_KEY.branding, dto, CACHE_TTL_MS.branding);
+  return dto;
 }

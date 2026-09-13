@@ -37,7 +37,9 @@ export function StudentPartLearnPage() {
       setLoading(true);
       const [subRes, mastRes] = await Promise.all([
         api<Subject[]>("/api/v1/student/subjects"),
-        api<{ items: MasteryQueueItem[] }>("/api/v1/student/mastery"),
+        api<{ items: MasteryQueueItem[] }>(
+          `/api/v1/student/mastery?subjectId=${encodeURIComponent(subjectId ?? "")}`
+        ),
       ]);
       setLoading(false);
       if (!subRes.ok) {

@@ -78,11 +78,12 @@ export function StudentAttendancePage() {
   }
 
   useEffect(() => {
+    if (tab !== "certificate") return;
     void (async () => {
       const branding = await fetchSchoolBranding();
       setSchoolBranding(branding);
     })();
-  }, []);
+  }, [tab]);
 
   useEffect(() => {
     if (range === "custom" && (!customFrom || !customTo)) return;
@@ -106,6 +107,7 @@ export function StudentAttendancePage() {
   }, [range, date, customFrom, customTo]);
 
   useEffect(() => {
+    if (tab !== "certificate") return;
     if (!/^\d{4}-\d{2}$/.test(certMonth)) {
       setMonthReport(null);
       return;
@@ -123,7 +125,7 @@ export function StudentAttendancePage() {
       }
       setMonthReport(r.data);
     })();
-  }, [certMonth]);
+  }, [certMonth, tab]);
 
   const monthPerfect =
     !!monthReport &&

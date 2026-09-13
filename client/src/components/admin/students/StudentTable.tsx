@@ -23,6 +23,10 @@ export function StudentTable({
   onRename,
   onDelete,
   onPrintClass,
+  page,
+  pageSize,
+  total,
+  onPage,
 }: {
   rows: StudentListRow[];
   passwordHints: Record<string, string>;
@@ -44,6 +48,10 @@ export function StudentTable({
   onRename: (id: string) => void;
   onDelete: (id: string) => void;
   onPrintClass: () => void;
+  page: number;
+  pageSize: number;
+  total: number;
+  onPage: (page: number) => void;
 }) {
   const selectedSet = new Set(selectedIds);
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedSet.has(row.id));
@@ -80,7 +88,7 @@ export function StudentTable({
 
   function exportListXlsx(base: string) {
     const data = rows.map(rowToExport);
-    downloadCredentialsXlsx(data, `${base}-${Date.now()}`);
+    void downloadCredentialsXlsx(data, `${base}-${Date.now()}`);
   }
 
   function exportOneCsv(row: StudentListRow) {
@@ -88,7 +96,7 @@ export function StudentTable({
   }
 
   function exportOneXlsx(row: StudentListRow) {
-    downloadCredentialsXlsx([rowToExport(row)], `login-${row.username}`);
+    void downloadCredentialsXlsx([rowToExport(row)], `login-${row.username}`);
   }
 
   return (
@@ -276,6 +284,32 @@ export function StudentTable({
           </tbody>
         </table>
       </div>
+      {total > pageSize ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+          <p>
+            Showing {(page - 1) * pageSize + (rows.length ? 1 : 0)}–
+            {Math.min(page * pageSize, total)} of {total}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => onPage(page - 1)}
+              className="rounded-lg border border-slate-200 px-3 py-2 min-h-[44px] disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={page * pageSize >= total}
+              onClick={() => onPage(page + 1)}
+              className="rounded-lg border border-slate-200 px-3 py-2 min-h-[44px] disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

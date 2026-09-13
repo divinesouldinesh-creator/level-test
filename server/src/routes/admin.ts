@@ -29,6 +29,7 @@ import {
   updateSchoolName,
 } from "../services/schoolBranding.js";
 import { sendBrandingError } from "../utils/brandingErrors.js";
+import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateCatalog } from "../lib/memoryCache.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("ADMIN", "OFFICE"));
@@ -64,6 +65,35 @@ router.use((req, res, next) => {
     return;
   }
   res.status(403).json({ error: "Forbidden" });
+});
+
+router.use((req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") {
+    next();
+    return;
+  }
+  const p = req.path.split("?")[0] || "/";
+  const isCatalogWrite =
+    p === "/classes" ||
+    p.startsWith("/classes/") ||
+    p === "/subjects" ||
+    p.startsWith("/subjects/") ||
+    p === "/subject-areas" ||
+    p.startsWith("/subject-areas/") ||
+    p === "/topics" ||
+    p.startsWith("/topics/") ||
+    p === "/levels" ||
+    p.startsWith("/levels/");
+  if (!isCatalogWrite) {
+    next();
+    return;
+  }
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    if (res.statusCode < 400) invalidateCatalog();
+    return originalJson(body);
+  }) as typeof res.json;
+  next();
 });
 
 const uploadDir = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
@@ -175,60 +205,61 @@ function parseQuestionSheetBuffer(buf: Buffer): SheetQuestion[] {
 router.get("/dashboard/summary", async (_req, res) => {
   const activeWindowDays = 30;
   const activeSince = new Date(Date.now() - activeWindowDays * 24 * 60 * 60 * 1000);
-  const [topicRows, classRows, students, studentsUsedRecently, activeClassRows] = await Promise.all([
-    prisma.topicPerformance.groupBy({
-      by: ["topicId"],
-      _sum: { correctTotal: true, attemptedTotal: true },
-    }),
-    prisma.student.groupBy({
-      by: ["classId"],
-      _count: { _all: true },
-    }),
-    prisma.student.findMany({
-      include: {
-        studentProgress: { orderBy: { lastAttemptAt: "desc" }, take: 5 },
-      },
-    }),
-    prisma.test.findMany({
-      where: { startedAt: { gte: activeSince } },
-      distinct: ["studentId"],
-      select: { studentId: true },
-    }),
-    prisma.student.groupBy({
-      by: ["classId"],
-      where: {
-        tests: {
-          some: {
-            startedAt: { gte: activeSince },
+  const [topicRows, classRows, studentCount, studentsUsedRecently, activeClassRows, classes] =
+    await Promise.all([
+      prisma.topicPerformance.groupBy({
+        by: ["topicId"],
+        _sum: { correctTotal: true, attemptedTotal: true },
+      }),
+      prisma.student.groupBy({
+        by: ["classId"],
+        _count: { _all: true },
+      }),
+      prisma.student.count(),
+      prisma.test.groupBy({
+        by: ["studentId"],
+        where: { startedAt: { gte: activeSince } },
+      }),
+      prisma.student.groupBy({
+        by: ["classId"],
+        where: {
+          tests: {
+            some: {
+              startedAt: { gte: activeSince },
+            },
           },
         },
-      },
-      _count: { _all: true },
-    }),
-  ]);
+        _count: { _all: true },
+      }),
+      prisma.schoolClass.findMany({ select: { id: true, name: true } }),
+    ]);
 
-  const topics = await prisma.topic.findMany({
-    where: { id: { in: topicRows.map((t) => t.topicId) } },
-  });
-  const topicMap = new Map(topics.map((t) => [t.id, t]));
-
-  const topicStats = topicRows
+  const ranked = topicRows
     .map((r) => {
-      const t = topicMap.get(r.topicId);
       const att = r._sum.attemptedTotal ?? 0;
       const cor = r._sum.correctTotal ?? 0;
       const pct = att ? (100 * cor) / att : 0;
-      return {
-        topicId: r.topicId,
-        name: t?.name,
-        avgPercentage: Math.round(pct * 10) / 10,
-      };
+      return { topicId: r.topicId, avgPercentage: Math.round(pct * 10) / 10 };
     })
     .sort((a, b) => a.avgPercentage - b.avgPercentage);
+  const weakestSlice = ranked.slice(0, 10);
+  const strongestSlice = [...ranked].sort((a, b) => b.avgPercentage - a.avgPercentage).slice(0, 10);
+  const topicIds = [...new Set([...weakestSlice, ...strongestSlice].map((t) => t.topicId))];
+  const topics = topicIds.length
+    ? await prisma.topic.findMany({
+        where: { id: { in: topicIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const topicMap = new Map(topics.map((t) => [t.id, t.name]));
+  const withNames = (rows: typeof weakestSlice) =>
+    rows.map((r) => ({
+      topicId: r.topicId,
+      name: topicMap.get(r.topicId),
+      avgPercentage: r.avgPercentage,
+    }));
 
-  const classes = await prisma.schoolClass.findMany();
   const classMap = new Map(classes.map((c) => [c.id, c.name]));
-
   const classAgg = classRows.map((c) => ({
     classId: c.classId,
     className: classMap.get(c.classId),
@@ -243,10 +274,10 @@ router.get("/dashboard/summary", async (_req, res) => {
   }));
 
   res.json({
-    weakestTopics: topicStats.slice(0, 10),
-    strongestTopics: [...topicStats].sort((a, b) => b.avgPercentage - a.avgPercentage).slice(0, 10),
+    weakestTopics: withNames(weakestSlice),
+    strongestTopics: withNames(strongestSlice),
     classSizes: classAgg,
-    studentCount: students.length,
+    studentCount,
     activeWindowDays,
     studentsUsedRecentlyCount: studentsUsedRecently.length,
     classActivity,
@@ -310,9 +341,11 @@ router.get("/coverage/summary", async (_req, res) => {
 
 // --- Classes / sections ---
 router.get("/classes", async (_req, res) => {
-  const list = await prisma.schoolClass.findMany({
-    include: { sections: true, subjects: { include: { subject: true } } },
-  });
+  const list = await cacheGetOrSet(CACHE_KEY.adminClasses, CACHE_TTL_MS.catalog, () =>
+    prisma.schoolClass.findMany({
+      include: { sections: true, subjects: { include: { subject: true } } },
+    })
+  );
   res.json(list);
 });
 
@@ -623,26 +656,27 @@ router.delete("/classes/:classId/subjects/:subjectId", async (req, res) => {
 
 // --- Subject areas (Maths / English) → branches (skill subjects) ---
 router.get("/subject-areas", async (_req, res) => {
-  const areas = await prisma.subjectArea.findMany({
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    include: {
-      subjects: {
-        orderBy: { name: "asc" },
-        select: { id: true, name: true, code: true },
+  const payload = await cacheGetOrSet(CACHE_KEY.adminAreas, CACHE_TTL_MS.catalog, async () => {
+    const areas = await prisma.subjectArea.findMany({
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      include: {
+        subjects: {
+          orderBy: { name: "asc" },
+          select: { id: true, name: true, code: true },
+        },
+        _count: { select: { subjects: true } },
       },
-      _count: { select: { subjects: true } },
-    },
-  });
-  res.json(
-    areas.map((a) => ({
+    });
+    return areas.map((a) => ({
       id: a.id,
       name: a.name,
       code: a.code,
       sortOrder: a.sortOrder,
       branchCount: a._count.subjects,
       branches: a.subjects,
-    }))
-  );
+    }));
+  });
+  res.json(payload);
 });
 
 router.post("/subject-areas", async (req, res) => {
@@ -748,31 +782,31 @@ router.post("/subject-areas/:areaId/branches", async (req, res) => {
 
 // --- Subjects / levels / topics ---
 router.get("/subjects", async (_req, res) => {
-  const list = await prisma.subject.findMany({
-    orderBy: { name: "asc" },
-    include: {
-      area: { select: { id: true, name: true, code: true } },
-      classSubjects: {
-        include: {
-          schoolClass: {
-            select: { id: true, name: true, grade: true },
+  const payload = await cacheGetOrSet(CACHE_KEY.adminSubjects, CACHE_TTL_MS.catalog, async () => {
+    const list = await prisma.subject.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        area: { select: { id: true, name: true, code: true } },
+        classSubjects: {
+          include: {
+            schoolClass: {
+              select: { id: true, name: true, grade: true },
+            },
+          },
+        },
+        levels: {
+          orderBy: { order: "asc" },
+          include: {
+            testConfig: true,
+            levelTopicParticipations: {
+              orderBy: { sortOrder: "asc" },
+              include: { topic: { select: { id: true, name: true } } },
+            },
           },
         },
       },
-      levels: {
-        orderBy: { order: "asc" },
-        include: {
-          testConfig: true,
-          levelTopicParticipations: {
-            orderBy: { sortOrder: "asc" },
-            include: { topic: { select: { id: true, name: true } } },
-          },
-        },
-      },
-    },
-  });
-  res.json(
-    list.map((subject) => {
+    });
+    return list.map((subject) => {
       const topicRows = subject.levels.flatMap((lvl) =>
         lvl.levelTopicParticipations.map((part) => ({
           id: part.topic.id,
@@ -791,15 +825,18 @@ router.get("/subjects", async (_req, res) => {
         ...subject,
         topics,
       };
-    })
-  );
+    });
+  });
+  res.json(payload);
 });
 
 router.get("/topics", async (_req, res) => {
-  const topics = await prisma.topic.findMany({
-    orderBy: { name: "asc" },
-    select: { id: true, name: true },
-  });
+  const topics = await cacheGetOrSet(CACHE_KEY.adminTopics, CACHE_TTL_MS.catalog, () =>
+    prisma.topic.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    })
+  );
   res.json(topics);
 });
 
@@ -1702,19 +1739,41 @@ router.get("/students", async (req, res) => {
     typeof req.query.classId === "string" && req.query.classId ? req.query.classId : undefined;
   const sectionId =
     typeof req.query.sectionId === "string" && req.query.sectionId ? req.query.sectionId : undefined;
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const wantAll = req.query.all === "1" || req.query.page === undefined;
+  const page = Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1);
+  const pageSize = Math.min(200, Math.max(1, Number.parseInt(String(req.query.pageSize ?? "50"), 10) || 50));
 
-  const list = await prisma.student.findMany({
-    where: {
-      ...(classId ? { classId } : {}),
-      ...(sectionId ? { sectionId } : {}),
-    },
-    include: {
-      schoolClass: true,
-      section: true,
-      user: { select: { studentLoginId: true, passwordPlain: true } },
-    },
-    orderBy: [{ schoolClass: { name: "asc" } }, { section: { name: "asc" } }, { fullName: "asc" }],
-  });
+  const where = {
+    ...(classId ? { classId } : {}),
+    ...(sectionId ? { sectionId } : {}),
+    ...(q
+      ? {
+          OR: [
+            { fullName: { contains: q, mode: "insensitive" as const } },
+            { user: { studentLoginId: { contains: q, mode: "insensitive" as const } } },
+          ],
+        }
+      : {}),
+  };
+
+  const take = wantAll ? 5000 : pageSize;
+  const skip = wantAll ? 0 : (page - 1) * pageSize;
+
+  const [total, list] = await Promise.all([
+    prisma.student.count({ where }),
+    prisma.student.findMany({
+      where,
+      include: {
+        schoolClass: true,
+        section: true,
+        user: { select: { studentLoginId: true, passwordPlain: true } },
+      },
+      orderBy: [{ schoolClass: { name: "asc" } }, { section: { name: "asc" } }, { fullName: "asc" }],
+      skip,
+      take,
+    }),
+  ]);
 
   res.json({
     students: list.map((s) => ({
@@ -1729,6 +1788,9 @@ router.get("/students", async (req, res) => {
       username: s.user.studentLoginId ?? "",
       password: s.user.passwordPlain ?? "",
     })),
+    total,
+    page: wantAll ? 1 : page,
+    pageSize: wantAll ? list.length : pageSize,
   });
 });
 

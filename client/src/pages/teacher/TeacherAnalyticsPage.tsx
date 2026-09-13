@@ -57,6 +57,15 @@ type TestsByDateResponse = {
   items: TestsByDateItem[];
 };
 
+type StudentsPayload = {
+  students: StudentRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+const ANALYTICS_PAGE_SIZE = 50;
+
 type DatePreset = "today" | "yesterday" | "last7" | "last30" | "custom";
 
 function formatTestDate(iso: string | null | undefined): string {
@@ -94,6 +103,8 @@ export function TeacherAnalyticsPage() {
   const [searchResults, setSearchResults] = useState<SearchStudent[]>([]);
   const [weakTopics, setWeakTopics] = useState<TopicWeak[]>([]);
   const [students, setStudents] = useState<StudentRow[]>([]);
+  const [studentTotal, setStudentTotal] = useState(0);
+  const [studentPage, setStudentPage] = useState(1);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [detailStudent, setDetailStudent] = useState<StudentDetail | null>(null);
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
@@ -161,24 +172,36 @@ export function TeacherAnalyticsPage() {
   }, [subjectId, levelsForSubject]);
 
   useEffect(() => {
+    setStudentPage(1);
+  }, [classId, status, subjectId, levelId, selectedStudentId]);
+
+  useEffect(() => {
     void (async () => {
       if (!subjectId || subjectId === "ALL") {
         setWeakTopics([]);
         setStudents([]);
+        setStudentTotal(0);
         return;
       }
       const qClass = classId !== "ALL" ? `classId=${encodeURIComponent(classId)}&` : "";
       const qStatus = status !== "ALL" ? `status=${encodeURIComponent(status)}&` : "";
       const qLevel = levelId !== "ALL" ? `levelId=${encodeURIComponent(levelId)}&` : "";
-      const q = `?${qClass}${qLevel}${qStatus}subjectId=${encodeURIComponent(subjectId)}`;
+      const qStudent = selectedStudentId ? `studentId=${encodeURIComponent(selectedStudentId)}&` : "";
+      const qPage = selectedStudentId
+        ? ""
+        : `page=${studentPage}&pageSize=${ANALYTICS_PAGE_SIZE}&`;
+      const q = `?${qClass}${qLevel}${qStatus}${qStudent}${qPage}subjectId=${encodeURIComponent(subjectId)}`;
       const [w, s] = await Promise.all([
         api<{ weakest: TopicWeak[] }>(`/api/v1/teacher/analytics/weak-topics${q}`),
-        api<StudentRow[]>(`/api/v1/teacher/analytics/students${q}`),
+        api<StudentsPayload>(`/api/v1/teacher/analytics/students${q}`),
       ]);
       if (w.ok) setWeakTopics(w.data?.weakest ?? []);
-      if (s.ok) setStudents(s.data ?? []);
+      if (s.ok) {
+        setStudents(s.data?.students ?? []);
+        setStudentTotal(s.data?.total ?? s.data?.students?.length ?? 0);
+      }
     })();
-  }, [classId, status, subjectId, levelId]);
+  }, [classId, status, subjectId, levelId, selectedStudentId, studentPage]);
 
   useEffect(() => {
     void (async () => {
@@ -571,6 +594,32 @@ export function TeacherAnalyticsPage() {
             ) : null}
           </tbody>
         </table>
+        {!selectedStudentId && studentTotal > ANALYTICS_PAGE_SIZE ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 p-3 text-sm text-slate-600">
+            <p>
+              Showing {(studentPage - 1) * ANALYTICS_PAGE_SIZE + (shownStudents.length ? 1 : 0)}–
+              {Math.min(studentPage * ANALYTICS_PAGE_SIZE, studentTotal)} of {studentTotal}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={studentPage <= 1}
+                onClick={() => setStudentPage((p) => p - 1)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={studentPage * ANALYTICS_PAGE_SIZE >= studentTotal}
+                onClick={() => setStudentPage((p) => p + 1)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {detailLoadingId ? (
