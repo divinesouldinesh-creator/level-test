@@ -303,6 +303,49 @@ async function main() {
     },
   });
 
+  const englishArea = await prisma.subjectArea.upsert({
+    where: { name: "English" },
+    create: { id: "area-english", name: "English", code: "ENG", sortOrder: 1 },
+    update: { code: "ENG", sortOrder: 1 },
+  });
+  const speaking = await prisma.subject.upsert({
+    where: { id: "seed-subject-speaking" },
+    update: { name: "Speaking", code: "SPEAK", areaId: englishArea.id },
+    create: {
+      id: "seed-subject-speaking",
+      name: "Speaking",
+      code: "SPEAK",
+      areaId: englishArea.id,
+    },
+  });
+  const speakingLevels = [
+    { id: "seed-speaking-level-0", order: 0, name: "Level 0: Start Speaking" },
+    { id: "seed-speaking-level-1", order: 1, name: "Level 1: Confident Speaking" },
+    { id: "seed-speaking-level-2", order: 2, name: "Level 2: English in Class" },
+    { id: "seed-speaking-level-3", order: 3, name: "Level 3: Connected Speaking" },
+    { id: "seed-speaking-level-4", order: 4, name: "Level 4: Expressive Speaking" },
+    { id: "seed-speaking-level-5", order: 5, name: "Level 5: Spontaneous Speaking" },
+  ];
+  for (const lvl of speakingLevels) {
+    await prisma.level.upsert({
+      where: { id: lvl.id },
+      update: { name: lvl.name, order: lvl.order, subjectId: speaking.id },
+      create: { id: lvl.id, name: lvl.name, order: lvl.order, subjectId: speaking.id },
+    });
+    await prisma.levelTestConfig.upsert({
+      where: { levelId: lvl.id },
+      update: {},
+      create: { levelId: lvl.id, questionCount: 8 },
+    });
+  }
+  for (const cls of [class6, class7, class8, class9, class10, class11, class12]) {
+    await prisma.classSubject.upsert({
+      where: { classId_subjectId: { classId: cls.id, subjectId: speaking.id } },
+      update: {},
+      create: { classId: cls.id, subjectId: speaking.id },
+    });
+  }
+
   await prisma.level.updateMany({
     where: { id: legacyBasicMathLevel0Id },
     data: { subjectId: subject.id },

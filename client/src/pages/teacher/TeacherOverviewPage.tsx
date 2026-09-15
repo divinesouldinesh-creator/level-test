@@ -51,13 +51,31 @@ export function TeacherOverviewPage() {
         </div>
       </section>
 
-      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <section className="mt-5 grid gap-3 sm:grid-cols-2">
         <Link
           to="/teacher/attendance"
           className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-sm block"
         >
           <p className="font-semibold text-indigo-900">Take attendance</p>
           <p className="text-sm text-indigo-700 mt-1">Mark and save class attendance by date.</p>
+        </Link>
+        <Link
+          to="/teacher/class-tests"
+          className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm block"
+        >
+          <p className="font-semibold text-amber-900">Record class test</p>
+          <p className="text-sm text-amber-800 mt-1">
+            Enter paper marks or tick oral / speaking levels. Separate from online tests.
+          </p>
+        </Link>
+        <Link
+          to="/teacher/care-calls"
+          className="rounded-xl border border-sky-200 bg-sky-50 p-4 shadow-sm block"
+        >
+          <p className="font-semibold text-sky-900">Care calls</p>
+          <p className="text-sm text-sky-800 mt-1">
+            Monthly parent call: English practice and heavy phone/TV, Yes or No.
+          </p>
         </Link>
         <Link
           to="/teacher/skill/analytics"

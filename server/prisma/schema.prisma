@@ -56,6 +56,8 @@ model User {
   questionsCreated        Question[]          @relation("QuestionCreatedBy")
   questionImports         QuestionImport[]
   attendanceSessionsTaken AttendanceSession[] @relation("AttendanceTakenBy")
+  classroomAssessmentsRecorded ClassroomAssessmentSession[] @relation("ClassroomRecordedBy")
+  careCallsRecorded            CareCall[]                   @relation("CareCallRecordedBy")
 }
 
 model Admin {
@@ -85,8 +87,9 @@ model SchoolClass {
   grade              String?
   sections           Section[]
   students           Student[]
-  subjects           ClassSubject[]
-  attendanceSessions AttendanceSession[]
+  subjects             ClassSubject[]
+  attendanceSessions   AttendanceSession[]
+  classroomAssessments ClassroomAssessmentSession[]
 }
 
 model Section {
@@ -94,8 +97,9 @@ model Section {
   classId            String              @map("class_id")
   name               String
   schoolClass        SchoolClass         @relation(fields: [classId], references: [id], onDelete: Cascade)
-  students           Student[]
-  attendanceSessions AttendanceSession[]
+  students             Student[]
+  attendanceSessions   AttendanceSession[]
+  classroomAssessments ClassroomAssessmentSession[]
 }
 
 model Student {
@@ -115,8 +119,10 @@ model Student {
   engagement        StudentEngagement?
   xpEvents          XpEvent[]
   dailyChallenges   DailyChallenge[]
-  topicMasteries    TopicMastery[]
-  masterySessions   MasterySession[]
+  topicMasteries             TopicMastery[]
+  masterySessions            MasterySession[]
+  classroomAssessmentEntries ClassroomAssessmentEntry[]
+  careCalls                  CareCall[]
 
   @@index([classId, sectionId])
 }
@@ -245,8 +251,9 @@ model Subject {
   tests           Test[]
   classSubjects   ClassSubject[]
   studentProgress StudentProgress[]
-  dailyChallenges DailyChallenge[]
-  topicMasteries  TopicMastery[]
+  dailyChallenges      DailyChallenge[]
+  topicMasteries       TopicMastery[]
+  classroomAssessments ClassroomAssessmentSession[]
 
   @@index([areaId])
 }
@@ -277,6 +284,8 @@ model Level {
   suggestedNextInAttempts  TestAttempt[]             @relation("SuggestedNextLevel")
   dailyChallenges          DailyChallenge[]
   topicMasteries           TopicMastery[]
+  classroomTestedIn        ClassroomAssessmentSession[] @relation("ClassroomTestedLevel")
+  classroomJudgedIn        ClassroomAssessmentEntry[]   @relation("ClassroomJudgedLevel")
 }
 
 model Topic {
@@ -563,6 +572,86 @@ model AttendanceEntry {
 
   @@unique([sessionId, studentId])
   @@index([studentId])
+}
+
+enum ClassroomAssessmentKind {
+  MARKS
+  ORAL
+}
+
+/// Teacher-entered classroom assessment (paper marks or oral placement). Separate from online tests.
+model ClassroomAssessmentSession {
+  id            String                   @id @default(cuid())
+  classId       String                   @map("class_id")
+  sectionId     String                   @map("section_id")
+  subjectId     String                   @map("subject_id")
+  kind          ClassroomAssessmentKind
+  date          DateTime
+  /// MARKS: level tested. ORAL: unused.
+  testedLevelId String?                  @map("tested_level_id")
+  /// Unique scope: tested level id for MARKS, "oral" for ORAL.
+  scopeKey      String                   @map("scope_key")
+  notes         String?
+  recordedById  String?                  @map("recorded_by_id")
+  createdAt     DateTime                 @default(now()) @map("created_at")
+  updatedAt     DateTime                 @updatedAt @map("updated_at")
+
+  schoolClass SchoolClass                 @relation(fields: [classId], references: [id], onDelete: Cascade)
+  section     Section                     @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  subject     Subject                     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  testedLevel Level?                      @relation("ClassroomTestedLevel", fields: [testedLevelId], references: [id], onDelete: SetNull)
+  recordedBy  User?                       @relation("ClassroomRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+  entries     ClassroomAssessmentEntry[]
+
+  @@unique([classId, sectionId, subjectId, kind, date, scopeKey], map: "ClassroomAssessmentSession_scope_unique")
+  @@index([date])
+  @@index([classId, sectionId])
+  @@index([subjectId, kind])
+}
+
+model ClassroomAssessmentEntry {
+  id            String   @id @default(cuid())
+  sessionId     String   @map("session_id")
+  studentId     String   @map("student_id")
+  absent        Boolean  @default(false)
+  score         Int?
+  maxScore      Int?     @map("max_score")
+  percentage    Float?
+  judgedLevelId String?  @map("judged_level_id")
+  remark        String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  session     ClassroomAssessmentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student     Student                    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  judgedLevel Level?                     @relation("ClassroomJudgedLevel", fields: [judgedLevelId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
+  @@index([judgedLevelId])
+}
+
+enum CareCallYesNo {
+  YES
+  NO
+}
+
+/// One monthly parent care call. Always insert a new row; never overwrite history.
+model CareCall {
+  id                    String         @id @default(cuid())
+  studentId             String         @map("student_id")
+  calledAt              DateTime       @map("called_at")
+  englishMirrorPractice CareCallYesNo? @map("english_mirror_practice")
+  heavyPhoneTv          CareCallYesNo? @map("heavy_phone_tv")
+  recordedById          String?        @map("recorded_by_id")
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+
+  student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  recordedBy User?   @relation("CareCallRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([studentId, calledAt])
+  @@index([recordedById])
 }
 
 /// Singleton row (id = "default") for school name and logo on certificates, etc.

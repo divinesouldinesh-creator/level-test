@@ -15,9 +15,13 @@ import {
 import { updateStudentNameSchema } from "../schemas/student.js";
 import { addIstDays, istDayKey, istDayUtcRange, istInclusiveDayRangeUtc, previousIstDayKey } from "../services/engagementCalendar.js";
 import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet } from "../lib/memoryCache.js";
+import classroomAssessmentRoutes, { classroomHistoryForStudent } from "./teacherClassroom.js";
+import careCallRoutes from "./teacherCareCalls.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("TEACHER"));
+router.use(classroomAssessmentRoutes);
+router.use(careCallRoutes);
 
 function dateOnly(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -374,7 +378,29 @@ router.get("/students/search", async (req, res) => {
   );
 });
 
-router.get("/subjects", async (_req, res) => {
+router.get("/subjects", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId.trim() : "";
+  if (classId) {
+    const links = await prisma.classSubject.findMany({
+      where: { classId },
+      include: {
+        subject: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            levels: { orderBy: { order: "asc" }, select: { id: true, name: true, order: true } },
+          },
+        },
+      },
+    });
+    const subjects = links
+      .map((l) => l.subject)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json(subjects);
+    return;
+  }
+
   const subjects = await cacheGetOrSet(CACHE_KEY.teacherSubjects, CACHE_TTL_MS.catalog, () =>
     prisma.subject.findMany({
       orderBy: { name: "asc" },
@@ -912,6 +938,7 @@ router.get("/analytics/student/:studentId/detail", async (req, res) => {
     orderBy: { completedAt: "desc" },
     take: 12,
   });
+  const classroomAssessments = await classroomHistoryForStudent(student.id, subjectId);
 
   const weakTopics = topicPerf
     .map((tp) => {
@@ -958,6 +985,7 @@ router.get("/analytics/student/:studentId/detail", async (req, res) => {
       percentage: t.attempts[0]?.percentage ?? null,
       completedAt: t.completedAt,
     })),
+    classroomAssessments,
     lastTestAttempt,
     lastProgressDate,
     daysSinceLastActivity,

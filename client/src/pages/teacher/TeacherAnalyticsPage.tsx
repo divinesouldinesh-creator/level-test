@@ -29,9 +29,24 @@ type SearchStudent = {
   className: string;
 };
 
+type ClassroomAssessmentRow = {
+  entryId: string;
+  kind: "MARKS" | "ORAL";
+  date: string;
+  subjectName: string;
+  absent: boolean;
+  score: number | null;
+  maxScore: number | null;
+  percentage: number | null;
+  testedLevelName: string | null;
+  judgedLevelName: string | null;
+  remark: string | null;
+};
+
 type StudentDetail = {
   student: { id: string; fullName: string; studentLoginId: string | null; className: string };
   tests: { testId: string; level: string; percentage: number | null; completedAt: string | null }[];
+  classroomAssessments?: ClassroomAssessmentRow[];
   lastTestAttempt: string | null;
 };
 
@@ -291,7 +306,8 @@ export function TeacherAnalyticsPage() {
       <h1 className="text-2xl font-bold text-slate-900">Skill tests</h1>
       <p className="text-slate-600 mt-1">
         Filter by class, subject, and level (All classes / All subjects supported for Tests by date). Open a
-        student&apos;s history from the date table or the list below.
+        student&apos;s history from the date table or the list below. Classroom marks and oral levels are listed
+        separately from online tests — record them under Class tests.
       </p>
       {err ? <p className="text-red-600 mt-3">{err}</p> : null}
 
@@ -657,7 +673,8 @@ export function TeacherAnalyticsPage() {
               Close
             </button>
           </div>
-          <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+          <p className="text-sm mt-3 font-medium text-slate-800">Online skill tests</p>
+          <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50">
                 <tr>
@@ -670,7 +687,7 @@ export function TeacherAnalyticsPage() {
                 {detailStudent.tests.length === 0 ? (
                   <tr>
                     <td colSpan={3} className="p-3 text-slate-500">
-                      No completed tests for this subject yet.
+                      No completed online tests for this subject yet.
                     </td>
                   </tr>
                 ) : (
@@ -679,6 +696,48 @@ export function TeacherAnalyticsPage() {
                       <td className="p-2">{t.level}</td>
                       <td className="p-2 text-right">{t.percentage != null ? t.percentage.toFixed(1) : "—"}</td>
                       <td className="p-2 whitespace-nowrap">{formatTestDate(t.completedAt)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-sm mt-5 font-medium text-slate-800">Classroom tests (not online)</p>
+          <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="text-left p-2">Date</th>
+                  <th className="text-left p-2">Kind</th>
+                  <th className="text-left p-2">Subject</th>
+                  <th className="text-left p-2">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(detailStudent.classroomAssessments ?? []).length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-3 text-slate-500">
+                      No classroom marks or oral records for this filter yet.
+                    </td>
+                  </tr>
+                ) : (
+                  (detailStudent.classroomAssessments ?? []).map((c) => (
+                    <tr key={c.entryId} className="border-t border-slate-100">
+                      <td className="p-2 whitespace-nowrap">{c.date}</td>
+                      <td className="p-2">{c.kind === "ORAL" ? "Oral" : "Marks"}</td>
+                      <td className="p-2">{c.subjectName}</td>
+                      <td className="p-2">
+                        {c.absent
+                          ? "Absent"
+                          : c.kind === "ORAL"
+                            ? c.judgedLevelName ?? "—"
+                            : c.score != null && c.maxScore != null
+                              ? `${c.score}/${c.maxScore}${
+                                  c.percentage != null ? ` (${c.percentage.toFixed(0)}%)` : ""
+                                }${c.testedLevelName ? ` · ${c.testedLevelName}` : ""}`
+                              : "—"}
+                      </td>
                     </tr>
                   ))
                 )}

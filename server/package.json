@@ -16,6 +16,8 @@
     "db:ensure-engagement": "tsx scripts/ensure-daily-engagement.ts",
     "db:ensure-mastery": "tsx scripts/ensure-topic-mastery.ts",
     "db:ensure-areas": "tsx scripts/ensure-subject-areas.ts",
+    "db:ensure-classroom": "tsx scripts/ensure-classroom-assessments.ts",
+    "db:ensure-care-calls": "tsx scripts/ensure-care-calls.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

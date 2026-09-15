@@ -92,6 +92,12 @@ const TeacherAnalyticsPage = lazy(() =>
 const TeacherDailyPracticePage = lazy(() =>
   import("./pages/teacher/TeacherDailyPracticePage").then((m) => ({ default: m.TeacherDailyPracticePage }))
 );
+const TeacherClassroomTestPage = lazy(() =>
+  import("./pages/teacher/TeacherClassroomTestPage").then((m) => ({ default: m.TeacherClassroomTestPage }))
+);
+const TeacherCareCallPage = lazy(() =>
+  import("./pages/teacher/TeacherCareCallPage").then((m) => ({ default: m.TeacherCareCallPage }))
+);
 
 function PageFallback() {
   return (
@@ -249,6 +255,22 @@ function AppRoutes() {
           element={
             <Guard role="TEACHER">
               <TeacherAnalyticsPage />
+            </Guard>
+          }
+        />
+        <Route
+          path="/teacher/class-tests"
+          element={
+            <Guard role="TEACHER">
+              <TeacherClassroomTestPage />
+            </Guard>
+          }
+        />
+        <Route
+          path="/teacher/care-calls"
+          element={
+            <Guard role="TEACHER">
+              <TeacherCareCallPage />
             </Guard>
           }
         />
