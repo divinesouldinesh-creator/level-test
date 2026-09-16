@@ -47,45 +47,49 @@ export async function lastClassroomByStudent(params: {
   const oral = new Map<string, LastOral>();
   if (params.studentIds.length === 0) return { marks, oral };
 
-  const entries = await prisma.classroomAssessmentEntry.findMany({
-    where: {
-      absent: false,
-      studentId: { in: params.studentIds },
-      session: {
-        subjectId: params.subjectId,
-        kind: params.kind,
-        date: { lt: params.beforeDate },
+  try {
+    const entries = await prisma.classroomAssessmentEntry.findMany({
+      where: {
+        absent: false,
+        studentId: { in: params.studentIds },
+        session: {
+          subjectId: params.subjectId,
+          kind: params.kind,
+          date: { lt: params.beforeDate },
+        },
       },
-    },
-    include: {
-      session: { select: { date: true, testedLevelId: true, testedLevel: { select: { name: true } } } },
-      judgedLevel: { select: { id: true, name: true, order: true } },
-    },
-    orderBy: { session: { date: "desc" } },
-  });
+      include: {
+        session: { select: { date: true, testedLevelId: true, testedLevel: { select: { name: true } } } },
+        judgedLevel: { select: { id: true, name: true, order: true } },
+      },
+    });
+    entries.sort((a, b) => b.session.date.getTime() - a.session.date.getTime());
 
-  for (const e of entries) {
-    if (params.kind === "MARKS") {
-      if (marks.has(e.studentId)) continue;
-      if (e.score == null || e.maxScore == null || e.percentage == null) continue;
-      marks.set(e.studentId, {
-        date: ymd(e.session.date),
-        score: e.score,
-        maxScore: e.maxScore,
-        percentage: e.percentage,
-        levelId: e.session.testedLevelId,
-        levelName: e.session.testedLevel?.name ?? null,
-      });
-    } else {
-      if (oral.has(e.studentId)) continue;
-      if (!e.judgedLevel) continue;
-      oral.set(e.studentId, {
-        date: ymd(e.session.date),
-        levelId: e.judgedLevel.id,
-        levelName: e.judgedLevel.name,
-        levelOrder: e.judgedLevel.order,
-      });
+    for (const e of entries) {
+      if (params.kind === "MARKS") {
+        if (marks.has(e.studentId)) continue;
+        if (e.score == null || e.maxScore == null || e.percentage == null) continue;
+        marks.set(e.studentId, {
+          date: ymd(e.session.date),
+          score: e.score,
+          maxScore: e.maxScore,
+          percentage: e.percentage,
+          levelId: e.session.testedLevelId,
+          levelName: e.session.testedLevel?.name ?? null,
+        });
+      } else {
+        if (oral.has(e.studentId)) continue;
+        if (!e.judgedLevel) continue;
+        oral.set(e.studentId, {
+          date: ymd(e.session.date),
+          levelId: e.judgedLevel.id,
+          levelName: e.judgedLevel.name,
+          levelOrder: e.judgedLevel.order,
+        });
+      }
     }
+  } catch {
+    return { marks, oral };
   }
 
   return { marks, oral };
@@ -225,7 +229,7 @@ router.get("/classroom-assessments", async (req, res) => {
     return {
       studentId: s.id,
       fullName: s.fullName,
-      studentLoginId: s.user.studentLoginId,
+      studentLoginId: s.user?.studentLoginId ?? null,
       absent: e?.absent ?? false,
       score: e?.score ?? null,
       maxScore: e?.maxScore ?? null,

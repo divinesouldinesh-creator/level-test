@@ -195,6 +195,10 @@ export function TeacherClassroomTestPage() {
   }, [classId, sections, sectionId]);
 
   useEffect(() => {
+    setRows([]);
+  }, [classId, sectionId]);
+
+  useEffect(() => {
     void (async () => {
       if (!classId) {
         setSubjects([]);
@@ -230,21 +234,20 @@ export function TeacherClassroomTestPage() {
   }, [subjectId, subjectLevels, testedLevelId]);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       if (tab !== "mark") return;
       if (!classId || !sectionId || !subjectId || !date) {
         setRows([]);
         return;
       }
-      if (kind === "MARKS" && !testedLevelId) {
-        setRows([]);
+      if (selectedClass && !selectedClass.sections.some((s) => s.id === sectionId)) {
         return;
       }
+      if (kind === "MARKS" && !testedLevelId) return;
       const subject = subjects.find((s) => s.id === subjectId);
-      if (kind === "MARKS" && subject && !subject.levels.some((l) => l.id === testedLevelId)) {
-        setRows([]);
-        return;
-      }
+      if (!subject) return;
+      if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) return;
       setLoading(true);
       setError(null);
       setMessage(null);
@@ -257,10 +260,10 @@ export function TeacherClassroomTestPage() {
       });
       if (kind === "MARKS") q.set("testedLevelId", testedLevelId);
       const r = await api<RosterResponse>(`/api/v1/teacher/classroom-assessments?${q.toString()}`);
+      if (cancelled) return;
       setLoading(false);
       if (!r.ok || !r.data) {
         setError(r.error ?? "Could not load roster");
-        setRows([]);
         return;
       }
       setNotes(r.data.notes ?? "");
@@ -284,7 +287,10 @@ export function TeacherClassroomTestPage() {
         }))
       );
     })();
-  }, [tab, classId, sectionId, subjectId, kind, date, testedLevelId, subjects]);
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, classId, sectionId, subjectId, kind, date, testedLevelId, subjects, selectedClass]);
 
   useEffect(() => {
     void (async () => {
@@ -611,9 +617,12 @@ export function TeacherClassroomTestPage() {
             </p>
           </>
         ) : null}
-        {loading ? <p className="text-sm text-slate-500">Loading…</p> : null}
+        {loading ? <p className="text-sm text-slate-500">Loading students…</p> : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
+        {tab === "mark" && !loading && !error && classId && sectionId && subjectId && rows.length === 0 ? (
+          <p className="text-sm text-slate-500">No students in this class and section.</p>
+        ) : null}
       </section>
 
       {tab === "mark" && kind === "ORAL" && levels.length > 0 ? (
