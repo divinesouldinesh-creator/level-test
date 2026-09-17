@@ -68,7 +68,7 @@ export function AdminQuestionBankPage() {
   const [levelId, setLevelId] = useState("");
   const [topicId, setTopicId] = useState("");
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
-  const [levelQuestions, setLevelQuestions] = useState<QuestionRow[]>([]);
+  const [topicQuestionCount, setTopicQuestionCount] = useState<Map<string, number>>(new Map());
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -135,11 +135,6 @@ export function AdminQuestionBankPage() {
     () => new Map((selectedSubject?.levels ?? []).map((l) => [l.id, l.name])),
     [selectedSubject]
   );
-  const topicQuestionCount = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const q of levelQuestions) map.set(q.topicId, (map.get(q.topicId) ?? 0) + 1);
-    return map;
-  }, [levelQuestions]);
 
   useEffect(() => {
     if (isChapterMode) {
@@ -166,7 +161,7 @@ export function AdminQuestionBankPage() {
 
   useEffect(() => {
     if (!subjectId || (!isChapterMode && !levelId)) {
-      setLevelQuestions([]);
+      setTopicQuestionCount(new Map());
       return;
     }
     void loadLevelQuestionStatus(subjectId, apiLevelId);
@@ -185,10 +180,15 @@ export function AdminQuestionBankPage() {
   async function loadLevelQuestionStatus(currentSubjectId: string, currentLevelId: string) {
     const q = new URLSearchParams();
     q.set("subjectId", currentSubjectId);
-    q.set("levelId", currentLevelId);
-    const r = await api<QuestionRow[]>(`/api/v1/admin/questions?${q.toString()}`);
-    if (!r.ok) setErr(r.error ?? "Failed to load topic question status");
-    else setLevelQuestions(r.data ?? []);
+    if (currentLevelId) q.set("levelId", currentLevelId);
+    const r = await api<{ topicId: string; count: number }[]>(`/api/v1/admin/questions/counts?${q.toString()}`);
+    if (!r.ok) {
+      setErr(r.error ?? "Failed to load topic question status");
+      return;
+    }
+    const map = new Map<string, number>();
+    for (const row of r.data ?? []) map.set(row.topicId, row.count);
+    setTopicQuestionCount(map);
   }
 
   async function refreshSubjects() {

@@ -1396,20 +1396,37 @@ router.post("/question-images", (req, res, next) => {
   res.json({ url: `/uploads/questions/${req.file.filename}` });
 });
 
+function questionListWhere(query: { topicId?: string; levelId?: string; subjectId?: string }) {
+  const levelRaw = query.levelId;
+  const noLevel = levelRaw === "none" || levelRaw === "null";
+  const levelId = parseOptionalLevelId(levelRaw);
+  return {
+    ...(query.topicId ? { topicId: query.topicId } : {}),
+    ...(noLevel ? { levelId: null } : levelId ? { levelId } : {}),
+    ...(query.subjectId ? { subjectId: query.subjectId } : {}),
+  };
+}
+
+router.get("/questions/counts", async (req, res) => {
+  const subjectId = req.query.subjectId as string | undefined;
+  const levelRaw = typeof req.query.levelId === "string" ? req.query.levelId : undefined;
+  if (!subjectId) return res.status(400).json({ error: "subjectId required" });
+  const grouped = await prisma.question.groupBy({
+    by: ["topicId"],
+    where: questionListWhere({ subjectId, levelId: levelRaw }),
+    _count: { _all: true },
+  });
+  res.json(grouped.map((row) => ({ topicId: row.topicId, count: row._count._all })));
+});
+
 router.get("/questions", async (req, res) => {
   const topicId = req.query.topicId as string | undefined;
   const levelRaw = typeof req.query.levelId === "string" ? req.query.levelId : undefined;
-  const noLevel = levelRaw === "none" || levelRaw === "null";
-  const levelId = parseOptionalLevelId(levelRaw);
   const subjectId = req.query.subjectId as string | undefined;
-  const where = {
-    ...(topicId ? { topicId } : {}),
-    ...(noLevel ? { levelId: null } : levelId ? { levelId } : {}),
-    ...(subjectId ? { subjectId } : {}),
-  };
+  const where = questionListWhere({ topicId, levelId: levelRaw, subjectId });
   const list = await prisma.question.findMany({
     where,
-    take: 200,
+    take: 5000,
     orderBy: { createdAt: "desc" },
     include: { topic: true, level: true, subject: true },
   });
