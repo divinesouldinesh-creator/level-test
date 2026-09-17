@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS "MasterySessionQuestion" (
     "question_id" TEXT NOT NULL,
     "order_index" INTEGER NOT NULL,
     "selected_option" INTEGER,
+    "numeric_answer" DOUBLE PRECISION,
     "is_correct" BOOLEAN,
     CONSTRAINT "MasterySessionQuestion_pkey" PRIMARY KEY ("id")
 )`);

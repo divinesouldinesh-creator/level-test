@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS "DailyChallengeQuestion" (
     "question_id" TEXT NOT NULL,
     "order_index" INTEGER NOT NULL,
     "selected_option" INTEGER,
+    "numeric_answer" DOUBLE PRECISION,
     "is_correct" BOOLEAN,
     CONSTRAINT "DailyChallengeQuestion_pkey" PRIMARY KEY ("id")
 )`);

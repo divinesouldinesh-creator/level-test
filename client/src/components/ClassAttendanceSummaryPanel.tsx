@@ -24,13 +24,25 @@ type Props = {
   apiPrefix: "/api/v1/teacher" | "/api/v1/admin";
   classId: string;
   sectionId: string;
+  initialRange?: AttendanceRange;
+  initialDate?: string;
+  initialCustomFrom?: string;
+  initialCustomTo?: string;
 };
 
-export function ClassAttendanceSummaryPanel({ apiPrefix, classId, sectionId }: Props) {
-  const [range, setRange] = useState<AttendanceRange>("last_7_days");
-  const [date, setDate] = useState(() => todayIso());
-  const [customFrom, setCustomFrom] = useState(() => academicYearStartIso(todayIso()));
-  const [customTo, setCustomTo] = useState(() => todayIso());
+export function ClassAttendanceSummaryPanel({
+  apiPrefix,
+  classId,
+  sectionId,
+  initialRange = "last_7_days",
+  initialDate,
+  initialCustomFrom,
+  initialCustomTo,
+}: Props) {
+  const [range, setRange] = useState<AttendanceRange>(initialRange);
+  const [date, setDate] = useState(() => initialDate ?? todayIso());
+  const [customFrom, setCustomFrom] = useState(() => initialCustomFrom ?? academicYearStartIso(todayIso()));
+  const [customTo, setCustomTo] = useState(() => initialCustomTo ?? todayIso());
   const [summary, setSummary] = useState<ClassAttendanceSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);

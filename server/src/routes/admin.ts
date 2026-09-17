@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import bcrypt from "bcryptjs";
 import multer from "multer";
 import fs from "fs";
@@ -8,14 +8,17 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
-import { attendanceReportForStudent, attendanceSummaryForClassSection } from "../services/attendanceReport.js";
+import { attendanceOverviewForSchool, attendanceReportForStudent, attendanceSummaryForClassSection } from "../services/attendanceReport.js";
 import {
+  attendanceOverviewQuerySchema,
   attendanceReportQuerySchemaWithStudent,
   attendanceSummaryQuerySchema,
 } from "../schemas/attendanceReportQuery.js";
 import { updateStudentNameSchema } from "../schemas/student.js";
 import { questionContentHash } from "../utils/questionHash.js";
-import { extractTextFromDocx, parseQuestionBlocks, parseDifficulty } from "../services/wordImport.js";
+import { extractTextFromDocx, parseQuestionBlocks, parseDifficulty, type ParsedQuestion } from "../services/wordImport.js";
+import { parseNumericInput, parseQuestionType, questionAnswerKey } from "../services/questionAnswer.js";
+import { persistParsedQuestions, normalizeQuestionFields } from "../services/questionPersist.js";
 import {
   buildRowsFromUpload,
   classLabelForDisplay,
@@ -48,7 +51,7 @@ function officeMayAccessAdminRoute(method: string, path: string): boolean {
   if (prefixes.some((prefix) => p === prefix || p.startsWith(`${prefix}/`))) {
     return true;
   }
-  // Class list for filters / student create — read only
+  // Class list for filters / student create â€” read only
   if (p === "/classes" || p.startsWith("/classes/")) {
     return method.toUpperCase() === "GET";
   }
@@ -155,26 +158,65 @@ const stemImageUrlSchema = z
     message: "Invalid image URL",
   });
 
+const subjectTestModeSchema = z.enum(["LEVEL", "CHAPTER"]);
+
+function parseOptionalLevelId(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim();
+  if (!v || v === "none" || v === "null") return undefined;
+  return v;
+}
+
+async function resolveQuestionPlacement(
+  subjectId: string,
+  topicId: string,
+  levelId?: string | null
+): Promise<
+  | { ok: true; subjectId: string; levelId: string | null; topicId: string }
+  | { ok: false; status: number; error: string }
+> {
+  const subject = await prisma.subject.findUnique({
+    where: { id: subjectId },
+    select: { id: true, testMode: true },
+  });
+  if (!subject) return { ok: false, status: 404, error: "Subject not found" };
+  const topic = await prisma.topic.findUnique({ where: { id: topicId }, select: { id: true } });
+  if (!topic) return { ok: false, status: 400, error: "Chapter not found" };
+
+  if (subject.testMode === "CHAPTER") {
+    const chapter = await prisma.subjectChapter.findUnique({
+      where: { subjectId_topicId: { subjectId, topicId } },
+    });
+    if (!chapter) return { ok: false, status: 400, error: "Chapter is not on this branch" };
+    return { ok: true, subjectId, topicId, levelId: null };
+  }
+
+  if (!levelId) return { ok: false, status: 400, error: "levelId required" };
+  const level = await prisma.level.findFirst({
+    where: { id: levelId, subjectId },
+    select: { id: true },
+  });
+  if (!level) return { ok: false, status: 400, error: "Level not found for this subject" };
+  return { ok: true, subjectId, topicId, levelId };
+}
+
 function normHeader(s: string): string {
   return s.trim().toLowerCase().replace(/[\s_]+/g, "");
 }
 
-type SheetQuestion = {
-  stem: string;
-  optionA: string;
-  optionB: string;
-  optionC: string;
-  optionD: string;
-  correctOption: number;
-  difficulty?: "EASY" | "MEDIUM" | "HARD";
-};
+function letterIndex(answer: string): number | null {
+  const letter = answer.trim().toUpperCase()[0] ?? "";
+  const idx = letter.charCodeAt(0) - 65;
+  if (idx < 0 || idx > 3) return null;
+  return idx;
+}
 
-function parseQuestionSheetBuffer(buf: Buffer): SheetQuestion[] {
+function parseQuestionSheetBuffer(buf: Buffer): ParsedQuestion[] {
   const wb = XLSX.read(buf, { type: "buffer" });
   if (!wb.SheetNames.length) throw new Error("Empty workbook");
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-  const out: SheetQuestion[] = [];
+  const out: ParsedQuestion[] = [];
   for (let i = 0; i < rawRows.length; i++) {
     const raw = rawRows[i];
     const mapped = new Map<string, string>();
@@ -184,18 +226,81 @@ function parseQuestionSheetBuffer(buf: Buffer): SheetQuestion[] {
     const optionB = mapped.get("optionb") ?? mapped.get("b") ?? "";
     const optionC = mapped.get("optionc") ?? mapped.get("c") ?? "";
     const optionD = mapped.get("optiond") ?? mapped.get("d") ?? "";
-    const answerRaw = (mapped.get("answer") ?? "").trim().toUpperCase();
-    if (!stem && !optionA && !optionB && !optionC && !optionD && !answerRaw) continue;
-    if (!stem || !optionA || !optionB || !optionC || !optionD || !answerRaw) {
-      throw new Error(`Row ${i + 2}: question, optionA-D and answer are required`);
+    const answerOriginal = (mapped.get("answer") ?? "").trim();
+    const typeRaw = mapped.get("type") ?? mapped.get("questiontype") ?? "";
+    if (!stem && !optionA && !optionB && !optionC && !optionD && !answerOriginal && !typeRaw) continue;
+    if (!stem || !answerOriginal) {
+      throw new Error(`Row ${i + 2}: question and answer are required`);
     }
-    const letter = answerRaw[0] ?? "";
-    const idx = letter.charCodeAt(0) - 65;
-    if (idx < 0 || idx > 3) throw new Error(`Row ${i + 2}: answer must be A/B/C/D`);
     const diffRaw = (mapped.get("difficulty") ?? "").trim().toUpperCase();
     const difficulty: "EASY" | "MEDIUM" | "HARD" | undefined =
-      diffRaw === "EASY" || diffRaw === "E" ? "EASY" : diffRaw === "HARD" || diffRaw === "H" ? "HARD" : diffRaw === "MEDIUM" || diffRaw === "M" ? "MEDIUM" : undefined;
-    out.push({ stem, optionA, optionB, optionC, optionD, correctOption: idx, difficulty });
+      diffRaw === "EASY" || diffRaw === "E"
+        ? "EASY"
+        : diffRaw === "HARD" || diffRaw === "H"
+          ? "HARD"
+          : diffRaw === "MEDIUM" || diffRaw === "M"
+            ? "MEDIUM"
+            : undefined;
+    const declared = parseQuestionType(typeRaw);
+    const numeric = parseNumericInput(answerOriginal);
+    const letter = letterIndex(answerOriginal);
+    const inferred =
+      declared ??
+      (numeric != null && !optionA && !optionB && !optionC && !optionD
+        ? "NUMERIC"
+        : optionA && optionB && !optionC && !optionD && letter != null && letter <= 1
+          ? "MCQ2"
+          : "MCQ");
+    const tolerance = parseNumericInput(mapped.get("tolerance") ?? mapped.get("tol") ?? "") ?? 0;
+    if (inferred === "NUMERIC") {
+      if (numeric == null) throw new Error(`Row ${i + 2}: numeric answer required`);
+      out.push({
+        type: "NUMERIC",
+        stem,
+        optionA: "",
+        optionB: "",
+        optionC: "",
+        optionD: "",
+        correctOption: 0,
+        correctNumeric: numeric,
+        numericTolerance: Math.max(0, tolerance),
+        difficulty,
+      });
+      continue;
+    }
+    if (inferred === "MCQ2") {
+      if (!optionA || !optionB) throw new Error(`Row ${i + 2}: optionA and optionB are required`);
+      if (letter == null || letter > 1) throw new Error(`Row ${i + 2}: answer must be A or B`);
+      out.push({
+        type: "MCQ2",
+        stem,
+        optionA,
+        optionB,
+        optionC: "",
+        optionD: "",
+        correctOption: letter,
+        correctNumeric: null,
+        numericTolerance: 0,
+        difficulty,
+      });
+      continue;
+    }
+    if (!optionA || !optionB || !optionC || !optionD) {
+      throw new Error(`Row ${i + 2}: question, optionA-D and answer are required`);
+    }
+    if (letter == null) throw new Error(`Row ${i + 2}: answer must be A/B/C/D`);
+    out.push({
+      type: "MCQ",
+      stem,
+      optionA,
+      optionB,
+      optionC,
+      optionD,
+      correctOption: letter,
+      correctNumeric: null,
+      numericTolerance: 0,
+      difficulty,
+    });
   }
   if (!out.length) throw new Error("No valid question rows found in file");
   return out;
@@ -380,6 +485,19 @@ router.get("/attendance/summary", async (req, res) => {
   if (!summary) return res.status(404).json({ error: "Class or section not found" });
   if ("error" in summary) return res.status(400).json({ error: summary.error });
   res.json(summary);
+});
+
+router.get("/attendance/overview", async (req, res) => {
+  const parsed = attendanceOverviewQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const overview = await attendanceOverviewForSchool(prisma, {
+    range: parsed.data.range,
+    anchorDate: parsed.data.date,
+    from: parsed.data.from,
+    to: parsed.data.to,
+  });
+  if ("error" in overview) return res.status(400).json({ error: overview.error });
+  res.json(overview);
 });
 
 function attendanceDateOnly(value: string): Date | null {
@@ -654,7 +772,7 @@ router.delete("/classes/:classId/subjects/:subjectId", async (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Subject areas (Maths / English) → branches (skill subjects) ---
+// --- Subject areas (Maths / English) â†’ branches (skill subjects) ---
 router.get("/subject-areas", async (_req, res) => {
   const payload = await cacheGetOrSet(CACHE_KEY.adminAreas, CACHE_TTL_MS.catalog, async () => {
     const areas = await prisma.subjectArea.findMany({
@@ -662,7 +780,7 @@ router.get("/subject-areas", async (_req, res) => {
       include: {
         subjects: {
           orderBy: { name: "asc" },
-          select: { id: true, name: true, code: true },
+          select: { id: true, name: true, code: true, testMode: true },
         },
         _count: { select: { subjects: true } },
       },
@@ -756,6 +874,10 @@ router.post("/subject-areas/:areaId/branches", async (req, res) => {
     name: z.string().min(1),
     code: z.string().optional(),
     classId: z.string().optional(),
+    testMode: subjectTestModeSchema.optional(),
+    chapterTestQuestionCount: z.number().int().positive().optional(),
+    chapterNegativeMarking: z.boolean().optional(),
+    chapterWrongPenalty: z.number().finite().min(0).max(1).optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -768,6 +890,10 @@ router.post("/subject-areas/:areaId/branches", async (req, res) => {
         name: p.data.name.trim(),
         code: p.data.code?.trim() || undefined,
         areaId,
+        testMode: p.data.testMode ?? "LEVEL",
+        chapterTestQuestionCount: p.data.chapterTestQuestionCount ?? 10,
+        chapterNegativeMarking: p.data.chapterNegativeMarking ?? false,
+        chapterWrongPenalty: p.data.chapterWrongPenalty ?? 0.25,
       },
     });
     if (p.data.classId) {
@@ -804,6 +930,10 @@ router.get("/subjects", async (_req, res) => {
             },
           },
         },
+        chapters: {
+          orderBy: { sortOrder: "asc" },
+          include: { topic: { select: { id: true, name: true } } },
+        },
       },
     });
     return list.map((subject) => {
@@ -811,18 +941,30 @@ router.get("/subjects", async (_req, res) => {
         lvl.levelTopicParticipations.map((part) => ({
           id: part.topic.id,
           name: part.topic.name,
-          levelId: lvl.id,
+          levelId: lvl.id as string | null,
         }))
       );
+      for (const ch of subject.chapters) {
+        topicRows.push({
+          id: ch.topic.id,
+          name: ch.topic.name,
+          levelId: null,
+        });
+      }
       const seen = new Set<string>();
       const topics = topicRows.filter((t) => {
-        const key = `${t.id}:${t.levelId}`;
+        const key = `${t.id}:${t.levelId ?? "none"}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
       return {
         ...subject,
+        chapters: subject.chapters.map((ch) => ({
+          id: ch.topic.id,
+          name: ch.topic.name,
+          sortOrder: ch.sortOrder,
+        })),
         topics,
       };
     });
@@ -972,7 +1114,7 @@ router.post("/subjects/:subjectId/topics", async (req, res) => {
   const normalizedName = p.data.name.trim();
   if (!normalizedName) return res.status(400).json({ error: "Name required" });
 
-  // Parallelize the level check and the duplicate-by-name lookup — both are
+  // Parallelize the level check and the duplicate-by-name lookup â€” both are
   // independent reads, and on remote DBs the round-trip cost dominates.
   const [lvl, duplicateByName] = await Promise.all([
     p.data.levelId
@@ -999,8 +1141,33 @@ router.post("/subjects/:subjectId/topics", async (req, res) => {
         sortOrder: 999,
       },
     });
+  } else {
+    const subject = await prisma.subject.findUnique({
+      where: { id: subjectId },
+      select: { testMode: true, chapters: { select: { sortOrder: true }, orderBy: { sortOrder: "desc" }, take: 1 } },
+    });
+    if (subject?.testMode === "CHAPTER") {
+      const nextOrder = (subject.chapters[0]?.sortOrder ?? -1) + 1;
+      await prisma.subjectChapter.upsert({
+        where: { subjectId_topicId: { subjectId, topicId: t.id } },
+        update: {},
+        create: { subjectId, topicId: t.id, sortOrder: nextOrder },
+      });
+    }
   }
   res.json(t);
+});
+
+router.delete("/subjects/:subjectId/chapters/:topicId", async (req, res) => {
+  const { subjectId, topicId } = req.params;
+  try {
+    await prisma.subjectChapter.delete({
+      where: { subjectId_topicId: { subjectId, topicId } },
+    });
+  } catch {
+    return res.status(404).json({ error: "Chapter not found on this branch" });
+  }
+  res.json({ ok: true });
 });
 
 router.delete("/subjects/:subjectId", async (req, res) => {
@@ -1033,6 +1200,10 @@ router.patch("/subjects/:subjectId", async (req, res) => {
     name: z.string().optional(),
     code: z.string().nullable().optional(),
     areaId: z.string().nullable().optional(),
+    testMode: subjectTestModeSchema.optional(),
+    chapterTestQuestionCount: z.number().int().positive().max(100).optional(),
+    chapterNegativeMarking: z.boolean().optional(),
+    chapterWrongPenalty: z.number().finite().min(0).max(1).optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -1060,6 +1231,14 @@ router.patch("/subjects/:subjectId", async (req, res) => {
       ...(p.data.name !== undefined ? { name: nextName } : {}),
       ...(p.data.code !== undefined ? { code: nextCode } : {}),
       ...(p.data.areaId !== undefined ? { areaId: p.data.areaId } : {}),
+      ...(p.data.testMode !== undefined ? { testMode: p.data.testMode } : {}),
+      ...(p.data.chapterTestQuestionCount !== undefined
+        ? { chapterTestQuestionCount: p.data.chapterTestQuestionCount }
+        : {}),
+      ...(p.data.chapterNegativeMarking !== undefined
+        ? { chapterNegativeMarking: p.data.chapterNegativeMarking }
+        : {}),
+      ...(p.data.chapterWrongPenalty !== undefined ? { chapterWrongPenalty: p.data.chapterWrongPenalty } : {}),
     },
   });
   res.json(s);
@@ -1219,11 +1398,13 @@ router.post("/question-images", (req, res, next) => {
 
 router.get("/questions", async (req, res) => {
   const topicId = req.query.topicId as string | undefined;
-  const levelId = req.query.levelId as string | undefined;
+  const levelRaw = typeof req.query.levelId === "string" ? req.query.levelId : undefined;
+  const noLevel = levelRaw === "none" || levelRaw === "null";
+  const levelId = parseOptionalLevelId(levelRaw);
   const subjectId = req.query.subjectId as string | undefined;
   const where = {
     ...(topicId ? { topicId } : {}),
-    ...(levelId ? { levelId } : {}),
+    ...(noLevel ? { levelId: null } : levelId ? { levelId } : {}),
     ...(subjectId ? { subjectId } : {}),
   };
   const list = await prisma.question.findMany({
@@ -1238,30 +1419,43 @@ router.get("/questions", async (req, res) => {
 router.post("/questions", async (req, res) => {
   const schema = z.object({
     subjectId: z.string(),
-    levelId: z.string(),
+    levelId: z.string().optional(),
     topicId: z.string(),
     stem: z.string(),
-    optionA: z.string(),
-    optionB: z.string(),
-    optionC: z.string(),
-    optionD: z.string(),
-    correctOption: z.number().min(0).max(3),
+    type: z.enum(["MCQ", "MCQ2", "NUMERIC"]).optional(),
+    optionA: z.string().optional(),
+    optionB: z.string().optional(),
+    optionC: z.string().optional(),
+    optionD: z.string().optional(),
+    correctOption: z.number().int().min(0).max(3).optional(),
+    correctNumeric: z.number().finite().nullable().optional(),
+    numericTolerance: z.number().finite().min(0).optional(),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
     stemImageUrl: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
-  const hash = questionContentHash(p.data.topicId, p.data.stem, p.data.correctOption);
+  const placement = await resolveQuestionPlacement(
+    p.data.subjectId,
+    p.data.topicId,
+    parseOptionalLevelId(p.data.levelId)
+  );
+  if (!placement.ok) return res.status(placement.status).json({ error: placement.error });
+  const normalized = normalizeQuestionFields(p.data);
+  if (!normalized.ok) return res.status(400).json({ error: normalized.error });
+  const hash = questionContentHash(p.data.topicId, normalized.fields.stem, questionAnswerKey(normalized.fields));
   const dup = await prisma.question.findUnique({ where: { contentHash: hash } });
   if (dup) {
     res.status(409).json({ error: "Duplicate question", id: dup.id });
     return;
   }
-  const { stemImageUrl, ...rest } = p.data;
   const q = await prisma.question.create({
     data: {
-      ...rest,
-      stemImageUrl: stemImageUrl || null,
+      subjectId: placement.subjectId,
+      levelId: placement.levelId,
+      topicId: placement.topicId,
+      ...normalized.fields,
+      stemImageUrl: p.data.stemImageUrl || null,
       contentHash: hash,
       createdById: req.user!.sub,
       difficulty: p.data.difficulty ?? "MEDIUM",
@@ -1278,11 +1472,14 @@ router.delete("/questions/:id", async (req, res) => {
 router.patch("/questions/:id", async (req, res) => {
   const schema = z.object({
     stem: z.string().optional(),
+    type: z.enum(["MCQ", "MCQ2", "NUMERIC"]).optional(),
     optionA: z.string().optional(),
     optionB: z.string().optional(),
     optionC: z.string().optional(),
     optionD: z.string().optional(),
     correctOption: z.number().int().min(0).max(3).optional(),
+    correctNumeric: z.number().finite().nullable().optional(),
+    numericTolerance: z.number().finite().min(0).optional(),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
     stemImageUrl: stemImageUrlSchema,
   });
@@ -1292,18 +1489,29 @@ router.patch("/questions/:id", async (req, res) => {
   const existing = await prisma.question.findUnique({ where: { id: req.params.id } });
   if (!existing) return res.status(404).json({ error: "Question not found" });
 
-  const nextStem = p.data.stem ?? existing.stem;
-  const nextCorrectOption = p.data.correctOption ?? existing.correctOption;
-  const nextHash = questionContentHash(existing.topicId, nextStem, nextCorrectOption);
+  const normalized = normalizeQuestionFields({
+    type: p.data.type ?? existing.type,
+    stem: p.data.stem ?? existing.stem,
+    optionA: p.data.optionA ?? existing.optionA,
+    optionB: p.data.optionB ?? existing.optionB,
+    optionC: p.data.optionC ?? existing.optionC,
+    optionD: p.data.optionD ?? existing.optionD,
+    correctOption: p.data.correctOption ?? existing.correctOption,
+    correctNumeric: p.data.correctNumeric !== undefined ? p.data.correctNumeric : existing.correctNumeric,
+    numericTolerance: p.data.numericTolerance ?? existing.numericTolerance,
+  });
+  if (!normalized.ok) return res.status(400).json({ error: normalized.error });
+
+  const nextHash = questionContentHash(existing.topicId, normalized.fields.stem, questionAnswerKey(normalized.fields));
   const dup = await prisma.question.findUnique({ where: { contentHash: nextHash } });
   if (dup && dup.id !== existing.id) return res.status(409).json({ error: "Duplicate question", id: dup.id });
 
-  const { stemImageUrl, ...rest } = p.data;
   const q = await prisma.question.update({
     where: { id: existing.id },
     data: {
-      ...rest,
-      ...(stemImageUrl !== undefined ? { stemImageUrl: stemImageUrl || null } : {}),
+      ...normalized.fields,
+      ...(p.data.difficulty !== undefined ? { difficulty: p.data.difficulty } : {}),
+      ...(p.data.stemImageUrl !== undefined ? { stemImageUrl: p.data.stemImageUrl || null } : {}),
       contentHash: nextHash,
     },
   });
@@ -1314,7 +1522,7 @@ router.patch("/questions/:id", async (req, res) => {
 router.post("/questions/import", upload.single("file"), async (req, res) => {
   const schema = z.object({
     subjectId: z.string(),
-    levelId: z.string(),
+    levelId: z.string().optional(),
     topicId: z.string(),
     difficulty: z.string().optional(),
   });
@@ -1323,6 +1531,16 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
     if (req.file) fs.unlink(req.file.path, () => {});
     res.status(400).json({ error: p.success ? "file required" : p.error.flatten() });
     return;
+  }
+
+  const placement = await resolveQuestionPlacement(
+    p.data.subjectId,
+    p.data.topicId,
+    parseOptionalLevelId(p.data.levelId)
+  );
+  if (!placement.ok) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(placement.status).json({ error: placement.error });
   }
 
   const originalname = req.file.originalname;
@@ -1338,104 +1556,27 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
   }
 
   const parsed = parseQuestionBlocks(text);
-  const diff = parseDifficulty(p.data.difficulty);
-  let imported = 0;
-  let updated = 0;
-  let skipped = 0;
-  const errors: string[] = [];
   const modeRaw = String(req.body.mode ?? "insert").toLowerCase();
   const mode = modeRaw === "sync" || modeRaw === "replace" ? modeRaw : "insert";
-  if (mode === "replace") {
-    await prisma.question.deleteMany({
-      where: {
-        subjectId: p.data.subjectId,
-        levelId: p.data.levelId,
-        topicId: p.data.topicId,
-      },
-    });
-  }
-
-  for (const pq of parsed) {
-    try {
-      const hash = questionContentHash(p.data.topicId, pq.stem, pq.correctOption);
-      if (mode === "sync") {
-        const existingByStem = await prisma.question.findFirst({
-          where: {
-            topicId: p.data.topicId,
-            stem: pq.stem,
-          },
-        });
-        if (existingByStem) {
-          const clash = await prisma.question.findUnique({ where: { contentHash: hash } });
-          if (clash && clash.id !== existingByStem.id) {
-            skipped++;
-            continue;
-          }
-          await prisma.question.update({
-            where: { id: existingByStem.id },
-            data: {
-              subjectId: p.data.subjectId,
-              levelId: p.data.levelId,
-              topicId: p.data.topicId,
-              stem: pq.stem,
-              optionA: pq.optionA,
-              optionB: pq.optionB,
-              optionC: pq.optionC,
-              optionD: pq.optionD,
-              correctOption: pq.correctOption,
-              difficulty: diff,
-              contentHash: hash,
-            },
-          });
-          updated++;
-          continue;
-        }
-      }
-      const exists = await prisma.question.findUnique({ where: { contentHash: hash } });
-      if (exists) {
-        skipped++;
-        continue;
-      }
-      await prisma.question.create({
-        data: {
-          subjectId: p.data.subjectId,
-          levelId: p.data.levelId,
-          topicId: p.data.topicId,
-          stem: pq.stem,
-          optionA: pq.optionA,
-          optionB: pq.optionB,
-          optionC: pq.optionC,
-          optionD: pq.optionD,
-          correctOption: pq.correctOption,
-          difficulty: diff,
-          contentHash: hash,
-          createdById: req.user!.sub,
-        },
-      });
-      imported++;
-    } catch (e) {
-      errors.push(String(e));
-    }
-  }
-
-  const batch = await prisma.questionImport.create({
-    data: {
-      filename: originalname,
-      uploadedById: req.user!.sub,
-      importedCount: imported + updated,
-      skippedDuplicates: skipped,
-      errorsJson: errors.length ? JSON.stringify(errors.slice(0, 20)) : null,
-    },
+  const result = await persistParsedQuestions(prisma, {
+    parsed,
+    subjectId: placement.subjectId,
+    levelId: placement.levelId,
+    topicId: placement.topicId,
+    mode,
+    defaultDifficulty: parseDifficulty(p.data.difficulty),
+    createdById: req.user!.sub,
+    filename: originalname,
+    recordBatch: true,
   });
-
-  res.json({ batchId: batch.id, mode, imported, updated, skipped, parseCount: parsed.length, errors });
+  res.json(result);
 });
 
 // --- Paste-text import ---
 router.post("/questions/import-text", async (req, res) => {
   const schema = z.object({
     subjectId: z.string(),
-    levelId: z.string(),
+    levelId: z.string().optional(),
     topicId: z.string(),
     text: z.string(),
     mode: z.enum(["insert", "sync", "replace"]).optional(),
@@ -1455,108 +1596,32 @@ router.post("/questions/import-text", async (req, res) => {
     return;
   }
 
-  const diff = parseDifficulty(p.data.difficulty);
-  const mode = p.data.mode ?? "insert";
-  if (mode === "replace") {
-    await prisma.question.deleteMany({
-      where: {
-        subjectId: p.data.subjectId,
-        levelId: p.data.levelId,
-        topicId: p.data.topicId,
-      },
-    });
-  }
+  const placement = await resolveQuestionPlacement(
+    p.data.subjectId,
+    p.data.topicId,
+    parseOptionalLevelId(p.data.levelId)
+  );
+  if (!placement.ok) return res.status(placement.status).json({ error: placement.error });
 
-  let imported = 0;
-  let updated = 0;
-  let skipped = 0;
-  const errors: string[] = [];
-  for (const pq of parsed) {
-    try {
-      const hash = questionContentHash(p.data.topicId, pq.stem, pq.correctOption);
-      if (mode === "sync") {
-        const existingByStem = await prisma.question.findFirst({
-          where: { topicId: p.data.topicId, stem: pq.stem },
-        });
-        if (existingByStem) {
-          const clash = await prisma.question.findUnique({ where: { contentHash: hash } });
-          if (clash && clash.id !== existingByStem.id) {
-            skipped++;
-            continue;
-          }
-          await prisma.question.update({
-            where: { id: existingByStem.id },
-            data: {
-              subjectId: p.data.subjectId,
-              levelId: p.data.levelId,
-              topicId: p.data.topicId,
-              stem: pq.stem,
-              optionA: pq.optionA,
-              optionB: pq.optionB,
-              optionC: pq.optionC,
-              optionD: pq.optionD,
-              correctOption: pq.correctOption,
-              difficulty: diff,
-              contentHash: hash,
-            },
-          });
-          updated++;
-          continue;
-        }
-      }
-      const exists = await prisma.question.findUnique({ where: { contentHash: hash } });
-      if (exists) {
-        skipped++;
-        continue;
-      }
-      await prisma.question.create({
-        data: {
-          subjectId: p.data.subjectId,
-          levelId: p.data.levelId,
-          topicId: p.data.topicId,
-          stem: pq.stem,
-          optionA: pq.optionA,
-          optionB: pq.optionB,
-          optionC: pq.optionC,
-          optionD: pq.optionD,
-          correctOption: pq.correctOption,
-          difficulty: diff,
-          contentHash: hash,
-          createdById: req.user!.sub,
-        },
-      });
-      imported++;
-    } catch (e) {
-      errors.push(String(e));
-    }
-  }
-
-  const batch = await prisma.questionImport.create({
-    data: {
-      filename: "paste-import",
-      uploadedById: req.user!.sub,
-      importedCount: imported + updated,
-      skippedDuplicates: skipped,
-      errorsJson: errors.length ? JSON.stringify(errors.slice(0, 20)) : null,
-    },
+  const result = await persistParsedQuestions(prisma, {
+    parsed,
+    subjectId: placement.subjectId,
+    levelId: placement.levelId,
+    topicId: placement.topicId,
+    mode: p.data.mode ?? "insert",
+    defaultDifficulty: parseDifficulty(p.data.difficulty),
+    createdById: req.user!.sub,
+    filename: "paste-import",
+    recordBatch: true,
   });
-
-  res.json({
-    batchId: batch.id,
-    mode,
-    imported,
-    updated,
-    skipped,
-    parseCount: parsed.length,
-    errors,
-  });
+  res.json(result);
 });
 
 // --- Excel/CSV import ---
 router.post("/questions/import-sheet", upload.single("file"), async (req, res) => {
   const schema = z.object({
     subjectId: z.string(),
-    levelId: z.string(),
+    levelId: z.string().optional(),
     topicId: z.string(),
     mode: z.enum(["insert", "sync", "replace"]).optional(),
     difficulty: z.string().optional(),
@@ -1567,9 +1632,18 @@ router.post("/questions/import-sheet", upload.single("file"), async (req, res) =
     res.status(400).json({ error: p.success ? "file required" : p.error.flatten() });
     return;
   }
+  const placement = await resolveQuestionPlacement(
+    p.data.subjectId,
+    p.data.topicId,
+    parseOptionalLevelId(p.data.levelId)
+  );
+  if (!placement.ok) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(placement.status).json({ error: placement.error });
+  }
   const buf = fs.readFileSync(req.file.path);
   fs.unlink(req.file.path, () => {});
-  let parsed: SheetQuestion[];
+  let parsed: ParsedQuestion[];
   try {
     parsed = parseQuestionSheetBuffer(buf);
   } catch (e) {
@@ -1577,78 +1651,16 @@ router.post("/questions/import-sheet", upload.single("file"), async (req, res) =
     return;
   }
 
-  const diffFallback = parseDifficulty(p.data.difficulty);
-  const mode = p.data.mode ?? "insert";
-  if (mode === "replace") {
-    await prisma.question.deleteMany({
-      where: { subjectId: p.data.subjectId, levelId: p.data.levelId, topicId: p.data.topicId },
-    });
-  }
-
-  let imported = 0;
-  let updated = 0;
-  let skipped = 0;
-  const errors: string[] = [];
-  for (const row of parsed) {
-    try {
-      const hash = questionContentHash(p.data.topicId, row.stem, row.correctOption);
-      if (mode === "sync") {
-        const existingByStem = await prisma.question.findFirst({
-          where: { topicId: p.data.topicId, stem: row.stem },
-        });
-        if (existingByStem) {
-          const clash = await prisma.question.findUnique({ where: { contentHash: hash } });
-          if (clash && clash.id !== existingByStem.id) {
-            skipped++;
-            continue;
-          }
-          await prisma.question.update({
-            where: { id: existingByStem.id },
-            data: {
-              subjectId: p.data.subjectId,
-              levelId: p.data.levelId,
-              topicId: p.data.topicId,
-              stem: row.stem,
-              optionA: row.optionA,
-              optionB: row.optionB,
-              optionC: row.optionC,
-              optionD: row.optionD,
-              correctOption: row.correctOption,
-              difficulty: row.difficulty ?? diffFallback,
-              contentHash: hash,
-            },
-          });
-          updated++;
-          continue;
-        }
-      }
-      const exists = await prisma.question.findUnique({ where: { contentHash: hash } });
-      if (exists) {
-        skipped++;
-        continue;
-      }
-      await prisma.question.create({
-        data: {
-          subjectId: p.data.subjectId,
-          levelId: p.data.levelId,
-          topicId: p.data.topicId,
-          stem: row.stem,
-          optionA: row.optionA,
-          optionB: row.optionB,
-          optionC: row.optionC,
-          optionD: row.optionD,
-          correctOption: row.correctOption,
-          difficulty: row.difficulty ?? diffFallback,
-          contentHash: hash,
-          createdById: req.user!.sub,
-        },
-      });
-      imported++;
-    } catch (e) {
-      errors.push(String(e));
-    }
-  }
-  res.json({ mode, imported, updated, skipped, parseCount: parsed.length, errors });
+  const result = await persistParsedQuestions(prisma, {
+    parsed,
+    subjectId: placement.subjectId,
+    levelId: placement.levelId,
+    topicId: placement.topicId,
+    mode: p.data.mode ?? "insert",
+    defaultDifficulty: parseDifficulty(p.data.difficulty),
+    createdById: req.user!.sub,
+  });
+  res.json(result);
 });
 
 // --- Student account management ---

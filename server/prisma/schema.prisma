@@ -21,6 +21,12 @@ enum Difficulty {
   HARD
 }
 
+enum QuestionType {
+  MCQ
+  MCQ2
+  NUMERIC
+}
+
 enum TestStatus {
   IN_PROGRESS
   COMPLETED
@@ -223,6 +229,7 @@ model DailyChallengeQuestion {
   questionId     String  @map("question_id")
   orderIndex     Int     @map("order_index")
   selectedOption Int?    @map("selected_option")
+  numericAnswer  Float?  @map("numeric_answer")
   isCorrect      Boolean? @map("is_correct")
 
   challenge DailyChallenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
@@ -241,21 +248,41 @@ model SubjectArea {
 }
 
 model Subject {
-  id              String            @id @default(cuid())
-  name            String
-  code            String?
-  areaId          String?           @map("area_id")
-  area            SubjectArea?      @relation(fields: [areaId], references: [id], onDelete: SetNull)
-  levels          Level[]
-  questions       Question[]
-  tests           Test[]
-  classSubjects   ClassSubject[]
-  studentProgress StudentProgress[]
-  dailyChallenges      DailyChallenge[]
-  topicMasteries       TopicMastery[]
-  classroomAssessments ClassroomAssessmentSession[]
+  id                       String          @id @default(cuid())
+  name                     String
+  code                     String?
+  areaId                   String?         @map("area_id")
+  area                     SubjectArea?    @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  /// LEVEL = existing skill tests. CHAPTER = book chapters, no unlock ladder.
+  testMode                 SubjectTestMode @default(LEVEL) @map("test_mode")
+  chapterTestQuestionCount Int             @default(10) @map("chapter_test_question_count")
+  chapterNegativeMarking   Boolean         @default(false) @map("chapter_negative_marking")
+  /// Marks subtracted per wrong answer when chapterNegativeMarking is on (e.g. 0.25).
+  chapterWrongPenalty      Float           @default(0.25) @map("chapter_wrong_penalty")
+  levels                   Level[]
+  chapters                 SubjectChapter[]
+  questions                Question[]
+  tests                    Test[]
+  classSubjects            ClassSubject[]
+  studentProgress          StudentProgress[]
+  dailyChallenges          DailyChallenge[]
+  topicMasteries           TopicMastery[]
+  classroomAssessments     ClassroomAssessmentSession[]
 
   @@index([areaId])
+}
+
+/// Chapters attached to a CHAPTER-mode branch (e.g. NCERT book).
+model SubjectChapter {
+  id        String  @id @default(cuid())
+  subjectId String  @map("subject_id")
+  topicId   String  @map("topic_id")
+  sortOrder Int     @default(0) @map("sort_order")
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topic     Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, topicId])
+  @@index([subjectId])
 }
 
 /// Join: which subjects a class studies (students see these subjects)
@@ -294,6 +321,7 @@ model Topic {
 
   questions                Question[]
   levelTopicParticipations LevelTopicParticipation[]
+  subjectChapters          SubjectChapter[]
   topicPerformance         TopicPerformance[]
   lesson                   TopicLesson?
   masteries                TopicMastery[]
@@ -324,26 +352,30 @@ model LevelTopicParticipation {
 }
 
 model Question {
-  id               String     @id @default(cuid())
-  subjectId        String     @map("subject_id")
-  levelId          String     @map("level_id")
-  topicId          String     @map("topic_id")
+  id               String       @id @default(cuid())
+  subjectId        String       @map("subject_id")
+  /// Null for chapter-mode book questions (no level).
+  levelId          String?      @map("level_id")
+  topicId          String       @map("topic_id")
+  type             QuestionType @default(MCQ)
   stem             String
-  stemImageUrl     String?    @map("stem_image_url")
-  optionA          String     @map("option_a")
-  optionB          String     @map("option_b")
-  optionC          String     @map("option_c")
-  optionD          String     @map("option_d")
-  /// 0=A, 1=B, 2=C, 3=D
-  correctOption    Int        @map("correct_option")
-  difficulty       Difficulty @default(MEDIUM)
+  stemImageUrl     String?      @map("stem_image_url")
+  optionA          String       @default("") @map("option_a")
+  optionB          String       @default("") @map("option_b")
+  optionC          String       @default("") @map("option_c")
+  optionD          String       @default("") @map("option_d")
+  /// 0=A, 1=B, 2=C, 3=D — unused for NUMERIC
+  correctOption    Int          @default(0) @map("correct_option")
+  correctNumeric   Float?       @map("correct_numeric")
+  numericTolerance Float        @default(0) @map("numeric_tolerance")
+  difficulty       Difficulty   @default(MEDIUM)
   contentHash      String     @map("content_hash")
   parentQuestionId String?    @map("parent_question_id")
   createdById      String?    @map("created_by_id")
   createdAt        DateTime   @default(now()) @map("created_at")
 
   subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  level      Level      @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  level      Level?     @relation(fields: [levelId], references: [id], onDelete: Cascade)
   topic      Topic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
   parent     Question?  @relation("QuestionVariations", fields: [parentQuestionId], references: [id], onDelete: SetNull)
   variations Question[] @relation("QuestionVariations")
@@ -360,17 +392,21 @@ model Question {
 }
 
 model Test {
-  id          String     @id @default(cuid())
-  studentId   String     @map("student_id")
-  subjectId   String     @map("subject_id")
-  levelId     String     @map("level_id")
-  status      TestStatus @default(IN_PROGRESS)
-  startedAt   DateTime   @default(now()) @map("started_at")
-  completedAt DateTime?  @map("completed_at")
+  id               String     @id @default(cuid())
+  studentId        String     @map("student_id")
+  subjectId        String     @map("subject_id")
+  /// Null for chapter-mode tests (no level).
+  levelId          String?    @map("level_id")
+  selectedTopicIds String[]   @default([]) @map("selected_topic_ids")
+  /// Snapshot at start. 0 = no negative marking (level tests always 0).
+  wrongPenalty     Float      @default(0) @map("wrong_penalty")
+  status           TestStatus @default(IN_PROGRESS)
+  startedAt        DateTime   @default(now()) @map("started_at")
+  completedAt      DateTime?  @map("completed_at")
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  level   Level   @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  level   Level?  @relation(fields: [levelId], references: [id], onDelete: Cascade)
 
   testQuestions TestQuestion[]
   attempts      TestAttempt[]
@@ -395,7 +431,7 @@ model TestQuestion {
 model TestAttempt {
   id                   String          @id @default(cuid())
   testId               String          @unique @map("test_id")
-  score                Int
+  score                Float
   maxScore             Int             @map("max_score")
   percentage           Float
   band                 PerformanceBand
@@ -412,6 +448,7 @@ model StudentAnswer {
   testAttemptId  String  @map("test_attempt_id")
   questionId     String  @map("question_id")
   selectedOption Int?    @map("selected_option")
+  numericAnswer  Float?  @map("numeric_answer")
   isCorrect      Boolean @map("is_correct")
 
   testAttempt TestAttempt @relation(fields: [testAttemptId], references: [id], onDelete: Cascade)
@@ -517,6 +554,7 @@ model MasterySessionQuestion {
   questionId     String   @map("question_id")
   orderIndex     Int      @map("order_index")
   selectedOption Int?     @map("selected_option")
+  numericAnswer  Float?   @map("numeric_answer")
   isCorrect      Boolean? @map("is_correct")
 
   session  MasterySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -572,6 +610,11 @@ model AttendanceEntry {
 
   @@unique([sessionId, studentId])
   @@index([studentId])
+}
+
+enum SubjectTestMode {
+  LEVEL
+  CHAPTER
 }
 
 enum ClassroomAssessmentKind {

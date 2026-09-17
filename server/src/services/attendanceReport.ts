@@ -2,6 +2,7 @@ import { AttendanceStatus, PrismaClient } from "@prisma/client";
 
 export type AttendanceRange =
   | "daily"
+  | "yesterday"
   | "weekly"
   | "last_7_days"
   | "monthly"
@@ -71,6 +72,10 @@ export function resolveReportBounds(
 
   if (input.range === "daily") {
     const from = startOfDayUtc(anchor);
+    return { from, toExclusive: addDaysUtc(from, 1) };
+  }
+  if (input.range === "yesterday") {
+    const from = addDaysUtc(startOfDayUtc(anchor), -1);
     return { from, toExclusive: addDaysUtc(from, 1) };
   }
   if (input.range === "weekly") {
@@ -339,5 +344,168 @@ export async function attendanceSummaryForClassSection(
     from: from.toISOString().slice(0, 10),
     to: addDaysUtc(toExclusive, -1).toISOString().slice(0, 10),
     students: rows,
+  };
+}
+
+function attendancePct(present: number, absent: number): number | null {
+  const total = present + absent;
+  if (total <= 0) return null;
+  return Math.round((present * 1000) / total) / 10;
+}
+
+export type SchoolAttendanceSectionRow = {
+  classId: string;
+  className: string;
+  sectionId: string;
+  sectionName: string;
+  studentCount: number;
+  present: number;
+  absent: number;
+  totalDays: number;
+  attendancePct: number | null;
+  studentsBelow75: number;
+  studentsNoRecords: number;
+};
+
+export type SchoolAttendanceOverview = {
+  range: AttendanceRange;
+  from: string;
+  to: string;
+  school: {
+    studentCount: number;
+    present: number;
+    absent: number;
+    totalDays: number;
+    attendancePct: number | null;
+    studentsBelow75: number;
+    sectionsBelow75: number;
+    sectionsWithNoRecords: number;
+  };
+  sections: SchoolAttendanceSectionRow[];
+};
+
+/** School-wide attendance by class section. % is present marks ÷ all marked student-days. */
+export async function attendanceOverviewForSchool(
+  prisma: PrismaClient,
+  input: AttendanceReportBoundsInput
+): Promise<SchoolAttendanceOverview | { error: string }> {
+  const bounds = resolveReportBounds(input);
+  if ("error" in bounds) return { error: bounds.error as string };
+
+  const { from, toExclusive } = bounds;
+
+  const [classes, students, entries] = await Promise.all([
+    prisma.schoolClass.findMany({
+      include: { sections: { orderBy: { name: "asc" } } },
+      orderBy: { name: "asc" },
+    }),
+    prisma.student.findMany({
+      select: { id: true, classId: true, sectionId: true },
+    }),
+    prisma.attendanceEntry.findMany({
+      where: {
+        session: { date: { gte: from, lt: toExclusive } },
+      },
+      select: {
+        studentId: true,
+        status: true,
+        session: { select: { classId: true, sectionId: true } },
+      },
+    }),
+  ]);
+
+  const sectionKey = (classId: string, sectionId: string) => `${classId}:${sectionId}`;
+
+  const studentIdsBySection = new Map<string, string[]>();
+  const studentSection = new Map<string, string>();
+  for (const s of students) {
+    const key = sectionKey(s.classId, s.sectionId);
+    const list = studentIdsBySection.get(key);
+    if (list) list.push(s.id);
+    else studentIdsBySection.set(key, [s.id]);
+    studentSection.set(s.id, key);
+  }
+
+  const studentMarks = new Map<string, { present: number; absent: number }>();
+  const sectionMarks = new Map<string, { present: number; absent: number }>();
+  for (const e of entries) {
+    const key = sectionKey(e.session.classId, e.session.sectionId);
+    if (studentSection.get(e.studentId) !== key) continue;
+    const sm = studentMarks.get(e.studentId) ?? { present: 0, absent: 0 };
+    const sec = sectionMarks.get(key) ?? { present: 0, absent: 0 };
+    if (e.status === AttendanceStatus.PRESENT) {
+      sm.present += 1;
+      sec.present += 1;
+    } else if (e.status === AttendanceStatus.ABSENT) {
+      sm.absent += 1;
+      sec.absent += 1;
+    }
+    studentMarks.set(e.studentId, sm);
+    sectionMarks.set(key, sec);
+  }
+
+  const sections: SchoolAttendanceSectionRow[] = [];
+  for (const cls of classes) {
+    for (const section of cls.sections) {
+      const key = sectionKey(cls.id, section.id);
+      const ids = studentIdsBySection.get(key) ?? [];
+      const marks = sectionMarks.get(key) ?? { present: 0, absent: 0 };
+      let studentsBelow75 = 0;
+      let studentsNoRecords = 0;
+      for (const id of ids) {
+        const m = studentMarks.get(id);
+        if (!m || m.present + m.absent === 0) {
+          studentsNoRecords += 1;
+          continue;
+        }
+        const pct = attendancePct(m.present, m.absent);
+        if (pct != null && pct < 75) studentsBelow75 += 1;
+      }
+      const totalDays = marks.present + marks.absent;
+      sections.push({
+        classId: cls.id,
+        className: cls.name,
+        sectionId: section.id,
+        sectionName: section.name,
+        studentCount: ids.length,
+        present: marks.present,
+        absent: marks.absent,
+        totalDays,
+        attendancePct: attendancePct(marks.present, marks.absent),
+        studentsBelow75,
+        studentsNoRecords,
+      });
+    }
+  }
+
+  sections.sort((a, b) => {
+    if (a.attendancePct == null && b.attendancePct == null) {
+      return a.className.localeCompare(b.className) || a.sectionName.localeCompare(b.sectionName);
+    }
+    if (a.attendancePct == null) return 1;
+    if (b.attendancePct == null) return -1;
+    if (a.attendancePct !== b.attendancePct) return a.attendancePct - b.attendancePct;
+    return a.className.localeCompare(b.className) || a.sectionName.localeCompare(b.sectionName);
+  });
+
+  const schoolPresent = sections.reduce((n, s) => n + s.present, 0);
+  const schoolAbsent = sections.reduce((n, s) => n + s.absent, 0);
+  const schoolBelow75 = sections.reduce((n, s) => n + s.studentsBelow75, 0);
+
+  return {
+    range: input.range,
+    from: from.toISOString().slice(0, 10),
+    to: addDaysUtc(toExclusive, -1).toISOString().slice(0, 10),
+    school: {
+      studentCount: students.length,
+      present: schoolPresent,
+      absent: schoolAbsent,
+      totalDays: schoolPresent + schoolAbsent,
+      attendancePct: attendancePct(schoolPresent, schoolAbsent),
+      studentsBelow75: schoolBelow75,
+      sectionsBelow75: sections.filter((s) => s.attendancePct != null && s.attendancePct < 75).length,
+      sectionsWithNoRecords: sections.filter((s) => s.totalDays === 0).length,
+    },
+    sections,
   };
 }

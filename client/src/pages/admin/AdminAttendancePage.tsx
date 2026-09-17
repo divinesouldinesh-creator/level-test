@@ -3,6 +3,7 @@ import { api } from "../../api";
 import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters";
 import { AttendanceMarkingStatusPanel } from "../../components/attendance/AttendanceMarkingStatusPanel";
 import { ClassAttendanceSummaryPanel } from "../../components/ClassAttendanceSummaryPanel";
+import { SchoolAttendanceOverviewPanel } from "../../components/attendance/SchoolAttendanceOverviewPanel";
 import {
   type AttendanceRange,
   type AttendanceReportSummary,
@@ -29,10 +30,14 @@ type AttendanceReport = {
   records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
 };
 
-type AttendanceTab = "marking" | "individual" | "class";
+type AttendanceTab = "school" | "marking" | "individual" | "class";
 
 export function AdminAttendancePage() {
-  const [tab, setTab] = useState<AttendanceTab>("marking");
+  const [tab, setTab] = useState<AttendanceTab>("school");
+  const [classDrillRange, setClassDrillRange] = useState<AttendanceRange>("last_7_days");
+  const [classDrillDate, setClassDrillDate] = useState(() => todayIso());
+  const [classDrillFrom, setClassDrillFrom] = useState(() => academicYearStartIso(todayIso()));
+  const [classDrillTo, setClassDrillTo] = useState(() => todayIso());
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -155,15 +160,16 @@ export function AdminAttendancePage() {
     <div>
       <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
       <p className="text-slate-600 mt-1">
-        See who has marked today, check one student, or view a class summary.
+        See school-wide attendance, who has marked today, check one student, or view a class summary.
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
         {(
           [
+            ["school", "School"],
             ["marking", "Marking status"],
-            ["individual", "Individual"],
             ["class", "Class"],
+            ["individual", "Individual"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -181,7 +187,28 @@ export function AdminAttendancePage() {
         ))}
       </div>
 
-      {tab === "marking" ? (
+      {tab === "school" ? (
+        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">School overview</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Overall attendance for the school, with class sections ranked lowest first. Open a row
+              for student names.
+            </p>
+          </div>
+          <SchoolAttendanceOverviewPanel
+            onOpenClass={(selection) => {
+              setClassId(selection.classId);
+              setSectionId(selection.sectionId);
+              setClassDrillRange(selection.range);
+              setClassDrillDate(selection.date);
+              setClassDrillFrom(selection.customFrom);
+              setClassDrillTo(selection.customTo);
+              setTab("class");
+            }}
+          />
+        </section>
+      ) : tab === "marking" ? (
         <AttendanceMarkingStatusPanel />
       ) : tab === "individual" ? (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
@@ -368,6 +395,10 @@ export function AdminAttendancePage() {
             apiPrefix="/api/v1/admin"
             classId={classId}
             sectionId={sectionId}
+            initialRange={classDrillRange}
+            initialDate={classDrillDate}
+            initialCustomFrom={classDrillFrom}
+            initialCustomTo={classDrillTo}
           />
         </section>
       )}

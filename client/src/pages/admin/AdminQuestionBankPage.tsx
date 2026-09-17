@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, mediaUrl } from "../../api";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
+import { parseNumericInput, questionTypeLabel, type QuestionType } from "../../questionTypes";
 
 type TopicRow = { id: string; name: string; levelId: string | null };
 type LevelRow = { id: string; name: string; order: number };
@@ -8,6 +9,8 @@ type SubjectRow = {
   id: string;
   name: string;
   code: string | null;
+  testMode?: "LEVEL" | "CHAPTER";
+  chapters?: { id: string; name: string; sortOrder: number }[];
   levels: LevelRow[];
   topics: TopicRow[];
   classSubjects?: { schoolClass: { id: string; name: string; grade: string | null } }[];
@@ -16,6 +19,7 @@ type ClassRow = { id: string; name: string; grade: string | null };
 type QuestionRow = {
   id: string;
   topicId: string;
+  type?: QuestionType;
   stem: string;
   stemImageUrl?: string | null;
   optionA: string;
@@ -23,6 +27,8 @@ type QuestionRow = {
   optionC: string;
   optionD: string;
   correctOption: number;
+  correctNumeric?: number | null;
+  numericTolerance?: number;
   difficulty: "EASY" | "MEDIUM" | "HARD";
 };
 
@@ -37,12 +43,15 @@ type ImportResult = {
 };
 
 type ParsedQuestionPreview = {
+  type?: QuestionType;
   stem: string;
   optionA: string;
   optionB: string;
   optionC: string;
   optionD: string;
   correctOption: number;
+  correctNumeric?: number | null;
+  numericTolerance?: number;
 };
 
 type DryRunResult = {
@@ -67,6 +76,7 @@ export function AdminQuestionBankPage() {
   const [importErrors, setImportErrors] = useState<string[]>([]);
 
   const [form, setForm] = useState({
+    type: "MCQ" as QuestionType,
     stem: "",
     stemImageUrl: "" as string,
     optionA: "",
@@ -74,6 +84,8 @@ export function AdminQuestionBankPage() {
     optionC: "",
     optionD: "",
     correctOption: "0",
+    correctNumeric: "",
+    numericTolerance: "0",
     difficulty: "MEDIUM" as "EASY" | "MEDIUM" | "HARD",
     editId: "",
   });
@@ -107,11 +119,18 @@ export function AdminQuestionBankPage() {
   }, [subjects, classId]);
 
   const selectedSubject = useMemo(() => visibleSubjects.find((s) => s.id === subjectId) ?? null, [visibleSubjects, subjectId]);
+  const isChapterMode = selectedSubject?.testMode === "CHAPTER";
   const levelOptions = selectedSubject?.levels ?? [];
-  const topicOptions = useMemo(
-    () => (selectedSubject?.topics ?? []).filter((t) => (levelId ? t.levelId === levelId : false)),
-    [selectedSubject, levelId]
-  );
+  const topicOptions = useMemo(() => {
+    if (!selectedSubject) return [];
+    if (isChapterMode) {
+      if (selectedSubject.chapters?.length) return selectedSubject.chapters.map((c) => ({ id: c.id, name: c.name, levelId: null }));
+      return (selectedSubject.topics ?? []).filter((t) => t.levelId == null);
+    }
+    return (selectedSubject.topics ?? []).filter((t) => (levelId ? t.levelId === levelId : false));
+  }, [selectedSubject, levelId, isChapterMode]);
+  const apiLevelId = isChapterMode ? "none" : levelId;
+  const bankReady = Boolean(subjectId && topicId && (isChapterMode || levelId));
   const levelNameById = useMemo(
     () => new Map((selectedSubject?.levels ?? []).map((l) => [l.id, l.name])),
     [selectedSubject]
@@ -123,11 +142,15 @@ export function AdminQuestionBankPage() {
   }, [levelQuestions]);
 
   useEffect(() => {
+    if (isChapterMode) {
+      if (levelId) setLevelId("");
+      return;
+    }
     if (!selectedSubject || !selectedSubject.levels.some((l) => l.id === levelId)) {
       setLevelId("");
       setTopicId("");
     }
-  }, [selectedSubject, levelId]);
+  }, [selectedSubject, levelId, isChapterMode]);
 
   useEffect(() => {
     if (!topicOptions.some((t) => t.id === topicId)) setTopicId("");
@@ -138,16 +161,16 @@ export function AdminQuestionBankPage() {
       setQuestions([]);
       return;
     }
-    void loadQuestions(topicId, subjectId, levelId);
-  }, [topicId, subjectId, levelId]);
+    void loadQuestions(topicId, subjectId, apiLevelId);
+  }, [topicId, subjectId, apiLevelId]);
 
   useEffect(() => {
-    if (!subjectId || !levelId) {
+    if (!subjectId || (!isChapterMode && !levelId)) {
       setLevelQuestions([]);
       return;
     }
-    void loadLevelQuestionStatus(subjectId, levelId);
-  }, [subjectId, levelId]);
+    void loadLevelQuestionStatus(subjectId, apiLevelId);
+  }, [subjectId, levelId, isChapterMode, apiLevelId]);
 
   async function loadQuestions(currentTopicId: string, currentSubjectId: string, currentLevelId: string) {
     const q = new URLSearchParams();
@@ -182,6 +205,7 @@ export function AdminQuestionBankPage() {
 
   function resetForm() {
     setForm({
+      type: "MCQ",
       stem: "",
       stemImageUrl: "",
       optionA: "",
@@ -189,6 +213,8 @@ export function AdminQuestionBankPage() {
       optionC: "",
       optionD: "",
       correctOption: "0",
+      correctNumeric: "",
+      numericTolerance: "0",
       difficulty: "MEDIUM",
       editId: "",
     });
@@ -223,19 +249,28 @@ export function AdminQuestionBankPage() {
 
   async function saveQuestion(e: React.FormEvent) {
     e.preventDefault();
-    if (!subjectId || !levelId || !topicId) return;
+    if (!subjectId || !topicId || (!isChapterMode && !levelId)) return;
+    const type = form.type;
+    const numericAnswer = parseNumericInput(form.correctNumeric);
+    if (type === "NUMERIC" && numericAnswer == null) {
+      setErr("Enter a numeric answer");
+      return;
+    }
     setBusy(true);
     setErr(null);
     const payload = {
       subjectId,
-      levelId,
+      ...(isChapterMode ? {} : { levelId }),
       topicId,
+      type,
       stem: form.stem.trim(),
-      optionA: form.optionA.trim(),
-      optionB: form.optionB.trim(),
-      optionC: form.optionC.trim(),
-      optionD: form.optionD.trim(),
-      correctOption: parseInt(form.correctOption, 10),
+      optionA: type === "NUMERIC" ? "" : form.optionA.trim(),
+      optionB: type === "NUMERIC" ? "" : form.optionB.trim(),
+      optionC: type === "MCQ" ? form.optionC.trim() : "",
+      optionD: type === "MCQ" ? form.optionD.trim() : "",
+      correctOption: type === "NUMERIC" ? 0 : parseInt(form.correctOption, 10),
+      correctNumeric: type === "NUMERIC" ? numericAnswer : null,
+      numericTolerance: type === "NUMERIC" ? parseNumericInput(form.numericTolerance) ?? 0 : 0,
       difficulty: form.difficulty,
       stemImageUrl: form.stemImageUrl || null,
     };
@@ -243,12 +278,15 @@ export function AdminQuestionBankPage() {
       ? await api(`/api/v1/admin/questions/${form.editId}`, {
           method: "PATCH",
           json: {
+            type: payload.type,
             stem: payload.stem,
             optionA: payload.optionA,
             optionB: payload.optionB,
             optionC: payload.optionC,
             optionD: payload.optionD,
             correctOption: payload.correctOption,
+            correctNumeric: payload.correctNumeric,
+            numericTolerance: payload.numericTolerance,
             difficulty: payload.difficulty,
             stemImageUrl: payload.stemImageUrl,
           },
@@ -260,11 +298,13 @@ export function AdminQuestionBankPage() {
       return;
     }
     resetForm();
-    await loadQuestions(topicId, subjectId, levelId);
+    await loadQuestions(topicId, subjectId, apiLevelId);
+    if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
   function startEdit(q: QuestionRow) {
     setForm({
+      type: q.type ?? "MCQ",
       stem: q.stem,
       stemImageUrl: q.stemImageUrl ?? "",
       optionA: q.optionA,
@@ -272,6 +312,8 @@ export function AdminQuestionBankPage() {
       optionC: q.optionC,
       optionD: q.optionD,
       correctOption: String(q.correctOption),
+      correctNumeric: q.correctNumeric != null ? String(q.correctNumeric) : "",
+      numericTolerance: String(q.numericTolerance ?? 0),
       difficulty: q.difficulty,
       editId: q.id,
     });
@@ -301,12 +343,12 @@ export function AdminQuestionBankPage() {
     const r = await api(`/api/v1/admin/questions/${id}`, { method: "DELETE" });
     setBusy(false);
     if (!r.ok) setErr(r.error ?? "Delete failed");
-    else await loadQuestions(topicId, subjectId, levelId);
+    else await loadQuestions(topicId, subjectId, apiLevelId);
   }
 
   async function importDocx(e: React.FormEvent) {
     e.preventDefault();
-    if (!docxFile || !subjectId || !levelId || !topicId) return;
+    if (!docxFile || !bankReady) return;
     setBusy(true);
     setImporting(true);
     setErr(null);
@@ -315,7 +357,7 @@ export function AdminQuestionBankPage() {
     const fd = new FormData();
     fd.set("file", docxFile);
     fd.set("subjectId", subjectId);
-    fd.set("levelId", levelId);
+    if (!isChapterMode) fd.set("levelId", levelId);
     fd.set("topicId", topicId);
     fd.set("mode", replaceMode ? "replace" : syncMode ? "sync" : "insert");
 
@@ -347,7 +389,7 @@ export function AdminQuestionBankPage() {
         `Upload completed. Mode ${result.mode}: imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} (parsed ${result.parseCount}).`
       );
       if (result.errors?.length) setImportErrors(result.errors);
-      await loadQuestions(topicId, subjectId, levelId);
+      await loadQuestions(topicId, subjectId, apiLevelId);
     } catch {
       setErr("Upload failed due to network/server error. Please try again.");
     } finally {
@@ -358,7 +400,7 @@ export function AdminQuestionBankPage() {
 
   async function importSheet(e: React.FormEvent) {
     e.preventDefault();
-    if (!sheetFile || !subjectId || !levelId || !topicId) return;
+    if (!sheetFile || !bankReady) return;
     setBusy(true);
     setImporting(true);
     setErr(null);
@@ -367,7 +409,7 @@ export function AdminQuestionBankPage() {
     const fd = new FormData();
     fd.set("file", sheetFile);
     fd.set("subjectId", subjectId);
-    fd.set("levelId", levelId);
+    if (!isChapterMode) fd.set("levelId", levelId);
     fd.set("topicId", topicId);
     fd.set("mode", replaceMode ? "replace" : syncMode ? "sync" : "insert");
     try {
@@ -393,8 +435,8 @@ export function AdminQuestionBankPage() {
         `Sheet upload completed. Mode ${result.mode}: imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} (parsed ${result.parseCount}).`
       );
       if (result.errors?.length) setImportErrors(result.errors);
-      await loadQuestions(topicId, subjectId, levelId);
-      if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
+      await loadQuestions(topicId, subjectId, apiLevelId);
+      if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
     } catch {
       setErr("Sheet upload failed due to network/server error. Please try again.");
     } finally {
@@ -433,10 +475,12 @@ export function AdminQuestionBankPage() {
 
   function removeTopic(t: TopicRow) {
     confirmDialog.setRequest({
-      title: "Delete chapter permanently",
-      message: `This will permanently delete chapter "${t.name}" and all its questions. This cannot be undone.`,
-      requireTypedText: t.name,
-      confirmLabel: "Delete chapter",
+      title: isChapterMode ? "Remove chapter from this book" : "Delete chapter permanently",
+      message: isChapterMode
+        ? `Remove chapter "${t.name}" from this branch? Questions stay in the bank.`
+        : `This will permanently delete chapter "${t.name}" and all its questions. This cannot be undone.`,
+      requireTypedText: isChapterMode ? undefined : t.name,
+      confirmLabel: isChapterMode ? "Remove chapter" : "Delete chapter",
       onConfirm: () => doRemoveTopic(t),
     });
   }
@@ -444,6 +488,18 @@ export function AdminQuestionBankPage() {
   async function doRemoveTopic(t: TopicRow) {
     setBusy(true);
     setErr(null);
+    if (isChapterMode && subjectId) {
+      const r = await api(`/api/v1/admin/subjects/${subjectId}/chapters/${t.id}`, { method: "DELETE" });
+      setBusy(false);
+      if (!r.ok) {
+        setErr(r.error ?? "Could not remove chapter");
+        return;
+      }
+      if (topicId === t.id) setTopicId("");
+      await refreshSubjects();
+      if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
+      return;
+    }
     // The user already typed the chapter name to confirm; if the soft delete
     // hits a foreign-key wall we go straight to force delete instead of asking
     // a second time.
@@ -458,11 +514,11 @@ export function AdminQuestionBankPage() {
     }
     if (topicId === t.id) setTopicId("");
     await refreshSubjects();
-    if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
+    if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
   async function previewPaste() {
-    if (!pasteText.trim() || !subjectId || !levelId || !topicId) return;
+    if (!pasteText.trim() || !bankReady) return;
     setBusy(true);
     setErr(null);
     setImportMsg(null);
@@ -471,7 +527,7 @@ export function AdminQuestionBankPage() {
       method: "POST",
       json: {
         subjectId,
-        levelId,
+        levelId: isChapterMode ? undefined : levelId,
         topicId,
         text: pasteText,
         dryRun: true,
@@ -495,7 +551,7 @@ export function AdminQuestionBankPage() {
   }
 
   async function importPaste() {
-    if (!pasteText.trim() || !subjectId || !levelId || !topicId) return;
+    if (!pasteText.trim() || !bankReady) return;
     setBusy(true);
     setImporting(true);
     setErr(null);
@@ -505,7 +561,7 @@ export function AdminQuestionBankPage() {
       method: "POST",
       json: {
         subjectId,
-        levelId,
+        levelId: isChapterMode ? undefined : levelId,
         topicId,
         text: pasteText,
         mode: replaceMode ? "replace" : syncMode ? "sync" : "insert",
@@ -528,32 +584,17 @@ export function AdminQuestionBankPage() {
     setPasteText("");
     setPastePreview(null);
     setPasteUnparsed(0);
-    await loadQuestions(topicId, subjectId, levelId);
-    if (subjectId && levelId) await loadLevelQuestionStatus(subjectId, levelId);
+    await loadQuestions(topicId, subjectId, apiLevelId);
+    if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
   async function downloadQuestionTemplate() {
     const XLSX = await import("xlsx");
     const rows = [
-      ["question", "optionA", "optionB", "optionC", "optionD", "answer", "difficulty"],
-      [
-        "Find the distance between (2,3) and (6,6).",
-        "3",
-        "4",
-        "5",
-        "6",
-        "C",
-        "MEDIUM",
-      ],
-      [
-        "The distance between (0,0) and (8,15) is:",
-        "15",
-        "16",
-        "17",
-        "18",
-        "C",
-        "EASY",
-      ],
+      ["type", "question", "optionA", "optionB", "optionC", "optionD", "answer", "tolerance", "difficulty"],
+      ["MCQ", "Find the distance between (2,3) and (6,6).", "3", "4", "5", "6", "C", "", "MEDIUM"],
+      ["MCQ2", "Water boils at 100°C at sea level.", "True", "False", "", "", "A", "", "EASY"],
+      ["NUMERIC", "What is 7 × 8?", "", "", "", "", "56", "0", "MEDIUM"],
     ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -564,7 +605,10 @@ export function AdminQuestionBankPage() {
   return (
     <>
       <h1 className="text-2xl font-bold text-slate-900">Question bank</h1>
-      <p className="mt-1 text-slate-600">Create level tests directly: select subject, level, and topic, then manage questions.</p>
+      <p className="mt-1 text-slate-600">
+        For level branches, select subject, level, and chapter. For book branches (NCERT), select subject and chapter
+        only.
+      </p>
       {err && <p className="mt-4 text-red-600">{err}</p>}
       {importMsg && <p className="mt-4 text-emerald-700">{importMsg}</p>}
       {importing && <p className="mt-2 text-indigo-700">Uploading question bank…</p>}
@@ -615,10 +659,12 @@ export function AdminQuestionBankPage() {
               {visibleSubjects.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.code ? `${s.name} (${s.code})` : s.name}
+                  {s.testMode === "CHAPTER" ? " · chapters" : ""}
                 </option>
               ))}
             </select>
           </label>
+          {!isChapterMode ? (
           <label className="text-sm">
             <span className="text-slate-600">Level</span>
             <select
@@ -635,19 +681,20 @@ export function AdminQuestionBankPage() {
               ))}
             </select>
           </label>
+          ) : null}
           <label className="text-sm">
-            <span className="text-slate-600">Topic</span>
+            <span className="text-slate-600">{isChapterMode ? "Chapter" : "Topic"}</span>
             <select
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
               value={topicId}
               onChange={(e) => setTopicId(e.target.value)}
-              disabled={busy || !levelId}
+              disabled={busy || !subjectId || (!isChapterMode && !levelId)}
             >
-              <option value="">Select topic</option>
+              <option value="">{isChapterMode ? "Select chapter" : "Select topic"}</option>
               {topicOptions.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
-                  {t.levelId ? ` (${levelNameById.get(t.levelId) ?? "Level"})` : ""}
+                  {!isChapterMode && t.levelId ? ` (${levelNameById.get(t.levelId) ?? "Level"})` : ""}
                   {` [${t.id.slice(-4)}]`}
                 </option>
               ))}
@@ -656,12 +703,14 @@ export function AdminQuestionBankPage() {
         </div>
       </div>
 
-      {subjectId && levelId ? (
+      {subjectId && (isChapterMode || levelId) ? (
         <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Topic-wise question status</h2>
           <p className="mt-1 text-sm text-slate-600">See coverage instantly and open a topic with one click.</p>
           {topicOptions.length === 0 ? (
-            <p className="mt-2 text-sm text-slate-500">No topics found for selected level.</p>
+            <p className="mt-2 text-sm text-slate-500">
+              {isChapterMode ? "No chapters on this branch yet." : "No topics found for selected level."}
+            </p>
           ) : (
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               {topicOptions.map((t) => {
@@ -751,15 +800,14 @@ export function AdminQuestionBankPage() {
           <span className="text-xs text-slate-500">English / Hindi / mixed math — Unicode preserved</span>
         </div>
         <p className="mt-1 text-sm text-slate-600">
-          Paste any number of MCQs separated by a blank line. Stems, options, and answers may be on separate lines or
-          options may be on a single line. Recognized labels: <code>Q1.</code> / <code>Question 1.</code> /{" "}
-          <code>प्रश्न १.</code> / <code>1.</code>; options <code>A) B) C) D)</code>, <code>(A) (B) (C) (D)</code>, or
-          Hindi <code>क/ख/ग/घ</code> / <code>अ/ब/स/द</code>; answers <code>Answer:</code> / <code>Ans:</code> /{" "}
-          <code>Correct:</code> / <code>उत्तर:</code> / <code>जवाब:</code>.
+          Paste questions separated by a blank line. Supported types: 4-option MCQ, 2-option (A/B only), and numeric.
+          Labels: <code>Q1.</code> / <code>Question 1.</code> / <code>प्रश्न १.</code> / <code>1.</code>; options{" "}
+          <code>A) B) C) D)</code> or just <code>A) B)</code>; <code>Type: NUMERIC</code> with{" "}
+          <code>Answer: 56</code>; answers <code>Answer:</code> / <code>Ans:</code> / <code>उत्तर:</code>.
         </p>
         <textarea
           className="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono min-h-[200px]"
-          placeholder={`Q1. What is 2 + 2?\nA) 3   B) 4   C) 5   D) 6\nAnswer: B\n\nप्रश्न २. भारत की राजधानी क्या है?\nA) मुंबई\nB) कोलकाता\nC) नई दिल्ली\nD) चेन्नई\nउत्तर: C`}
+          placeholder={`Q1. What is 2 + 2?\nA) 3   B) 4   C) 5   D) 6\nAnswer: B\n\nQ2. Water boils at 100°C at sea level.\nA) True\nB) False\nAnswer: A\n\nQ3. What is 7 × 8?\nType: NUMERIC\nAnswer: 56`}
           value={pasteText}
           onChange={(e) => {
             setPasteText(e.target.value);
@@ -787,7 +835,7 @@ export function AdminQuestionBankPage() {
           <button
             type="button"
             onClick={() => void previewPaste()}
-            disabled={busy || !pasteText.trim() || !subjectId || !levelId || !topicId}
+            disabled={busy || !pasteText.trim() || !bankReady}
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-50"
           >
             Preview parse
@@ -795,13 +843,15 @@ export function AdminQuestionBankPage() {
           <button
             type="button"
             onClick={() => void importPaste()}
-            disabled={busy || !pasteText.trim() || !subjectId || !levelId || !topicId}
+            disabled={busy || !pasteText.trim() || !bankReady}
             className="rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
             {importing ? "Saving…" : "Save all"}
           </button>
-          {(!subjectId || !levelId || !topicId) && (
-            <span className="text-xs text-amber-700">Select subject, level, and topic above first.</span>
+          {!bankReady && (
+            <span className="text-xs text-amber-700">
+              {isChapterMode ? "Select subject and chapter above first." : "Select subject, level, and topic above first."}
+            </span>
           )}
         </div>
         {pastePreview ? (
@@ -814,18 +864,25 @@ export function AdminQuestionBankPage() {
             </p>
             {pastePreview.length === 0 ? (
               <p className="mt-2 text-sm text-amber-800">
-                Nothing parsed. Make sure each question has 4 options and an answer line, separated from the next by a
-                blank line.
+                Nothing parsed. Use 4 options, 2 options (A/B), or Type: NUMERIC with a number answer. Separate questions
+                with a blank line.
               </p>
             ) : (
               <ol className="mt-2 space-y-3 text-sm">
                 {pastePreview.slice(0, 20).map((q, i) => (
                   <li key={i} className="rounded border border-slate-200 px-3 py-2">
                     <p className="font-medium text-slate-900 whitespace-pre-wrap">
-                      {i + 1}. {q.stem}
+                      {i + 1}. [{questionTypeLabel(q.type)}] {q.stem}
                     </p>
+                    {q.type === "NUMERIC" ? (
+                      <p className="mt-1 text-sm text-emerald-700">
+                        Answer: {q.correctNumeric}
+                        {q.numericTolerance ? ` (±${q.numericTolerance})` : ""}
+                      </p>
+                    ) : (
                     <ul className="mt-1 grid gap-0.5 text-slate-700 sm:grid-cols-2">
-                      {[q.optionA, q.optionB, q.optionC, q.optionD].map((opt, idx) => (
+                      {(q.type === "MCQ2" ? [q.optionA, q.optionB] : [q.optionA, q.optionB, q.optionC, q.optionD]).map(
+                        (opt, idx) => (
                         <li
                           key={idx}
                           className={idx === q.correctOption ? "font-semibold text-emerald-700" : ""}
@@ -833,8 +890,10 @@ export function AdminQuestionBankPage() {
                           {String.fromCharCode(65 + idx)}) {opt}
                           {idx === q.correctOption ? "  ✓" : ""}
                         </li>
-                      ))}
+                        )
+                      )}
                     </ul>
+                    )}
                   </li>
                 ))}
                 {pastePreview.length > 20 && (
@@ -866,6 +925,25 @@ export function AdminQuestionBankPage() {
             ) : null}
           </div>
           <form onSubmit={saveQuestion} className="mt-3 space-y-2">
+            <label className="text-sm block">
+              Question type
+              <select
+                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5"
+                value={form.type}
+                onChange={(e) =>
+                  setForm((x) => ({
+                    ...x,
+                    type: e.target.value as QuestionType,
+                    correctOption: e.target.value === "MCQ2" && Number(x.correctOption) > 1 ? "0" : x.correctOption,
+                  }))
+                }
+                disabled={busy}
+              >
+                <option value="MCQ">4-option MCQ</option>
+                <option value="MCQ2">2-option (True/False, Yes/No)</option>
+                <option value="NUMERIC">Numeric value</option>
+              </select>
+            </label>
             <textarea
               ref={stemRef}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm min-h-[88px]"
@@ -911,7 +989,35 @@ export function AdminQuestionBankPage() {
                 </div>
               ) : null}
             </div>
-            {(["optionA", "optionB", "optionC", "optionD"] as const).map((k, idx) => (
+            {form.type === "NUMERIC" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-sm">
+                  Correct number
+                  <input
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="e.g. 56"
+                    value={form.correctNumeric}
+                    onChange={(e) => setForm((x) => ({ ...x, correctNumeric: e.target.value }))}
+                    disabled={busy}
+                  />
+                </label>
+                <label className="text-sm">
+                  Tolerance
+                  <input
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    placeholder="0"
+                    value={form.numericTolerance}
+                    onChange={(e) => setForm((x) => ({ ...x, numericTolerance: e.target.value }))}
+                    disabled={busy}
+                  />
+                </label>
+              </div>
+            ) : (
+              <>
+            {(form.type === "MCQ2"
+              ? (["optionA", "optionB"] as const)
+              : (["optionA", "optionB", "optionC", "optionD"] as const)
+            ).map((k, idx) => (
               <input
                 key={k}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -932,8 +1038,12 @@ export function AdminQuestionBankPage() {
                 >
                   <option value="0">A</option>
                   <option value="1">B</option>
-                  <option value="2">C</option>
-                  <option value="3">D</option>
+                  {form.type === "MCQ" ? (
+                    <>
+                      <option value="2">C</option>
+                      <option value="3">D</option>
+                    </>
+                  ) : null}
                 </select>
               </label>
               <label className="text-sm">
@@ -952,10 +1062,29 @@ export function AdminQuestionBankPage() {
                 </select>
               </label>
             </div>
+              </>
+            )}
+            {form.type === "NUMERIC" ? (
+            <label className="text-sm block">
+                Difficulty
+                <select
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5"
+                  value={form.difficulty}
+                  onChange={(e) =>
+                    setForm((x) => ({ ...x, difficulty: e.target.value as "EASY" | "MEDIUM" | "HARD" }))
+                  }
+                  disabled={busy}
+                >
+                  <option value="EASY">Easy</option>
+                  <option value="MEDIUM">Medium</option>
+                  <option value="HARD">Hard</option>
+                </select>
+            </label>
+            ) : null}
             <div className="flex gap-2 pt-1">
               <button
                 type="submit"
-                disabled={busy || !subjectId || !levelId || !topicId || !form.stem.trim()}
+                disabled={busy || !bankReady || !form.stem.trim()}
                 className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
               >
                 {form.editId ? "Update question" : "Add question"}
@@ -977,8 +1106,10 @@ export function AdminQuestionBankPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Import from Excel / CSV</h2>
           <p className="text-xs text-slate-500 mt-1">
-            Columns: <span className="font-mono">question, optionA-D, answer (A/B/C/D), difficulty</span>.
-            All rows go into the selected subject, level, and chapter.
+            Columns: <span className="font-mono">type, question, optionA-D, answer, tolerance, difficulty</span>.
+            Type is <span className="font-mono">MCQ</span>, <span className="font-mono">MCQ2</span>, or{" "}
+            <span className="font-mono">NUMERIC</span>. Leave type blank to infer. 2-option rows use A/B only. Numeric
+            rows use a number in answer.
           </p>
           <button
             type="button"
@@ -1010,7 +1141,7 @@ export function AdminQuestionBankPage() {
             </label>
             <button
               type="submit"
-              disabled={busy || !sheetFile || !subjectId || !levelId || !topicId}
+              disabled={busy || !sheetFile || !bankReady}
               className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
             >
               {importing ? "Uploading..." : "Upload Excel/CSV"}
@@ -1046,7 +1177,7 @@ export function AdminQuestionBankPage() {
             </label>
             <button
               type="submit"
-              disabled={busy || !docxFile || !subjectId || !levelId || !topicId}
+              disabled={busy || !docxFile || !bankReady}
               className="rounded-lg bg-indigo-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
             >
               {importing ? "Uploading..." : "Upload question bank"}
@@ -1076,7 +1207,11 @@ export function AdminQuestionBankPage() {
                   />
                 ) : null}
                 <p className="text-xs text-slate-500 mt-1">
-                  Correct: {String.fromCharCode(65 + q.correctOption)} | Difficulty: {q.difficulty}
+                  {questionTypeLabel(q.type)}
+                  {q.type === "NUMERIC"
+                    ? ` · Answer: ${q.correctNumeric}${q.numericTolerance ? ` ±${q.numericTolerance}` : ""}`
+                    : ` · Correct: ${String.fromCharCode(65 + q.correctOption)}`}{" "}
+                  | Difficulty: {q.difficulty}
                 </p>
                 <div className="mt-2 flex gap-2">
                   <button

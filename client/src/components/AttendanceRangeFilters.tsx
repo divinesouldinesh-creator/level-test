@@ -31,6 +31,7 @@ export function AttendanceRangeFilters({
         onChange={(e) => onRangeChange(e.target.value as AttendanceRange)}
       >
         <option value="daily">Daily</option>
+        <option value="yesterday">Yesterday</option>
         <option value="last_7_days">Last 7 days</option>
         <option value="weekly">This week</option>
         <option value="last_month">Last month</option>
@@ -60,7 +61,7 @@ export function AttendanceRangeFilters({
             />
           </label>
         </>
-      ) : (
+      ) : range !== "yesterday" ? (
         <label className="text-sm">
           <span className="block text-slate-600 mb-1">
             {range === "academic_year" ? "As of date" : "Reference date"}
@@ -72,7 +73,7 @@ export function AttendanceRangeFilters({
             onChange={(e) => onDateChange(e.target.value)}
           />
         </label>
-      )}
+      ) : null}
 
       {rangeHint ? (
         <p className="text-sm text-slate-500 flex items-center md:col-span-2 lg:col-span-1">{rangeHint}</p>

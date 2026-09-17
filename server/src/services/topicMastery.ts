@@ -5,6 +5,7 @@ import {
   TopicMasteryStatus,
   XpReason,
 } from "@prisma/client";
+import { scoreSubmittedAnswer, type SubmittedAnswer } from "./questionAnswer.js";
 import {
   awardMasteryRelatedXp,
   XP_TOPIC_MASTERY,
@@ -486,7 +487,7 @@ export async function submitMasterySession(
   prisma: PrismaClient,
   studentId: string,
   sessionId: string,
-  answers: { questionId: string; selectedOption: number }[]
+  answers: SubmittedAnswer[]
 ) {
   const session = await prisma.masterySession.findFirst({
     where: { id: sessionId, studentId },
@@ -506,27 +507,36 @@ export async function submitMasterySession(
     };
   }
 
-  const answerByQ = new Map(answers.map((a) => [a.questionId, a.selectedOption]));
+  const answerByQ = new Map(answers.map((a) => [a.questionId, a]));
   const expected = new Set(session.questions.map((q) => q.questionId));
   if (answers.length !== expected.size || answers.some((a) => !expected.has(a.questionId))) {
     return { error: "incomplete" as const };
   }
 
+  const scored = session.questions.map((sq) => ({
+    sq,
+    result: scoreSubmittedAnswer(sq.question, answerByQ.get(sq.questionId)),
+  }));
+  if (scored.some((s) => !s.result.complete)) {
+    return { error: "incomplete" as const };
+  }
+
   let score = 0;
   const maxScore = session.questions.length;
-  for (const sq of session.questions) {
-    const selected = answerByQ.get(sq.questionId)!;
-    if (selected === sq.question.correctOption) score += 1;
+  for (const { result } of scored) {
+    if (result.isCorrect) score += 1;
   }
   const percentage = maxScore > 0 ? Math.round((score * 1000) / maxScore) / 10 : 0;
 
   await prisma.$transaction(async (tx) => {
-    for (const sq of session.questions) {
-      const selected = answerByQ.get(sq.questionId)!;
-      const isCorrect = selected === sq.question.correctOption;
+    for (const { sq, result } of scored) {
       await tx.masterySessionQuestion.update({
         where: { id: sq.id },
-        data: { selectedOption: selected, isCorrect },
+        data: {
+          selectedOption: result.selectedOption,
+          numericAnswer: result.numericAnswer,
+          isCorrect: result.isCorrect,
+        },
       });
     }
 

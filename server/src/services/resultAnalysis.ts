@@ -11,7 +11,7 @@ export async function applyAttemptResults(
   params: {
     studentId: string;
     subjectId: string;
-    levelId: string;
+    levelId: string | null;
     testId: string;
     percentage: number;
     topicScores: Map<string, { correct: number; total: number }>;
@@ -19,53 +19,55 @@ export async function applyAttemptResults(
 ): Promise<{ suggestedNextLevelId: string | null }> {
   const { studentId, subjectId, levelId, percentage, topicScores } = params;
 
-  const levels = await prisma.level.findMany({
-    where: { subjectId },
-    orderBy: { order: "asc" },
-  });
-  const currentIdx = levels.findIndex((l) => l.id === levelId);
   let suggestedNextLevelId: string | null = null;
-  if (percentage > 80 && currentIdx >= 0 && currentIdx < levels.length - 1) {
-    suggestedNextLevelId = levels[currentIdx + 1].id;
-  }
+  if (levelId) {
+    const levels = await prisma.level.findMany({
+      where: { subjectId },
+      orderBy: { order: "asc" },
+    });
+    const currentIdx = levels.findIndex((l) => l.id === levelId);
+    if (percentage > 80 && currentIdx >= 0 && currentIdx < levels.length - 1) {
+      suggestedNextLevelId = levels[currentIdx + 1].id;
+    }
 
-  await prisma.studentProgress.upsert({
-    where: {
-      studentId_subjectId_levelId: { studentId, subjectId, levelId },
-    },
-    create: {
-      studentId,
-      subjectId,
-      levelId,
-      unlocked: true,
-      lastPercentage: percentage,
-      lastAttemptAt: new Date(),
-    },
-    update: {
-      lastPercentage: percentage,
-      lastAttemptAt: new Date(),
-    },
-  });
-
-  if (suggestedNextLevelId) {
     await prisma.studentProgress.upsert({
       where: {
-        studentId_subjectId_levelId: {
-          studentId,
-          subjectId,
-          levelId: suggestedNextLevelId,
-        },
+        studentId_subjectId_levelId: { studentId, subjectId, levelId },
       },
       create: {
         studentId,
         subjectId,
-        levelId: suggestedNextLevelId,
+        levelId,
         unlocked: true,
-        lastPercentage: null,
-        lastAttemptAt: null,
+        lastPercentage: percentage,
+        lastAttemptAt: new Date(),
       },
-      update: {},
+      update: {
+        lastPercentage: percentage,
+        lastAttemptAt: new Date(),
+      },
     });
+
+    if (suggestedNextLevelId) {
+      await prisma.studentProgress.upsert({
+        where: {
+          studentId_subjectId_levelId: {
+            studentId,
+            subjectId,
+            levelId: suggestedNextLevelId,
+          },
+        },
+        create: {
+          studentId,
+          subjectId,
+          levelId: suggestedNextLevelId,
+          unlocked: true,
+          lastPercentage: null,
+          lastAttemptAt: null,
+        },
+        update: {},
+      });
+    }
   }
 
   for (const [topicId, { correct, total }] of topicScores) {

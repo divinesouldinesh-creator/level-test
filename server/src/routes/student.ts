@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma, isDatabaseUnreachable } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
-import { pickQuestionsForTest } from "../services/testGenerator.js";
+import { pickQuestionsForTest, pickQuestionsForChapterTest } from "../services/testGenerator.js";
 import { bandFromPercentage, applyAttemptResults } from "../services/resultAnalysis.js";
 import { attendanceReportForStudent } from "../services/attendanceReport.js";
 import { attendanceReportQuerySchema } from "../schemas/attendanceReportQuery.js";
@@ -23,6 +23,13 @@ import {
 } from "../services/topicMastery.js";
 import { MasterySessionKind } from "@prisma/client";
 import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateStudentMastery } from "../lib/memoryCache.js";
+import { scoreSubmittedAnswer, tallyTestScore, toPublicQuestion } from "../services/questionAnswer.js";
+
+const submittedAnswerSchema = z.object({
+  questionId: z.string(),
+  selectedOption: z.number().int().min(0).max(3).optional(),
+  numericAnswer: z.number().finite().optional(),
+});
 
 const router = Router();
 router.use(authMiddleware, requireRole("STUDENT"));
@@ -85,11 +92,7 @@ router.get("/daily-challenge/:challengeId", async (req, res) => {
   const questions = challenge.questions.map((cq) => {
     const q = cq.question;
     const base = {
-      id: q.id,
-      stem: q.stem,
-      stemImageUrl: q.stemImageUrl,
-      options: [q.optionA, q.optionB, q.optionC, q.optionD],
-      topicId: q.topicId,
+      ...toPublicQuestion(q),
       topicName: q.topic.name,
       orderIndex: cq.orderIndex,
     };
@@ -97,7 +100,9 @@ router.get("/daily-challenge/:challengeId", async (req, res) => {
       return {
         ...base,
         selectedOption: cq.selectedOption,
+        numericAnswer: cq.numericAnswer,
         correctOption: q.correctOption,
+        correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
         isCorrect: cq.isCorrect,
       };
     }
@@ -125,12 +130,7 @@ router.post("/daily-challenge/:challengeId/submit", async (req, res) => {
 
   const parsed = z
     .object({
-      answers: z.array(
-        z.object({
-          questionId: z.string(),
-          selectedOption: z.number().int().min(0).max(3),
-        })
-      ),
+      answers: z.array(submittedAnswerSchema),
     })
     .safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
@@ -249,17 +249,16 @@ router.get("/mastery/sessions/:sessionId", async (req, res) => {
   const questions = session.questions.map((sq) => {
     const q = sq.question;
     const base = {
-      id: q.id,
-      stem: q.stem,
-      stemImageUrl: q.stemImageUrl,
-      options: [q.optionA, q.optionB, q.optionC, q.optionD],
+      ...toPublicQuestion(q),
       orderIndex: sq.orderIndex,
     };
     if (session.status === "COMPLETED") {
       return {
         ...base,
         selectedOption: sq.selectedOption,
+        numericAnswer: sq.numericAnswer,
         correctOption: q.correctOption,
+        correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
         isCorrect: sq.isCorrect,
       };
     }
@@ -287,12 +286,7 @@ router.post("/mastery/sessions/:sessionId/submit", async (req, res) => {
   if (!student) return res.status(400).json({ error: "Not a student" });
   const parsed = z
     .object({
-      answers: z.array(
-        z.object({
-          questionId: z.string(),
-          selectedOption: z.number().int().min(0).max(3),
-        })
-      ),
+      answers: z.array(submittedAnswerSchema),
     })
     .safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
@@ -345,6 +339,7 @@ router.get("/subjects", async (req, res) => {
         areaId: cs.subject.areaId,
         areaName: cs.subject.area?.name ?? null,
         areaCode: cs.subject.area?.code ?? null,
+        testMode: cs.subject.testMode,
       }));
     }
   );
@@ -371,7 +366,7 @@ router.get("/subject-areas", async (req, res) => {
       });
       const byArea = new Map<
         string,
-        { id: string; name: string; code: string | null; branches: { id: string; name: string; code: string | null }[] }
+        { id: string; name: string; code: string | null; branches: { id: string; name: string; code: string | null; testMode: string }[] }
       >();
       for (const cs of classSubjects) {
         const area = cs.subject.area;
@@ -390,6 +385,7 @@ router.get("/subject-areas", async (req, res) => {
           id: cs.subject.id,
           name: cs.subject.name,
           code: cs.subject.code,
+          testMode: cs.subject.testMode,
         });
       }
       return [...byArea.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -415,6 +411,57 @@ router.get("/attendance/report", async (req, res) => {
   if (!report) return res.status(404).json({ error: "Student not found" });
   if ("error" in report) return res.status(400).json({ error: report.error });
   res.json(report);
+});
+
+router.get("/subjects/:subjectId/chapters", async (req, res) => {
+  const student = await requireStudent(req.user!.sub);
+  if (!student) {
+    res.status(400).json({ error: "Not a student" });
+    return;
+  }
+  const subjectId = req.params.subjectId;
+  const allowed = await prisma.classSubject.findFirst({
+    where: { classId: student.classId, subjectId },
+    include: { subject: { select: { id: true, name: true, testMode: true, chapterTestQuestionCount: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
+  });
+  if (!allowed) {
+    res.status(403).json({ error: "Subject not available for your class" });
+    return;
+  }
+  if (allowed.subject.testMode !== "CHAPTER") {
+    res.status(400).json({ error: "This branch uses levels, not chapters" });
+    return;
+  }
+
+  const chapters = await prisma.subjectChapter.findMany({
+    where: { subjectId },
+    orderBy: { sortOrder: "asc" },
+    include: { topic: { select: { id: true, name: true } } },
+  });
+  const counts = await prisma.question.groupBy({
+    by: ["topicId"],
+    where: {
+      subjectId,
+      levelId: null,
+      topicId: { in: chapters.map((c) => c.topicId) },
+    },
+    _count: { _all: true },
+  });
+  const countByTopic = new Map(counts.map((c) => [c.topicId, c._count._all]));
+
+  res.json({
+    subjectId: allowed.subject.id,
+    subjectName: allowed.subject.name,
+    testMode: allowed.subject.testMode,
+    questionCount: allowed.subject.chapterTestQuestionCount,
+    negativeMarking: allowed.subject.chapterNegativeMarking,
+    wrongPenalty: allowed.subject.chapterNegativeMarking ? allowed.subject.chapterWrongPenalty : 0,
+    chapters: chapters.map((c) => ({
+      id: c.topic.id,
+      name: c.topic.name,
+      questionCount: countByTopic.get(c.topicId) ?? 0,
+    })),
+  });
 });
 
 router.get("/subjects/:subjectId/levels", async (req, res) => {
@@ -471,10 +518,22 @@ router.get("/subjects/:subjectId/levels", async (req, res) => {
   );
 });
 
-const startSchema = z.object({
-  subjectId: z.string(),
-  levelId: z.string(),
-});
+const startSchema = z
+  .object({
+    subjectId: z.string(),
+    levelId: z.string().optional(),
+    topicIds: z.array(z.string()).min(1).optional(),
+  })
+  .refine((d) => Boolean(d.levelId) || Boolean(d.topicIds?.length), {
+    message: "levelId or topicIds required",
+  });
+
+function sameIdSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((id, i) => id === right[i]);
+}
 
 router.post("/tests/start", async (req, res) => {
   const parsed = startSchema.safeParse(req.body);
@@ -482,7 +541,7 @@ router.post("/tests/start", async (req, res) => {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const { subjectId, levelId } = parsed.data;
+  const { subjectId, levelId, topicIds } = parsed.data;
 
   const student = await requireStudent(req.user!.sub);
   if (!student) {
@@ -492,9 +551,90 @@ router.post("/tests/start", async (req, res) => {
 
   const allowed = await prisma.classSubject.findFirst({
     where: { classId: student.classId, subjectId },
+    include: { subject: { select: { id: true, testMode: true, chapterTestQuestionCount: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
   });
   if (!allowed) {
     res.status(403).json({ error: "Subject not allowed" });
+    return;
+  }
+
+  if (allowed.subject.testMode === "CHAPTER") {
+    const requestedIds = [...new Set((topicIds ?? []).filter(Boolean))];
+    if (requestedIds.length === 0) {
+      res.status(400).json({ error: "Select at least one chapter" });
+      return;
+    }
+    const chapters = await prisma.subjectChapter.findMany({
+      where: { subjectId, topicId: { in: requestedIds } },
+      select: { topicId: true },
+    });
+    if (chapters.length !== requestedIds.length) {
+      res.status(400).json({ error: "One or more chapters are not on this branch" });
+      return;
+    }
+
+    const existing = await prisma.test.findFirst({
+      where: {
+        studentId: student.id,
+        subjectId,
+        levelId: null,
+        status: "IN_PROGRESS",
+      },
+      include: {
+        testQuestions: { select: { id: true } },
+      },
+      orderBy: { startedAt: "desc" },
+    });
+    if (existing && existing.testQuestions.length > 0 && sameIdSet(existing.selectedTopicIds, requestedIds)) {
+      res.json({ testId: existing.id, questionCount: existing.testQuestions.length, warnings: [], resumed: true });
+      return;
+    }
+    if (existing) {
+      await prisma.test.update({
+        where: { id: existing.id },
+        data: { status: "ABANDONED" },
+      });
+    }
+
+    const total = allowed.subject.chapterTestQuestionCount || 10;
+    const { questionIds, warnings } = await pickQuestionsForChapterTest(
+      prisma,
+      subjectId,
+      requestedIds,
+      total
+    );
+    if (questionIds.length === 0) {
+      res.status(400).json({ error: "No questions available for the selected chapters", warnings });
+      return;
+    }
+
+    const wrongPenalty = allowed.subject.chapterNegativeMarking
+      ? Math.max(0, allowed.subject.chapterWrongPenalty)
+      : 0;
+
+    const test = await prisma.test.create({
+      data: {
+        studentId: student.id,
+        subjectId,
+        levelId: null,
+        selectedTopicIds: requestedIds,
+        wrongPenalty,
+        status: "IN_PROGRESS",
+        testQuestions: {
+          create: questionIds.map((qid, i) => ({
+            questionId: qid,
+            orderIndex: i,
+          })),
+        },
+      },
+    });
+
+    res.json({ testId: test.id, questionCount: questionIds.length, warnings, resumed: false });
+    return;
+  }
+
+  if (!levelId) {
+    res.status(400).json({ error: "levelId required" });
     return;
   }
 
@@ -547,6 +687,7 @@ router.post("/tests/start", async (req, res) => {
 
 function stripQuestion(q: {
   id: string;
+  type?: string;
   stem: string;
   stemImageUrl?: string | null;
   optionA: string;
@@ -555,13 +696,7 @@ function stripQuestion(q: {
   optionD: string;
   topicId: string;
 }) {
-  return {
-    id: q.id,
-    stem: q.stem,
-    stemImageUrl: q.stemImageUrl ?? null,
-    options: [q.optionA, q.optionB, q.optionC, q.optionD],
-    topicId: q.topicId,
-  };
+  return toPublicQuestion(q);
 }
 
 router.get("/tests/:testId", async (req, res) => {
@@ -619,6 +754,8 @@ router.get("/tests/:testId", async (req, res) => {
 
       const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
       const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);
+      const wrongCount = answers.filter((a) => !a.isCorrect).length;
+      const penaltyTotal = Math.round(wrongCount * test.wrongPenalty * 100) / 100;
 
       res.json({
         status: "completed",
@@ -632,8 +769,13 @@ router.get("/tests/:testId", async (req, res) => {
         weakTopics,
         subjectId: test.subjectId,
         levelId: test.levelId,
+        kind: test.levelId ? "level" : "chapter",
+        wrongPenalty: test.wrongPenalty,
+        negativeMarking: test.wrongPenalty > 0,
+        wrongCount,
+        penaltyTotal,
         subject: test.subject.name,
-        level: test.level.name,
+        level: test.level?.name ?? null,
       });
       return;
     }
@@ -642,8 +784,11 @@ router.get("/tests/:testId", async (req, res) => {
       status: "in_progress",
       subjectId: test.subjectId,
       levelId: test.levelId,
+      kind: test.levelId ? "level" : "chapter",
+      wrongPenalty: test.wrongPenalty,
+      negativeMarking: test.wrongPenalty > 0,
       subject: test.subject.name,
-      level: test.level.name,
+      level: test.level?.name ?? null,
       questions: test.testQuestions.map((tq) => stripQuestion(tq.question)),
     });
   } catch (error) {
@@ -688,12 +833,11 @@ router.get("/tests/:testId/review", async (req, res) => {
     const q = tq.question;
     const sa = answerByQ.get(q.id);
     return {
-      id: q.id,
-      stem: q.stem,
-      stemImageUrl: q.stemImageUrl ?? null,
-      options: [q.optionA, q.optionB, q.optionC, q.optionD],
+      ...toPublicQuestion(q),
       selectedOption: sa?.selectedOption ?? null,
+      numericAnswer: sa?.numericAnswer ?? null,
       correctOption: q.correctOption,
+      correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
       isCorrect: sa?.isCorrect ?? false,
       topicId: q.topicId,
       topicName: q.topic.name,
@@ -709,12 +853,7 @@ router.get("/tests/:testId/review", async (req, res) => {
 });
 
 const submitSchema = z.object({
-  answers: z.array(
-    z.object({
-      questionId: z.string(),
-      selectedOption: z.number().min(0).max(3),
-    })
-  ),
+  answers: z.array(submittedAnswerSchema),
 });
 
 router.post("/tests/:testId/submit", async (req, res) => {
@@ -749,39 +888,47 @@ router.post("/tests/:testId/submit", async (req, res) => {
       return;
     }
 
-    const answerByQ = new Map(parsed.data.answers.map((a) => [a.questionId, a.selectedOption]));
+    const answerByQ = new Map(parsed.data.answers.map((a) => [a.questionId, a]));
     const expectedIds = new Set(test.testQuestions.map((tq) => tq.questionId));
     if (answerByQ.size !== expectedIds.size || [...expectedIds].some((id) => !answerByQ.has(id))) {
       res.status(400).json({ error: "Answer every question" });
       return;
     }
 
-    let score = 0;
-    const maxScore = test.testQuestions.length;
-    const topicScores = new Map<string, { correct: number; total: number }>();
-
-    for (const tq of test.testQuestions) {
-      const q = tq.question;
-      const sel = answerByQ.get(q.id)!;
-      const isCorrect = sel === q.correctOption;
-      if (isCorrect) score += 1;
-      const cur = topicScores.get(q.topicId) ?? { correct: 0, total: 0 };
-      cur.total += 1;
-      if (isCorrect) cur.correct += 1;
-      topicScores.set(q.topicId, cur);
+    const scored = test.testQuestions.map((tq) => {
+      const result = scoreSubmittedAnswer(tq.question, answerByQ.get(tq.questionId));
+      return { tq, result };
+    });
+    if (scored.some((s) => !s.result.complete)) {
+      res.status(400).json({ error: "Answer every question" });
+      return;
     }
 
-    const percentage = maxScore ? (100 * score) / maxScore : 0;
+    const tally = tallyTestScore(
+      scored.map((s) => s.result),
+      test.levelId ? 0 : test.wrongPenalty
+    );
+    const { score, maxScore, percentage } = tally;
     const band = bandFromPercentage(percentage);
 
-    const levels = await prisma.level.findMany({
-      where: { subjectId: test.subjectId },
-      orderBy: { order: "asc" },
-    });
-    const currentIdx = levels.findIndex((l) => l.id === test.levelId);
+    const topicScores = new Map<string, { correct: number; total: number }>();
+    for (const { tq, result } of scored) {
+      const cur = topicScores.get(tq.question.topicId) ?? { correct: 0, total: 0 };
+      cur.total += 1;
+      if (result.isCorrect) cur.correct += 1;
+      topicScores.set(tq.question.topicId, cur);
+    }
+
     let suggestedNextLevelId: string | null = null;
-    if (percentage > 80 && currentIdx >= 0 && currentIdx < levels.length - 1) {
-      suggestedNextLevelId = levels[currentIdx + 1].id;
+    if (test.levelId) {
+      const levels = await prisma.level.findMany({
+        where: { subjectId: test.subjectId },
+        orderBy: { order: "asc" },
+      });
+      const currentIdx = levels.findIndex((l) => l.id === test.levelId);
+      if (percentage > 80 && currentIdx >= 0 && currentIdx < levels.length - 1) {
+        suggestedNextLevelId = levels[currentIdx + 1].id;
+      }
     }
 
     const markedCompleted = await prisma.test.updateMany({
@@ -802,15 +949,12 @@ router.post("/tests/:testId/submit", async (req, res) => {
         band,
         suggestedNextLevelId,
         studentAnswers: {
-          create: test.testQuestions.map((tq) => {
-            const q = tq.question;
-            const sel = answerByQ.get(q.id)!;
-            return {
-              questionId: q.id,
-              selectedOption: sel,
-              isCorrect: sel === q.correctOption,
-            };
-          }),
+          create: scored.map(({ tq, result }) => ({
+            questionId: tq.questionId,
+            selectedOption: result.selectedOption,
+            numericAnswer: result.numericAnswer,
+            isCorrect: result.isCorrect,
+          })),
         },
       },
     });
@@ -854,6 +998,11 @@ router.post("/tests/:testId/submit", async (req, res) => {
       weakTopics,
       subjectId: test.subjectId,
       levelId: test.levelId,
+      kind: test.levelId ? "level" : "chapter",
+      wrongPenalty: tally.penaltyPerWrong,
+      negativeMarking: tally.penaltyPerWrong > 0,
+      wrongCount: tally.wrong,
+      penaltyTotal: tally.penaltyTotal,
       practiceStreak: practice.practiceStreak,
       practicedToday: true,
     });

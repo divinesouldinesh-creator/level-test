@@ -13,20 +13,39 @@ import { api, mediaUrl } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 import { studentNav } from "../../studentNav";
+import { QuestionResponse } from "../../components/QuestionResponse";
+import {
+  formatNumeric,
+  isDraftAnswered,
+  isNumericType,
+  toSubmitAnswer,
+  type DraftAnswer,
+  type QuestionType,
+} from "../../questionTypes";
 
-type Q = { id: string; stem: string; stemImageUrl?: string | null; options: string[]; topicId: string };
+type Q = {
+  id: string;
+  type?: QuestionType;
+  stem: string;
+  stemImageUrl?: string | null;
+  options: string[];
+  topicId: string;
+};
 type SavedTestProgress = {
-  answers: Record<string, number>;
+  answers: Record<string, DraftAnswer>;
   idx: number;
 };
 
 type ReviewItem = {
   id: string;
+  type?: QuestionType;
   stem: string;
   stemImageUrl?: string | null;
   options: string[];
   selectedOption: number | null;
+  numericAnswer?: number | null;
   correctOption: number;
+  correctNumeric?: number | null;
   isCorrect: boolean;
   topicId: string;
   topicName: string;
@@ -51,8 +70,17 @@ type TestResult = {
   weakTopics: string[];
   suggestedNextLevelId: string | null;
   subjectId: string;
-  levelId: string;
+  levelId: string | null;
+  kind: "level" | "chapter";
+  negativeMarking?: boolean;
+  wrongPenalty?: number;
+  wrongCount?: number;
+  penaltyTotal?: number;
 };
+
+function formatMarks(n: number): string {
+  return Number.parseFloat(n.toFixed(2)).toString();
+}
 
 function progressKey(testId?: string): string | null {
   return testId ? `student-test-progress:${testId}` : null;
@@ -69,8 +97,9 @@ function BackToTests({ subjectId }: { subjectId: string | null }) {
 
 function parseTestResult(data: Record<string, unknown>): TestResult | null {
   const subjectId = typeof data.subjectId === "string" ? data.subjectId : "";
-  const levelId = typeof data.levelId === "string" ? data.levelId : "";
-  if (!subjectId || !levelId) return null;
+  const levelId = typeof data.levelId === "string" ? data.levelId : null;
+  if (!subjectId) return null;
+  const kind = data.kind === "chapter" || !levelId ? "chapter" : "level";
   return {
     score: data.score as number,
     maxScore: data.maxScore as number,
@@ -82,6 +111,11 @@ function parseTestResult(data: Record<string, unknown>): TestResult | null {
     suggestedNextLevelId: (data.suggestedNextLevelId as string | null) ?? null,
     subjectId,
     levelId,
+    kind,
+    negativeMarking: Boolean(data.negativeMarking) || Number(data.wrongPenalty ?? 0) > 0,
+    wrongPenalty: typeof data.wrongPenalty === "number" ? data.wrongPenalty : 0,
+    wrongCount: typeof data.wrongCount === "number" ? data.wrongCount : undefined,
+    penaltyTotal: typeof data.penaltyTotal === "number" ? data.penaltyTotal : undefined,
   };
 }
 
@@ -91,7 +125,7 @@ export function StudentTest() {
   const { logout, auth } = useAuth();
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState<Q[]>([]);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<Record<string, DraftAnswer>>({});
   const [idx, setIdx] = useState(0);
   const [done, setDone] = useState<TestResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -105,6 +139,7 @@ export function StudentTest() {
   const [practice, setPractice] = useState<Record<string, PracticeState>>({});
   const [startingLevel, setStartingLevel] = useState<string | null>(null);
   const [subjectId, setSubjectId] = useState<string | null>(null);
+  const [wrongPenalty, setWrongPenalty] = useState(0);
 
   useEffect(() => {
     function blockCopyHotkeys(e: KeyboardEvent) {
@@ -136,10 +171,15 @@ export function StudentTest() {
     try {
       const saved = JSON.parse(raw) as SavedTestProgress;
       const validIds = new Set(questions.map((q) => q.id));
-      const restoredAnswers: Record<string, number> = {};
+      const restoredAnswers: Record<string, DraftAnswer> = {};
       for (const [qid, opt] of Object.entries(saved.answers ?? {})) {
-        if (validIds.has(qid) && Number.isInteger(opt) && opt >= 0 && opt <= 3) {
-          restoredAnswers[qid] = opt;
+        if (!validIds.has(qid)) continue;
+        if (opt && typeof opt === "object") {
+          restoredAnswers[qid] = opt as DraftAnswer;
+          continue;
+        }
+        if (typeof opt === "number" && Number.isInteger(opt) && opt >= 0 && opt <= 3) {
+          restoredAnswers[qid] = { selectedOption: opt };
         }
       }
       setAnswers(restoredAnswers);
@@ -173,6 +213,7 @@ export function StudentTest() {
     setPractice({});
     setStartingLevel(null);
     setSubjectId(null);
+    setWrongPenalty(0);
 
     void (async () => {
       const r = await api<unknown>(`/api/v1/student/tests/${testId}`);
@@ -184,6 +225,7 @@ export function StudentTest() {
       }
       const data = r.data as Record<string, unknown>;
       if (typeof data.subjectId === "string") setSubjectId(data.subjectId);
+      if (typeof data.wrongPenalty === "number") setWrongPenalty(data.wrongPenalty);
       if (data.status === "completed") {
         const key = progressKey(testId);
         if (key) localStorage.removeItem(key);
@@ -206,7 +248,9 @@ export function StudentTest() {
   }, [testId]);
 
   const current = questions[idx];
-  const progress = questions.length ? Math.round(((idx + (answers[current?.id ?? ""] !== undefined ? 1 : 0)) / questions.length) * 100) : 0;
+  const progress = questions.length
+    ? Math.round(((idx + (isDraftAnswered(current?.type, answers[current?.id ?? ""]) ? 1 : 0)) / questions.length) * 100)
+    : 0;
 
   async function openReview() {
     setReviewOpen(true);
@@ -243,7 +287,7 @@ export function StudentTest() {
 
   async function submitAll() {
     if (!testId) return;
-    const missing = questions.filter((q) => answers[q.id] === undefined);
+    const missing = questions.filter((q) => !isDraftAnswered(q.type, answers[q.id]));
     if (missing.length) {
       setErr("Answer all questions before submitting.");
       return;
@@ -253,7 +297,7 @@ export function StudentTest() {
     const r = await api<Record<string, unknown>>(`/api/v1/student/tests/${testId}/submit`, {
       method: "POST",
       json: {
-        answers: questions.map((q) => ({ questionId: q.id, selectedOption: answers[q.id]! })),
+        answers: questions.map((q) => toSubmitAnswer(q.id, q.type, answers[q.id])),
       },
     });
     setSubmitting(false);
@@ -314,8 +358,18 @@ export function StudentTest() {
           <div className="rounded-xl bg-white border p-4 shadow-sm">
             <p className="text-sm text-slate-500">Score</p>
             <p className="text-3xl font-bold text-brand-800">
-              {done.score}/{done.maxScore}
+              {formatMarks(done.score)}/{done.maxScore}
             </p>
+            {done.kind === "chapter" && done.negativeMarking && (done.wrongPenalty ?? 0) > 0 ? (
+              <p className="mt-1 text-xs text-slate-500">
+                −{formatMarks(done.wrongPenalty ?? 0)} for each wrong
+                {done.wrongCount != null ? ` (${done.wrongCount} wrong)` : ""}
+                {done.penaltyTotal != null && done.penaltyTotal > 0
+                  ? ` · −${formatMarks(done.penaltyTotal)} total`
+                  : ""}
+                . Score cannot go below 0.
+              </p>
+            ) : null}
           </div>
           <div className="rounded-xl bg-white border p-4 shadow-sm">
             <p className="text-sm text-slate-500">Percentage</p>
@@ -350,7 +404,9 @@ export function StudentTest() {
             <p className="text-rose-800 mt-1">{done.weakTopics.length ? done.weakTopics.join(", ") : "—"}</p>
           </div>
         </div>
-        {done.suggestedNextLevelId ? (
+        {done.kind === "chapter" ? (
+          <p className="mt-4 text-slate-600">You can tick different chapters and take another test any time.</p>
+        ) : done.suggestedNextLevelId ? (
           <p className="mt-4 text-brand-800 font-medium">Next level unlocked. Start it now, or retest this level.</p>
         ) : done.percentage > 80 ? (
           <p className="mt-4 text-slate-600">This is the highest level. You can retest it any time.</p>
@@ -466,13 +522,25 @@ export function StudentTest() {
                             />
                           ) : null}
                           <p className="mt-1 text-xs text-slate-500">Chapter: {q.topicName}</p>
-                          {!q.isCorrect && q.selectedOption != null ? (
+                          {!q.isCorrect && isNumericType(q.type) && q.numericAnswer != null ? (
+                            <p className="mt-1 text-xs text-slate-500">
+                              Your original answer:{" "}
+                              <span className="font-medium text-rose-700">{formatNumeric(q.numericAnswer)}</span>
+                            </p>
+                          ) : null}
+                          {!q.isCorrect && !isNumericType(q.type) && q.selectedOption != null ? (
                             <p className="mt-1 text-xs text-slate-500">
                               Your original answer:{" "}
                               <span className="font-medium text-rose-700">{labels[q.selectedOption]}</span>
                             </p>
                           ) : null}
 
+                          {isNumericType(q.type) ? (
+                            <p className="mt-3 text-sm text-slate-700">
+                              Correct answer:{" "}
+                              <span className="font-semibold text-emerald-800">{formatNumeric(q.correctNumeric)}</span>
+                            </p>
+                          ) : (
                           <div className="mt-3 grid gap-2 sm:grid-cols-2">
                             {q.options.map((opt, idx) => {
                               const isCorrect = idx === q.correctOption;
@@ -530,8 +598,9 @@ export function StudentTest() {
                               );
                             })}
                           </div>
+                          )}
 
-                          {!q.isCorrect ? (
+                          {!q.isCorrect && !isNumericType(q.type) ? (
                             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                               {showCorrectStatic ? (
                                 <button
@@ -582,7 +651,7 @@ export function StudentTest() {
 
         {err && <p className="text-red-600 mt-4">{err}</p>}
         <div className="mt-8 flex flex-col sm:flex-row gap-3">
-          {done.suggestedNextLevelId ? (
+          {done.kind === "level" && done.suggestedNextLevelId ? (
             <button
               type="button"
               disabled={startingLevel !== null}
@@ -592,14 +661,23 @@ export function StudentTest() {
               {startingLevel === done.suggestedNextLevelId ? "Starting…" : "Go to next level"}
             </button>
           ) : null}
+          {done.kind === "level" && done.levelId ? (
           <button
             type="button"
             disabled={startingLevel !== null}
-            onClick={() => void startLevel(done.levelId)}
+            onClick={() => void startLevel(done.levelId!)}
             className="rounded-xl border border-slate-300 bg-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-60"
           >
             {startingLevel === done.levelId ? "Starting…" : "Retest this level"}
           </button>
+          ) : (
+          <Link
+            to={`/student/part/${done.subjectId}/test`}
+            className="rounded-xl border border-slate-300 bg-white px-6 py-4 text-base font-semibold min-h-[52px] inline-flex items-center justify-center"
+          >
+            Pick chapters again
+          </Link>
+          )}
         </div>
       </AppShell>
     );
@@ -620,8 +698,6 @@ export function StudentTest() {
     );
   }
 
-  const labels = ["A", "B", "C", "D"];
-
   return (
     <AppShell title={auth.profile?.fullName ?? "Test"} onLogout={logout} nav={[...studentNav]}
         sidebarKicker="Student">
@@ -633,6 +709,11 @@ export function StudentTest() {
         <p className="text-sm text-slate-600 mt-2">
           Question {idx + 1} of {questions.length}
         </p>
+        {wrongPenalty > 0 ? (
+          <p className="mt-1 text-xs text-amber-800">
+            Negative marking: −{formatMarks(wrongPenalty)} for each wrong answer. Score cannot go below 0.
+          </p>
+        ) : null}
       </div>
       <div
         className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm select-none"
@@ -647,25 +728,14 @@ export function StudentTest() {
             className="mt-4 max-h-72 w-full object-contain rounded-xl border border-slate-100 bg-slate-50"
           />
         ) : null}
-        <div className="mt-6 space-y-3">
-          {current.options.map((opt, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => {
-                setAnswers((a) => ({ ...a, [current.id]: i }));
-              }}
-              className={`w-full text-left rounded-xl border px-4 py-4 text-base min-h-[52px] transition ${
-                answers[current.id] === i
-                  ? "border-brand-600 bg-brand-50 ring-2 ring-brand-500"
-                  : "border-slate-200 hover:border-brand-300 bg-slate-50"
-              }`}
-            >
-              <span className="font-semibold text-brand-700 mr-2">{labels[i]}.</span>
-              {opt}
-            </button>
-          ))}
-        </div>
+        <QuestionResponse
+          type={current.type}
+          options={current.options}
+          selectedOption={answers[current.id]?.selectedOption}
+          numericRaw={answers[current.id]?.numericRaw}
+          onSelect={(i) => setAnswers((a) => ({ ...a, [current.id]: { selectedOption: i } }))}
+          onNumeric={(raw) => setAnswers((a) => ({ ...a, [current.id]: { numericRaw: raw } }))}
+        />
       </div>
       <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <button

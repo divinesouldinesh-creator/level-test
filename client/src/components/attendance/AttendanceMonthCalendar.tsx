@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
-import { formatMonthLabel, todayIso, yearMonthFromIso } from "../../attendanceReport";
+import { formatMonthLabel, todayIso, yearMonthFromIso, yesterdayIso } from "../../attendanceReport";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
@@ -111,7 +111,7 @@ export function AttendanceMonthCalendar({
     <div
       className={`rounded-lg border border-slate-200 bg-slate-50/60 p-3 ${disabled ? "opacity-60 pointer-events-none" : ""}`}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 hover:bg-slate-100 min-h-[36px]"
@@ -128,6 +128,17 @@ export function AttendanceMonthCalendar({
           aria-label="Next month"
         >
           ›
+        </button>
+        <button
+          type="button"
+          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 min-h-[36px]"
+          onClick={() => {
+            const yesterday = yesterdayIso();
+            setVisibleMonth(yearMonthFromIso(yesterday));
+            onSelectDate(yesterday);
+          }}
+        >
+          Yesterday
         </button>
         <button
           type="button"

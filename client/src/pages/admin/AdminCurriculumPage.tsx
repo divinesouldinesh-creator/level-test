@@ -32,14 +32,24 @@ type CurriculumTopic = {
   id: string;
   name: string;
 };
+type CurriculumChapter = {
+  id: string;
+  name: string;
+  sortOrder: number;
+};
 type CurriculumSubject = {
   id: string;
   name: string;
   code: string | null;
   areaId: string | null;
+  testMode?: "LEVEL" | "CHAPTER";
+  chapterTestQuestionCount?: number;
+  chapterNegativeMarking?: boolean;
+  chapterWrongPenalty?: number;
   area: { id: string; name: string; code: string | null } | null;
   levels: CurriculumLevel[];
-  topics: { id: string; name: string; levelId: string }[];
+  chapters?: CurriculumChapter[];
+  topics: { id: string; name: string; levelId: string | null }[];
 };
 const NO_TOPICS: CurriculumTopic[] = [];
 
@@ -49,7 +59,7 @@ type SubjectAreaRow = {
   code: string | null;
   sortOrder: number;
   branchCount: number;
-  branches: { id: string; name: string; code: string | null }[];
+  branches: { id: string; name: string; code: string | null; testMode?: "LEVEL" | "CHAPTER" }[];
 };
 
 export function AdminCurriculumPage() {
@@ -91,8 +101,8 @@ export function AdminCurriculumPage() {
     <>
       <h1 className="text-2xl font-bold text-slate-900">Curriculum &amp; classes</h1>
       <p className="text-slate-600 mt-1">
-        Create classes, then add subjects (Maths, English), branches under each subject, and configure Learn and Test.
-        Test uses the same levels and topics as before. Students only see branches linked to their class.
+        Create classes, then add subjects (Maths, English) and branches. A branch can use levels (skill tests) or
+        chapters (book tests like NCERT). Level tests stay as they are. Students only see branches linked to their class.
       </p>
       {err && <p className="text-red-600 mt-4">{err}</p>}
       {loading ? (
@@ -372,6 +382,7 @@ function AreasPanel({
   const [branchCode, setBranchCode] = useState("");
   const [branchAreaId, setBranchAreaId] = useState("");
   const [branchClassId, setBranchClassId] = useState("");
+  const [branchTestMode, setBranchTestMode] = useState<"LEVEL" | "CHAPTER">("LEVEL");
 
   const subjectsById = useMemo(() => {
     const m = new Map<string, CurriculumSubject>();
@@ -408,6 +419,7 @@ function AreasPanel({
         name: branchName.trim(),
         code: branchCode.trim() || undefined,
         classId: branchClassId || undefined,
+        testMode: branchTestMode,
       },
     });
     setBusy(false);
@@ -415,6 +427,7 @@ function AreasPanel({
     else {
       setBranchName("");
       setBranchCode("");
+      setBranchTestMode("LEVEL");
       await onChanged();
     }
   }
@@ -432,7 +445,7 @@ function AreasPanel({
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <h2 className="font-semibold text-lg text-slate-900">Subjects → Branches → Learn / Test</h2>
       <p className="mt-1 text-sm text-slate-600">
-        Add a subject (Maths, English), then branches under it. Open a branch to edit Learn or Test.
+        Add a subject (Maths, English), then branches under it. Choose Levels or Chapters for each branch.
       </p>
 
       <form onSubmit={addArea} className="mt-4 flex flex-wrap gap-2 items-end">
@@ -501,6 +514,18 @@ function AreasPanel({
             placeholder="MATH"
             disabled={busy}
           />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-slate-600">Test type</span>
+          <select
+            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[150px]"
+            value={branchTestMode}
+            onChange={(e) => setBranchTestMode(e.target.value as "LEVEL" | "CHAPTER")}
+            disabled={busy}
+          >
+            <option value="LEVEL">Levels</option>
+            <option value="CHAPTER">Chapters (book)</option>
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-slate-600">Link to class (optional)</span>
@@ -644,6 +669,8 @@ function SubjectCard({
   const [editingSubjectName, setEditingSubjectName] = useState(subject.name);
   const [editingSubjectCode, setEditingSubjectCode] = useState(subject.code ?? "");
   const [editingAreaId, setEditingAreaId] = useState(subject.areaId ?? "");
+  const [editingTestMode, setEditingTestMode] = useState<"LEVEL" | "CHAPTER">(subject.testMode ?? "LEVEL");
+  const [editingQuestionCount, setEditingQuestionCount] = useState(String(subject.chapterTestQuestionCount ?? 10));
   const [editingLevelId, setEditingLevelId] = useState<string | null>(null);
   const [editingLevelName, setEditingLevelName] = useState("");
   const [openLevelId, setOpenLevelId] = useState<string | null>(null);
@@ -720,6 +747,10 @@ function SubjectCard({
         name: nextName,
         code: editingSubjectCode.trim() || null,
         areaId: editingAreaId || null,
+        testMode: editingTestMode,
+        ...(editingTestMode === "CHAPTER"
+          ? { chapterTestQuestionCount: Math.max(1, parseInt(editingQuestionCount, 10) || 10) }
+          : {}),
       },
     });
     setBusy(false);
@@ -736,6 +767,15 @@ function SubjectCard({
         <span>
           {subject.name}
           {subject.code ? <span className="text-slate-500 font-normal ml-2">({subject.code})</span> : null}
+          {subject.testMode === "CHAPTER" ? (
+            <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">
+              chapters
+            </span>
+          ) : (
+            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+              levels
+            </span>
+          )}
           {subject.area ? (
             <span className="ml-2 text-xs font-normal text-slate-500">· {subject.area.name}</span>
           ) : (
@@ -753,6 +793,8 @@ function SubjectCard({
               setEditingSubjectName(subject.name);
               setEditingSubjectCode(subject.code ?? "");
               setEditingAreaId(subject.areaId ?? "");
+              setEditingTestMode(subject.testMode ?? "LEVEL");
+              setEditingQuestionCount(String(subject.chapterTestQuestionCount ?? 10));
             }}
             className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-1 disabled:opacity-50"
           >
@@ -819,6 +861,29 @@ function SubjectCard({
                 </select>
               </label>
             )}
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Test type</span>
+              <select
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm min-w-[140px]"
+                value={editingTestMode}
+                onChange={(e) => setEditingTestMode(e.target.value as "LEVEL" | "CHAPTER")}
+                disabled={busy}
+              >
+                <option value="LEVEL">Levels</option>
+                <option value="CHAPTER">Chapters (book)</option>
+              </select>
+            </label>
+            {editingTestMode === "CHAPTER" ? (
+              <label className="text-sm">
+                <span className="block text-slate-600 mb-1">Questions per test</span>
+                <input
+                  className="rounded border border-slate-300 px-2 py-1.5 text-sm w-24"
+                  value={editingQuestionCount}
+                  onChange={(e) => setEditingQuestionCount(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+            ) : null}
             <button
               type="button"
               disabled={busy || !editingSubjectName.trim()}
@@ -835,6 +900,8 @@ function SubjectCard({
                 setEditingSubjectName(subject.name);
                 setEditingSubjectCode(subject.code ?? "");
                 setEditingAreaId(subject.areaId ?? "");
+                setEditingTestMode(subject.testMode ?? "LEVEL");
+                setEditingQuestionCount(String(subject.chapterTestQuestionCount ?? 10));
               }}
               className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-50"
             >
@@ -843,6 +910,17 @@ function SubjectCard({
           </div>
         ) : null}
 
+        {subject.testMode === "CHAPTER" ? (
+          <BranchChapterPanel
+            subject={subject}
+            busy={busy}
+            setBusy={setBusy}
+            setErr={setErr}
+            onChanged={onChanged}
+            requestConfirm={requestConfirm}
+          />
+        ) : (
+          <>
         <div className="mt-3 flex gap-2">
           <button
             type="button"
@@ -985,8 +1063,251 @@ function SubjectCard({
         </ol>
           </>
         )}
+          </>
+        )}
       </div>
     </details>
+  );
+}
+
+function BranchChapterPanel({
+  subject,
+  busy,
+  setBusy,
+  setErr,
+  onChanged,
+  requestConfirm,
+}: {
+  subject: CurriculumSubject;
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  setErr: (e: string | null) => void;
+  onChanged: () => Promise<void>;
+  requestConfirm: RequestConfirm;
+}) {
+  const [chapterName, setChapterName] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [qCount, setQCount] = useState(String(subject.chapterTestQuestionCount ?? 10));
+  const [negativeMarking, setNegativeMarking] = useState(Boolean(subject.chapterNegativeMarking));
+  const [penalty, setPenalty] = useState(String(subject.chapterWrongPenalty ?? 0.25));
+
+  useEffect(() => {
+    setQCount(String(subject.chapterTestQuestionCount ?? 10));
+    setNegativeMarking(Boolean(subject.chapterNegativeMarking));
+    setPenalty(String(subject.chapterWrongPenalty ?? 0.25));
+  }, [subject.chapterTestQuestionCount, subject.chapterNegativeMarking, subject.chapterWrongPenalty]);
+
+  const chapters = subject.chapters ?? [];
+
+  async function addChapter(e: React.FormEvent) {
+    e.preventDefault();
+    if (!chapterName.trim()) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subjects/${subject.id}/topics`, {
+      method: "POST",
+      json: { name: chapterName.trim() },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not add chapter");
+    else {
+      setChapterName("");
+      await onChanged();
+    }
+  }
+
+  async function saveQuestionCount() {
+    const n = parseInt(qCount, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      setErr("Question count must be a positive number");
+      return;
+    }
+    const p = parseFloat(penalty);
+    if (negativeMarking && (!Number.isFinite(p) || p < 0 || p > 1)) {
+      setErr("Wrong-answer penalty must be between 0 and 1 (for example 0.25).");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subjects/${subject.id}`, {
+      method: "PATCH",
+      json: {
+        chapterTestQuestionCount: n,
+        chapterNegativeMarking: negativeMarking,
+        chapterWrongPenalty: Number.isFinite(p) ? p : 0.25,
+      },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not save test size");
+    else await onChanged();
+  }
+
+  async function renameChapter(topicId: string) {
+    const next = editingName.trim();
+    if (!next) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/topics/${topicId}`, {
+      method: "PATCH",
+      json: { name: next },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not rename chapter");
+    else {
+      setEditingId(null);
+      await onChanged();
+    }
+  }
+
+  function removeChapter(ch: CurriculumChapter) {
+    requestConfirm({
+      title: "Remove chapter",
+      message: `Remove chapter "${ch.name}" from this book branch? Questions stay in the bank and will show again if you re-add the same chapter name.`,
+      confirmLabel: "Remove chapter",
+      onConfirm: () => doRemoveChapter(ch.id),
+    });
+  }
+
+  async function doRemoveChapter(topicId: string) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subjects/${subject.id}/chapters/${topicId}`, { method: "DELETE" });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not remove chapter");
+    else await onChanged();
+  }
+
+  return (
+    <div className="mt-4">
+      <p className="text-sm text-slate-600">
+        Students tick this branch, then tick one or more chapters, then take a test from those chapters only. No
+        levels. Add questions in the Question bank after selecting this branch and chapter.
+      </p>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="text-sm">
+          <span className="block text-slate-600 mb-1">Questions per test</span>
+          <input
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm w-24"
+            value={qCount}
+            onChange={(e) => setQCount(e.target.value)}
+            disabled={busy}
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm pb-2">
+          <input
+            type="checkbox"
+            checked={negativeMarking}
+            onChange={(e) => setNegativeMarking(e.target.checked)}
+            disabled={busy}
+          />
+          Negative marking
+        </label>
+        {negativeMarking ? (
+          <label className="text-sm">
+            <span className="block text-slate-600 mb-1">Penalty per wrong</span>
+            <input
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm w-24"
+              value={penalty}
+              onChange={(e) => setPenalty(e.target.value)}
+              disabled={busy}
+              placeholder="0.25"
+            />
+          </label>
+        ) : null}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void saveQuestionCount()}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-50"
+        >
+          Save test rules
+        </button>
+      </div>
+      {negativeMarking ? (
+        <p className="mt-2 text-xs text-slate-500">
+          Correct = +1, wrong = −{penalty || "0.25"}. Score cannot go below 0. Students must still answer every
+          question. Level tests are not affected.
+        </p>
+      ) : null}
+      <p className="mt-4 text-sm font-medium text-slate-700">Chapters</p>
+      <ul className="mt-2 space-y-2">
+        {chapters.length === 0 ? (
+          <li className="text-sm text-amber-800">No chapters yet — add one below.</li>
+        ) : (
+          chapters.map((ch) => (
+            <li key={ch.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              {editingId === ch.id ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    disabled={busy}
+                  />
+                  <button
+                    type="button"
+                    className="text-xs rounded border border-slate-300 px-2 py-1"
+                    disabled={busy || !editingName.trim()}
+                    onClick={() => void renameChapter(ch.id)}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs rounded border border-slate-300 px-2 py-1"
+                    disabled={busy}
+                    onClick={() => setEditingId(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <span className="font-medium text-slate-800">{ch.name}</span>
+              )}
+              {editingId !== ch.id ? (
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="text-sm text-slate-700 font-medium underline"
+                    onClick={() => {
+                      setEditingId(ch.id);
+                      setEditingName(ch.name);
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    className="text-sm text-rose-800 font-medium"
+                    disabled={busy}
+                    onClick={() => removeChapter(ch)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : null}
+            </li>
+          ))
+        )}
+      </ul>
+      <form onSubmit={addChapter} className="mt-3 flex flex-wrap gap-2">
+        <input
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm flex-1 min-w-[200px]"
+          placeholder="New chapter name (e.g. Knowing Our Numbers)"
+          value={chapterName}
+          onChange={(e) => setChapterName(e.target.value)}
+          disabled={busy}
+        />
+        <button
+          type="submit"
+          disabled={busy || !chapterName.trim()}
+          className="rounded-lg bg-slate-800 text-white px-3 py-2 text-sm disabled:opacity-50"
+        >
+          Add chapter
+        </button>
+      </form>
+    </div>
   );
 }
 

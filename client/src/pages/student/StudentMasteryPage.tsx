@@ -4,6 +4,13 @@ import { api, mediaUrl } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 import { studentNav } from "../../studentNav";
+import { QuestionResponse } from "../../components/QuestionResponse";
+import {
+  isDraftAnswered,
+  toSubmitAnswer,
+  type DraftAnswer,
+  type QuestionType,
+} from "../../questionTypes";
 
 type MasteryDetail = {
   masteryId: string;
@@ -26,6 +33,7 @@ type SessionPayload = {
   masteryId: string;
   questions: {
     id: string;
+    type?: QuestionType;
     stem: string;
     stemImageUrl?: string | null;
     options: string[];
@@ -70,7 +78,7 @@ export function StudentMasteryPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [session, setSession] = useState<SessionPayload | null>(null);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<Record<string, DraftAnswer>>({});
   const [idx, setIdx] = useState(0);
   const [done, setDone] = useState<DoneState | null>(null);
 
@@ -127,11 +135,8 @@ export function StudentMasteryPage() {
 
   async function submit() {
     if (!session) return;
-    const payload = session.questions.map((q) => ({
-      questionId: q.id,
-      selectedOption: answers[q.id],
-    }));
-    if (payload.some((a) => a.selectedOption === undefined)) {
+    const payload = session.questions.map((q) => toSubmitAnswer(q.id, q.type, answers[q.id]));
+    if (session.questions.some((q) => !isDraftAnswered(q.type, answers[q.id]))) {
       setErr("Answer every question");
       return;
     }
@@ -207,7 +212,7 @@ export function StudentMasteryPage() {
   if (session) {
     const q = session.questions[idx];
     const total = session.questions.length;
-    const answered = Object.keys(answers).length;
+    const answered = session.questions.filter((item) => isDraftAnswered(item.type, answers[item.id])).length;
     return (
       <AppShell title="Topic path" onLogout={logout} nav={[...studentNav]} sidebarKicker="Student">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -228,24 +233,14 @@ export function StudentMasteryPage() {
                 className="mt-3 max-h-56 rounded-lg border border-slate-100"
               />
             )}
-            <ul className="mt-4 space-y-2">
-              {q.options.map((opt, oi) => (
-                <li key={oi}>
-                  <button
-                    type="button"
-                    onClick={() => setAnswers((a) => ({ ...a, [q.id]: oi }))}
-                    className={`w-full rounded-lg border px-4 py-3 text-left text-sm min-h-[48px] ${
-                      answers[q.id] === oi
-                        ? "border-brand-600 bg-brand-50"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    <span className="font-semibold mr-2">{String.fromCharCode(65 + oi)}.</span>
-                    {opt}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <QuestionResponse
+              type={q.type}
+              options={q.options}
+              selectedOption={answers[q.id]?.selectedOption}
+              numericRaw={answers[q.id]?.numericRaw}
+              onSelect={(oi) => setAnswers((a) => ({ ...a, [q.id]: { selectedOption: oi } }))}
+              onNumeric={(raw) => setAnswers((a) => ({ ...a, [q.id]: { numericRaw: raw } }))}
+            />
           </div>
         )}
         <div className="mt-5 flex flex-wrap gap-3">

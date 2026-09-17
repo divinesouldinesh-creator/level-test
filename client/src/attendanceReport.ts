@@ -1,5 +1,6 @@
 export type AttendanceRange =
   | "daily"
+  | "yesterday"
   | "weekly"
   | "last_7_days"
   | "monthly"
@@ -42,6 +43,13 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Calendar day before today (UTC, matches todayIso). */
+export function yesterdayIso(): string {
+  const d = new Date(`${todayIso()}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 /** YYYY-MM from an ISO date string. */
 export function yearMonthFromIso(isoDate: string): string {
   return isoDate.slice(0, 7);
@@ -80,7 +88,7 @@ export function buildAttendanceReportQuery(params: {
   if (params.range === "custom") {
     if (params.from) q.set("from", params.from);
     if (params.to) q.set("to", params.to);
-  } else if (params.date) {
+  } else if (params.range !== "yesterday" && params.date) {
     q.set("date", params.date);
   }
   return q.toString();
@@ -129,10 +137,72 @@ export function buildAttendanceSummaryQuery(params: {
   if (params.range === "custom") {
     if (params.from) q.set("from", params.from);
     if (params.to) q.set("to", params.to);
-  } else if (params.date) {
+  } else if (params.range !== "yesterday" && params.date) {
     q.set("date", params.date);
   }
   return q.toString();
+}
+
+export function buildAttendanceOverviewQuery(params: {
+  range: AttendanceRange;
+  date?: string;
+  from?: string;
+  to?: string;
+}): string {
+  const q = new URLSearchParams();
+  q.set("range", params.range);
+  if (params.range === "custom") {
+    if (params.from) q.set("from", params.from);
+    if (params.to) q.set("to", params.to);
+  } else if (params.range !== "yesterday" && params.date) {
+    q.set("date", params.date);
+  }
+  return q.toString();
+}
+
+export type SchoolAttendanceSectionRow = {
+  classId: string;
+  className: string;
+  sectionId: string;
+  sectionName: string;
+  studentCount: number;
+  present: number;
+  absent: number;
+  totalDays: number;
+  attendancePct: number | null;
+  studentsBelow75: number;
+  studentsNoRecords: number;
+};
+
+export type SchoolAttendanceOverview = {
+  from: string;
+  to: string;
+  school: {
+    studentCount: number;
+    present: number;
+    absent: number;
+    totalDays: number;
+    attendancePct: number | null;
+    studentsBelow75: number;
+    sectionsBelow75: number;
+    sectionsWithNoRecords: number;
+  };
+  sections: SchoolAttendanceSectionRow[];
+};
+
+export type SchoolSectionPctFilter = "all" | "below_75" | "no_records";
+
+export function filterSchoolOverviewRows(
+  sections: SchoolAttendanceSectionRow[],
+  preset: SchoolSectionPctFilter
+): SchoolAttendanceSectionRow[] {
+  if (preset === "below_75") {
+    return sections.filter((s) => s.attendancePct != null && s.attendancePct < 75);
+  }
+  if (preset === "no_records") {
+    return sections.filter((s) => s.totalDays === 0);
+  }
+  return sections;
 }
 
 export function filterAttendanceSummaryRows(

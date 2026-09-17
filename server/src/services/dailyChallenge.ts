@@ -3,6 +3,7 @@ import { DailyChallengeStatus } from "@prisma/client";
 import { istDayKey, previousIstDayKey } from "./engagementCalendar.js";
 import { awardDailyChallengeXp } from "./studentEngagement.js";
 import { masteryPriorityTopicIds } from "./topicMastery.js";
+import { scoreSubmittedAnswer, type SubmittedAnswer } from "./questionAnswer.js";
 
 const DAILY_QUESTION_COUNT = 5;
 
@@ -398,7 +399,7 @@ export async function submitDailyChallenge(
   prisma: PrismaClient,
   studentId: string,
   challengeId: string,
-  answers: { questionId: string; selectedOption: number }[]
+  answers: SubmittedAnswer[]
 ) {
   const challenge = await prisma.dailyChallenge.findFirst({
     where: { id: challengeId, studentId },
@@ -417,41 +418,44 @@ export async function submitDailyChallenge(
     };
   }
 
-  const answerByQ = new Map(answers.map((a) => [a.questionId, a.selectedOption]));
+  const answerByQ = new Map(answers.map((a) => [a.questionId, a]));
   const expected = new Set(challenge.questions.map((q) => q.questionId));
   if (answers.length !== expected.size || answers.some((a) => !expected.has(a.questionId))) {
     return { error: "incomplete" as const };
   }
-  for (const a of answers) {
-    if (!Number.isInteger(a.selectedOption) || a.selectedOption < 0 || a.selectedOption > 3) {
-      return { error: "invalid_option" as const };
-    }
+
+  const scored = challenge.questions.map((cq) => ({
+    cq,
+    result: scoreSubmittedAnswer(cq.question, answerByQ.get(cq.questionId)),
+  }));
+  if (scored.some((s) => !s.result.complete)) {
+    return { error: "incomplete" as const };
   }
 
   let score = 0;
   const maxScore = challenge.questions.length;
   const topicScores = new Map<string, { correct: number; total: number }>();
 
-  for (const cq of challenge.questions) {
-    const selected = answerByQ.get(cq.questionId)!;
-    const isCorrect = selected === cq.question.correctOption;
-    if (isCorrect) score += 1;
+  for (const { cq, result } of scored) {
+    if (result.isCorrect) score += 1;
     const tid = cq.question.topicId;
     const cur = topicScores.get(tid) ?? { correct: 0, total: 0 };
     cur.total += 1;
-    if (isCorrect) cur.correct += 1;
+    if (result.isCorrect) cur.correct += 1;
     topicScores.set(tid, cur);
   }
 
   const percentage = maxScore > 0 ? Math.round((score * 1000) / maxScore) / 10 : 0;
 
   await prisma.$transaction(async (tx) => {
-    for (const cq of challenge.questions) {
-      const selected = answerByQ.get(cq.questionId)!;
-      const isCorrect = selected === cq.question.correctOption;
+    for (const { cq, result } of scored) {
       await tx.dailyChallengeQuestion.update({
         where: { id: cq.id },
-        data: { selectedOption: selected, isCorrect },
+        data: {
+          selectedOption: result.selectedOption,
+          numericAnswer: result.numericAnswer,
+          isCorrect: result.isCorrect,
+        },
       });
     }
 

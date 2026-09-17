@@ -4,9 +4,17 @@ import { api, mediaUrl } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 import { studentNav } from "../../studentNav";
+import { QuestionResponse } from "../../components/QuestionResponse";
+import {
+  isDraftAnswered,
+  toSubmitAnswer,
+  type DraftAnswer,
+  type QuestionType,
+} from "../../questionTypes";
 
 type Q = {
   id: string;
+  type?: QuestionType;
   stem: string;
   stemImageUrl?: string | null;
   options: string[];
@@ -14,6 +22,7 @@ type Q = {
   topicName: string;
   orderIndex: number;
   selectedOption?: number | null;
+  numericAnswer?: number | null;
   correctOption?: number;
   isCorrect?: boolean | null;
 };
@@ -49,7 +58,7 @@ export function StudentDailyChallengePage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [challenge, setChallenge] = useState<ChallengePayload | null>(null);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<Record<string, DraftAnswer>>({});
   const [idx, setIdx] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -67,9 +76,10 @@ export function StudentDailyChallengePage() {
       }
       setChallenge(r.data);
       if (r.data.status === "COMPLETED") {
-        const restored: Record<string, number> = {};
+        const restored: Record<string, DraftAnswer> = {};
         for (const q of r.data.questions) {
-          if (typeof q.selectedOption === "number") restored[q.id] = q.selectedOption;
+          if (typeof q.selectedOption === "number") restored[q.id] = { selectedOption: q.selectedOption };
+          else if (q.numericAnswer != null) restored[q.id] = { numericRaw: String(q.numericAnswer) };
         }
         setAnswers(restored);
         setDone({
@@ -88,11 +98,8 @@ export function StudentDailyChallengePage() {
 
   async function submit() {
     if (!challengeId || !challenge) return;
-    const payload = challenge.questions.map((q) => ({
-      questionId: q.id,
-      selectedOption: answers[q.id],
-    }));
-    if (payload.some((a) => a.selectedOption === undefined)) {
+    const payload = challenge.questions.map((q) => toSubmitAnswer(q.id, q.type, answers[q.id]));
+    if (challenge.questions.some((q) => !isDraftAnswered(q.type, answers[q.id]))) {
       setErr("Answer every question before submitting");
       return;
     }
@@ -171,7 +178,7 @@ export function StudentDailyChallengePage() {
   }
 
   const q = challenge.questions[idx];
-  const answered = Object.keys(answers).length;
+  const answered = challenge.questions.filter((item) => isDraftAnswered(item.type, answers[item.id])).length;
   const total = challenge.questions.length;
 
   return (
@@ -205,27 +212,14 @@ export function StudentDailyChallengePage() {
               className="mt-3 max-h-56 rounded-lg border border-slate-100"
             />
           )}
-          <ul className="mt-4 space-y-2">
-            {q.options.map((opt, oi) => {
-              const selected = answers[q.id] === oi;
-              return (
-                <li key={oi}>
-                  <button
-                    type="button"
-                    onClick={() => setAnswers((a) => ({ ...a, [q.id]: oi }))}
-                    className={`w-full rounded-lg border px-4 py-3 text-left text-sm min-h-[48px] ${
-                      selected
-                        ? "border-brand-600 bg-brand-50 text-brand-900"
-                        : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}
-                  >
-                    <span className="font-semibold mr-2">{String.fromCharCode(65 + oi)}.</span>
-                    {opt}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <QuestionResponse
+            type={q.type}
+            options={q.options}
+            selectedOption={answers[q.id]?.selectedOption}
+            numericRaw={answers[q.id]?.numericRaw}
+            onSelect={(oi) => setAnswers((a) => ({ ...a, [q.id]: { selectedOption: oi } }))}
+            onNumeric={(raw) => setAnswers((a) => ({ ...a, [q.id]: { numericRaw: raw } }))}
+          />
         </div>
       )}
 

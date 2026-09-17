@@ -1,13 +1,18 @@
 import mammoth from "mammoth";
-import type { Difficulty } from "@prisma/client";
+import type { Difficulty, QuestionType } from "@prisma/client";
+import { parseNumericInput, parseQuestionType } from "./questionAnswer.js";
 
 export type ParsedQuestion = {
+  type: QuestionType;
   stem: string;
   optionA: string;
   optionB: string;
   optionC: string;
   optionD: string;
   correctOption: number;
+  correctNumeric: number | null;
+  numericTolerance: number;
+  difficulty?: Difficulty;
 };
 
 const DEVANAGARI_DIGIT_TO_ASCII: Record<string, string> = {
@@ -48,29 +53,19 @@ function optionLetterToIndex(token: string): number | null {
 
 const OPTION_TOKEN_CLASS = "[A-Da-dकखगघअबसद]";
 const ANSWER_LABEL_RE =
-  /^\s*(?:Correct\s+Answer|Correct\s+Ans|Answer|Ans|Correct|उत्तर|सही\s+उत्तर|जवाब)\s*[:=\-–]?\s*\(?\s*([A-Da-dकखगघअबसद])\)?/i;
+  /^\s*(?:Correct\s+Answer|Correct\s+Ans|Answer|Ans|Correct|उत्तर|सही\s+उत्तर|जवाब)\s*[:=\-–]?\s*(.+)$/i;
+const TYPE_LABEL_RE = /^\s*(?:Type|Question\s*Type|Kind|प्रकार)\s*[:=\-–]?\s*(.+)$/i;
+const TOLERANCE_LABEL_RE = /^\s*(?:Tolerance|Tol)\s*[:=\-–]?\s*(.+)$/i;
 const STEM_PREFIX_RE =
   /^\s*(?:Q\d+|Question\s*\d+|प्रश्न\s*\d+|प्र\.?\s*\d+|\d+)[\.\)\:\-–]\s+(.+)$/i;
 const OPTION_LINE_RE = new RegExp(
   String.raw`^\s*\(?\s*(${OPTION_TOKEN_CLASS})\s*[\)\.\:\-–]\s+(.+)$`
 );
 
-/**
- * Light text normalization that preserves Unicode characters (Devanagari,
- * superscripts, math symbols, etc.) so the question renders identically to
- * what the author typed. The previous implementation rewrote `²` → `^2`,
- * `√x` → `sqrt(x)`, and stripped LaTeX `$...$` delimiters; that hurt math
- * fidelity and prevented future KaTeX rendering.
- */
 function normalizeWhitespace(input: string): string {
   return input.replace(/\s+/g, " ").trim();
 }
 
-/**
- * If a line packs all options on one row (e.g. "A) 31 B) 32 C) 33 D) 34"),
- * return them split into individual option strings. Returns null when the
- * line has fewer than two markers, so multi-line layouts fall through.
- */
 function splitInlineOptions(line: string): string[] | null {
   const re = new RegExp(
     String.raw`(^|\s)\(?\s*(${OPTION_TOKEN_CLASS})\s*[\)\.\:\-–]\s+`,
@@ -85,7 +80,6 @@ function splitInlineOptions(line: string): string[] | null {
     matches.push({ start, markerEnd, letter: m[2] });
   }
   if (matches.length < 2) return null;
-  // Require at least 2 distinct option letters before treating as inline.
   const distinct = new Set(matches.map((x) => optionLetterToIndex(x.letter)));
   distinct.delete(null as unknown as number);
   if (distinct.size < 2) return null;
@@ -98,21 +92,37 @@ function splitInlineOptions(line: string): string[] | null {
   return out;
 }
 
+function parseAnswerValue(raw: string): { letter: number | null; numeric: number | null } {
+  const trimmed = raw.trim();
+  const wrapped = trimmed.match(/^\(?\s*([A-Da-dकखगघअबसद])\s*\)?\.?$/);
+  if (wrapped) {
+    const idx = optionLetterToIndex(wrapped[1]);
+    if (idx != null) return { letter: idx, numeric: null };
+  }
+  const numeric = parseNumericInput(devanagariDigitsToAscii(trimmed));
+  return { letter: null, numeric };
+}
+
 /**
- * Parse a free-form text blob containing one or more multiple-choice
- * questions into structured records.
+ * Parse a free-form text blob containing one or more questions into structured records.
  *
- * Recognized shapes (any combination, mixed languages OK):
+ * MCQ (4 options), MCQ2 (A/B only), and NUMERIC (typed number) are supported.
  *
- *   Q1. <stem>           (also: Question 1., प्रश्न १., 1., 1))
- *   A) <opt>             (also: A. / (A) / Hindi क/ख/ग/घ or अ/ब/स/द)
+ *   Q1. <stem>
+ *   A) <opt>
  *   B) <opt>
  *   C) <opt>
  *   D) <opt>
- *   Answer: B            (also: Ans, Correct, उत्तर, सही उत्तर, जवाब; A/B/C/D or Hindi letters)
+ *   Answer: B
  *
- * Inline option layouts ("A) 31 B) 32 C) 33 D) 34") are also supported.
- * Blocks are separated by blank lines.
+ *   Q2. Water boils at 100°C.
+ *   A) True
+ *   B) False
+ *   Answer: A
+ *
+ *   Q3. 7 × 8 = ?
+ *   Type: NUMERIC
+ *   Answer: 56
  */
 export function parseQuestionBlocks(text: string): ParsedQuestion[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
@@ -130,8 +140,6 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
       });
     if (rawLines.length < 2) continue;
 
-    // Expand any single-line option layout into individual option lines so
-    // the rest of the parser only has to handle one shape.
     const lines: string[] = [];
     for (const line of rawLines) {
       const inline = splitInlineOptions(line);
@@ -139,16 +147,33 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
       else lines.push(line);
     }
 
-    let stem = "";
     const options: string[] = ["", "", "", ""];
     let correct: number | null = null;
+    let correctNumeric: number | null = null;
+    let numericTolerance = 0;
+    let declaredType: QuestionType | null = null;
     const stemFragments: string[] = [];
 
     for (const line of lines) {
+      const typeMatch = line.match(TYPE_LABEL_RE);
+      if (typeMatch) {
+        const parsed = parseQuestionType(typeMatch[1]);
+        if (parsed) {
+          declaredType = parsed;
+          continue;
+        }
+      }
+      const tolMatch = line.match(TOLERANCE_LABEL_RE);
+      if (tolMatch) {
+        const n = parseNumericInput(tolMatch[1]);
+        if (n != null && n >= 0) numericTolerance = n;
+        continue;
+      }
       const ans = line.match(ANSWER_LABEL_RE);
       if (ans) {
-        const idx = optionLetterToIndex(ans[1]);
-        if (idx != null) correct = idx;
+        const parsed = parseAnswerValue(ans[1]);
+        if (parsed.letter != null) correct = parsed.letter;
+        if (parsed.numeric != null) correctNumeric = parsed.numeric;
         continue;
       }
       const opt = line.match(OPTION_LINE_RE);
@@ -159,8 +184,6 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
           continue;
         }
       }
-      // Otherwise this is part of the stem. Honor numeric prefixes (English
-      // or Hindi) but keep the rest of the line intact.
       const prefixed = devanagariDigitsToAscii(line).match(STEM_PREFIX_RE);
       if (prefixed) {
         stemFragments.push(prefixed[1].trim());
@@ -169,16 +192,56 @@ export function parseQuestionBlocks(text: string): ParsedQuestion[] {
       stemFragments.push(line);
     }
 
-    if (stemFragments.length) stem = normalizeWhitespace(stemFragments.join(" "));
+    const stem = stemFragments.length ? normalizeWhitespace(stemFragments.join(" ")) : "";
+    if (!stem) continue;
 
-    if (stem && options.every(Boolean) && correct != null && correct >= 0 && correct < 4) {
+    const filled = options.map((o) => Boolean(o));
+    const fourOptions = filled[0] && filled[1] && filled[2] && filled[3];
+    const twoOptions = filled[0] && filled[1] && !filled[2] && !filled[3];
+
+    if (declaredType === "NUMERIC" || (!declaredType && !filled.some(Boolean) && correctNumeric != null)) {
+      if (correctNumeric == null) continue;
       out.push({
+        type: "NUMERIC",
+        stem,
+        optionA: "",
+        optionB: "",
+        optionC: "",
+        optionD: "",
+        correctOption: 0,
+        correctNumeric,
+        numericTolerance,
+      });
+      continue;
+    }
+
+    if (declaredType === "MCQ2" || (!declaredType && twoOptions && correct != null && correct <= 1)) {
+      if (!filled[0] || !filled[1] || correct == null || correct > 1) continue;
+      out.push({
+        type: "MCQ2",
+        stem,
+        optionA: options[0],
+        optionB: options[1],
+        optionC: "",
+        optionD: "",
+        correctOption: correct,
+        correctNumeric: null,
+        numericTolerance: 0,
+      });
+      continue;
+    }
+
+    if (fourOptions && correct != null && correct >= 0 && correct < 4) {
+      out.push({
+        type: "MCQ",
         stem,
         optionA: options[0],
         optionB: options[1],
         optionC: options[2],
         optionD: options[3],
         correctOption: correct,
+        correctNumeric: null,
+        numericTolerance: 0,
       });
     }
   }

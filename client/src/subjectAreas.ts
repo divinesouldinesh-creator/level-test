@@ -8,6 +8,7 @@ export type SubjectWithArea = {
   areaId?: string | null;
   areaName?: string | null;
   areaCode?: string | null;
+  testMode?: "LEVEL" | "CHAPTER";
 };
 
 /** Fallback when area is not set on the subject. */

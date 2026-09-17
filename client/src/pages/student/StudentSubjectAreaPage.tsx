@@ -50,7 +50,7 @@ export function StudentSubjectAreaPage() {
         ← Subjects
       </Link>
       <h1 className="mt-2 text-2xl font-bold text-slate-900">{title}</h1>
-      <p className="mt-1 text-slate-600">Open a part to Learn and Test.</p>
+      <p className="mt-1 text-slate-600">Open a part to Learn and Test, or pick a book to choose chapters.</p>
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
       {loading ? (
         <p className="mt-6 text-slate-500">Loading…</p>
@@ -64,12 +64,19 @@ export function StudentSubjectAreaPage() {
             subjects.map((s) => (
               <li key={s.id}>
                 <Link
-                  to={`/student/part/${s.id}`}
+                  to={
+                    s.testMode === "CHAPTER"
+                      ? `/student/part/${s.id}/test`
+                      : `/student/part/${s.id}`
+                  }
                   className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm hover:border-brand-500"
                 >
                   <div>
                     <p className="font-semibold text-slate-900">{s.name}</p>
                     {s.code && <p className="text-sm text-slate-500">{s.code}</p>}
+                    {s.testMode === "CHAPTER" ? (
+                      <p className="mt-1 text-xs text-emerald-700">Tick chapters to start a test</p>
+                    ) : null}
                   </div>
                   <span className="text-slate-400">→</span>
                 </Link>

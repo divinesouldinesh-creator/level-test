@@ -40,11 +40,16 @@ export function StudentPartHubPage() {
         ← Back
       </Link>
       <h1 className="mt-2 text-2xl font-bold text-slate-900">{subject?.name ?? "…"}</h1>
-      <p className="mt-1 text-slate-600">Choose Learn to study, or Test to check yourself.</p>
+      <p className="mt-1 text-slate-600">
+        {subject?.testMode === "CHAPTER"
+          ? "Tick this book, then pick chapters for your test."
+          : "Choose Learn to study, or Test to check yourself."}
+      </p>
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
 
       {subject && (
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <div className={`mt-6 grid gap-4 ${subject.testMode === "CHAPTER" ? "" : "sm:grid-cols-2"}`}>
+          {subject.testMode === "CHAPTER" ? null : (
           <Link
             to={`/student/part/${subject.id}/learn`}
             className="rounded-xl border border-indigo-200 bg-indigo-50 p-6 shadow-sm hover:border-indigo-400"
@@ -54,13 +59,16 @@ export function StudentPartHubPage() {
               Study weak topics and practice until you get them right.
             </p>
           </Link>
+          )}
           <Link
             to={`/student/part/${subject.id}/test`}
             className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm hover:border-brand-500"
           >
             <p className="text-xl font-semibold text-slate-900">Test</p>
             <p className="mt-2 text-sm text-slate-600">
-              Take level tests to check your progress.
+              {subject.testMode === "CHAPTER"
+                ? "Tick one or more chapters and start a test from those chapters only."
+                : "Take level tests to check your progress."}
             </p>
           </Link>
         </div>
