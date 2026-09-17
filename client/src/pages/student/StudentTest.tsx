@@ -357,7 +357,7 @@ export function StudentTest() {
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div className="rounded-xl bg-white border p-4 shadow-sm">
             <p className="text-sm text-slate-500">Score</p>
-            <p className="text-3xl font-bold text-brand-800">
+            <p className={`text-3xl font-bold ${done.score < 0 ? "text-rose-700" : "text-brand-800"}`}>
               {formatMarks(done.score)}/{done.maxScore}
             </p>
             {done.kind === "chapter" && done.negativeMarking && (done.wrongPenalty ?? 0) > 0 ? (
@@ -367,7 +367,7 @@ export function StudentTest() {
                 {done.penaltyTotal != null && done.penaltyTotal > 0
                   ? ` · −${formatMarks(done.penaltyTotal)} total`
                   : ""}
-                . Score cannot go below 0.
+                . Marks can go below 0; percentage stays at 0%.
               </p>
             ) : null}
           </div>
@@ -711,7 +711,7 @@ export function StudentTest() {
         </p>
         {wrongPenalty > 0 ? (
           <p className="mt-1 text-xs text-amber-800">
-            Negative marking: −{formatMarks(wrongPenalty)} for each wrong answer. Score cannot go below 0.
+            Negative marking: −{formatMarks(wrongPenalty)} for each wrong answer. Marks can go below 0.
           </p>
         ) : null}
       </div>

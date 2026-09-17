@@ -1226,7 +1226,7 @@ function BranchChapterPanel({
       </div>
       {negativeMarking ? (
         <p className="mt-2 text-xs text-slate-500">
-          Correct = +1, wrong = −{penalty || "0.25"}. Score cannot go below 0. Students must still answer every
+          Correct = +1, wrong = −{penalty || "0.25"}. Marks can go below 0; percentage stays at 0%. Students must still answer every
           question. Level tests are not affected.
         </p>
       ) : null}

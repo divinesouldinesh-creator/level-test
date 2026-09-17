@@ -110,8 +110,8 @@ export function tallyTestScore(
   const penaltyPerWrong = Math.max(0, wrongPenalty);
   const penaltyTotal = Math.round(wrong * penaltyPerWrong * 100) / 100;
   const raw = correct - penaltyTotal;
-  const score = Math.max(0, Math.round(raw * 100) / 100);
-  const percentage = maxScore ? (100 * score) / maxScore : 0;
+  const score = Math.round(raw * 100) / 100;
+  const percentage = maxScore ? Math.max(0, (100 * score) / maxScore) : 0;
   return { score, maxScore, percentage, correct, wrong, penaltyPerWrong, penaltyTotal };
 }
 
