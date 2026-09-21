@@ -50,6 +50,59 @@ export function yesterdayIso(): string {
   return d.toISOString().slice(0, 10);
 }
 
+export type SaturdayHolidayRule = "NONE" | "SECOND" | "ALL";
+
+export type HolidaySettings = {
+  sundaysOff: boolean;
+  saturdayRule: SaturdayHolidayRule;
+};
+
+export const DEFAULT_HOLIDAY_SETTINGS: HolidaySettings = {
+  sundaysOff: true,
+  saturdayRule: "SECOND",
+};
+
+function utcDayOfWeekIso(iso: string): number {
+  return new Date(`${iso}T00:00:00.000Z`).getUTCDay();
+}
+
+function isSecondSaturdayIso(iso: string): boolean {
+  if (utcDayOfWeekIso(iso) !== 6) return false;
+  const day = Number(iso.slice(8, 10));
+  return day >= 8 && day <= 14;
+}
+
+export function defaultHolidayName(
+  iso: string,
+  settings: HolidaySettings = DEFAULT_HOLIDAY_SETTINGS
+): string | null {
+  if (settings.sundaysOff && utcDayOfWeekIso(iso) === 0) return "Sunday";
+  if (settings.saturdayRule === "ALL" && utcDayOfWeekIso(iso) === 6) return "Saturday";
+  if (settings.saturdayRule === "SECOND" && isSecondSaturdayIso(iso)) return "2nd Saturday";
+  return null;
+}
+
+/** Sundays + 2nd Saturday (or current rules) so the calendar can paint before the API returns. */
+export function defaultHolidaysInRange(
+  fromIso: string,
+  toIso: string,
+  settings: HolidaySettings = DEFAULT_HOLIDAY_SETTINGS
+): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromIso) || !/^\d{4}-\d{2}-\d{2}$/.test(toIso) || fromIso > toIso) {
+    return map;
+  }
+  const cur = new Date(`${fromIso}T00:00:00.000Z`);
+  const end = new Date(`${toIso}T00:00:00.000Z`);
+  while (cur.getTime() <= end.getTime()) {
+    const iso = cur.toISOString().slice(0, 10);
+    const name = defaultHolidayName(iso, settings);
+    if (name) map.set(iso, name);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return map;
+}
+
 /** YYYY-MM from an ISO date string. */
 export function yearMonthFromIso(isoDate: string): string {
   return isoDate.slice(0, 7);

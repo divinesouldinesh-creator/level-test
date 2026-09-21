@@ -11,6 +11,7 @@ export function OfficeLayout() {
       sidebarKicker="Office"
       nav={[
         { to: "/office/students", label: "Students" },
+        { to: "/office/fees", label: "Fees" },
         { to: "/office/attendance", label: "Attendance" },
         { to: "/office/teachers", label: "Teachers" },
       ]}

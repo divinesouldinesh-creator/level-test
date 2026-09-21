@@ -80,6 +80,9 @@ const AdminTopicLessonsPage = lazy(() =>
 const AdminAttendancePage = lazy(() =>
   import("./pages/admin/AdminAttendancePage").then((m) => ({ default: m.AdminAttendancePage }))
 );
+const OfficeFeesPage = lazy(() =>
+  import("./pages/office/OfficeFeesPage").then((m) => ({ default: m.OfficeFeesPage }))
+);
 const TeacherOverviewPage = lazy(() =>
   import("./pages/teacher/TeacherOverviewPage").then((m) => ({ default: m.TeacherOverviewPage }))
 );
@@ -297,6 +300,7 @@ function AppRoutes() {
           <Route path="question-bank" element={<AdminQuestionBankPage />} />
           <Route path="topic-lessons" element={<AdminTopicLessonsPage />} />
           <Route path="students" element={<AdminStudentsPage />} />
+          <Route path="fees" element={<OfficeFeesPage />} />
           <Route path="attendance" element={<AdminAttendancePage />} />
           <Route path="staff" element={<AdminStaffPage />} />
           <Route path="teachers" element={<Navigate to="/admin/staff" replace />} />
@@ -313,6 +317,7 @@ function AppRoutes() {
         >
           <Route index element={<Navigate to="students" replace />} />
           <Route path="students" element={<AdminStudentsPage />} />
+          <Route path="fees" element={<OfficeFeesPage />} />
           <Route path="attendance" element={<AdminAttendancePage />} />
           <Route path="teachers" element={<AdminTeachersPage />} />
         </Route>

@@ -88,8 +88,17 @@ export function scoreSubmittedAnswer(
   };
 }
 
+export function isAttemptedAnswer(
+  type: QuestionType | string | null | undefined,
+  selectedOption: number | null | undefined,
+  numericAnswer: number | null | undefined
+): boolean {
+  if (type === "NUMERIC") return numericAnswer != null && Number.isFinite(numericAnswer);
+  return selectedOption != null;
+}
+
 export function tallyTestScore(
-  results: { isCorrect: boolean }[],
+  results: { isCorrect: boolean; complete?: boolean }[],
   wrongPenalty = 0
 ): {
   score: number;
@@ -97,14 +106,17 @@ export function tallyTestScore(
   percentage: number;
   correct: number;
   wrong: number;
+  unanswered: number;
   penaltyPerWrong: number;
   penaltyTotal: number;
 } {
   const maxScore = results.length;
   let correct = 0;
   let wrong = 0;
+  let unanswered = 0;
   for (const r of results) {
     if (r.isCorrect) correct += 1;
+    else if (r.complete === false) unanswered += 1;
     else wrong += 1;
   }
   const penaltyPerWrong = Math.max(0, wrongPenalty);
@@ -112,7 +124,7 @@ export function tallyTestScore(
   const raw = correct - penaltyTotal;
   const score = Math.round(raw * 100) / 100;
   const percentage = maxScore ? Math.max(0, (100 * score) / maxScore) : 0;
-  return { score, maxScore, percentage, correct, wrong, penaltyPerWrong, penaltyTotal };
+  return { score, maxScore, percentage, correct, wrong, unanswered, penaltyPerWrong, penaltyTotal };
 }
 
 export function toPublicQuestion(q: {

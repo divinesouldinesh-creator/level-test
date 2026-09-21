@@ -23,7 +23,12 @@ import {
 } from "../services/topicMastery.js";
 import { MasterySessionKind } from "@prisma/client";
 import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateStudentMastery } from "../lib/memoryCache.js";
-import { scoreSubmittedAnswer, tallyTestScore, toPublicQuestion } from "../services/questionAnswer.js";
+import {
+  isAttemptedAnswer,
+  scoreSubmittedAnswer,
+  tallyTestScore,
+  toPublicQuestion,
+} from "../services/questionAnswer.js";
 
 const submittedAnswerSchema = z.object({
   questionId: z.string(),
@@ -754,7 +759,12 @@ router.get("/tests/:testId", async (req, res) => {
 
       const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
       const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);
-      const wrongCount = answers.filter((a) => !a.isCorrect).length;
+      const wrongCount = answers.filter(
+        (a) => !a.isCorrect && isAttemptedAnswer(a.question.type, a.selectedOption, a.numericAnswer)
+      ).length;
+      const unansweredCount = answers.filter(
+        (a) => !isAttemptedAnswer(a.question.type, a.selectedOption, a.numericAnswer)
+      ).length;
       const penaltyTotal = Math.round(wrongCount * test.wrongPenalty * 100) / 100;
 
       res.json({
@@ -773,6 +783,7 @@ router.get("/tests/:testId", async (req, res) => {
         wrongPenalty: test.wrongPenalty,
         negativeMarking: test.wrongPenalty > 0,
         wrongCount,
+        unansweredCount,
         penaltyTotal,
         subject: test.subject.name,
         level: test.level?.name ?? null,
@@ -888,18 +899,21 @@ router.post("/tests/:testId/submit", async (req, res) => {
       return;
     }
 
+    const isChapterTest = !test.levelId;
     const answerByQ = new Map(parsed.data.answers.map((a) => [a.questionId, a]));
     const expectedIds = new Set(test.testQuestions.map((tq) => tq.questionId));
-    if (answerByQ.size !== expectedIds.size || [...expectedIds].some((id) => !answerByQ.has(id))) {
-      res.status(400).json({ error: "Answer every question" });
-      return;
+    if (!isChapterTest) {
+      if (answerByQ.size !== expectedIds.size || [...expectedIds].some((id) => !answerByQ.has(id))) {
+        res.status(400).json({ error: "Answer every question" });
+        return;
+      }
     }
 
     const scored = test.testQuestions.map((tq) => {
       const result = scoreSubmittedAnswer(tq.question, answerByQ.get(tq.questionId));
       return { tq, result };
     });
-    if (scored.some((s) => !s.result.complete)) {
+    if (!isChapterTest && scored.some((s) => !s.result.complete)) {
       res.status(400).json({ error: "Answer every question" });
       return;
     }
@@ -1002,6 +1016,7 @@ router.post("/tests/:testId/submit", async (req, res) => {
       wrongPenalty: tally.penaltyPerWrong,
       negativeMarking: tally.penaltyPerWrong > 0,
       wrongCount: tally.wrong,
+      unansweredCount: tally.unanswered,
       penaltyTotal: tally.penaltyTotal,
       practiceStreak: practice.practiceStreak,
       practicedToday: true,

@@ -75,6 +75,7 @@ type TestResult = {
   negativeMarking?: boolean;
   wrongPenalty?: number;
   wrongCount?: number;
+  unansweredCount?: number;
   penaltyTotal?: number;
 };
 
@@ -84,6 +85,12 @@ function formatMarks(n: number): string {
 
 function progressKey(testId?: string): string | null {
   return testId ? `student-test-progress:${testId}` : null;
+}
+
+function isReviewSkipped(q: ReviewItem): boolean {
+  if (q.isCorrect) return false;
+  if (isNumericType(q.type)) return q.numericAnswer == null;
+  return q.selectedOption == null;
 }
 
 function BackToTests({ subjectId }: { subjectId: string | null }) {
@@ -115,6 +122,7 @@ function parseTestResult(data: Record<string, unknown>): TestResult | null {
     negativeMarking: Boolean(data.negativeMarking) || Number(data.wrongPenalty ?? 0) > 0,
     wrongPenalty: typeof data.wrongPenalty === "number" ? data.wrongPenalty : 0,
     wrongCount: typeof data.wrongCount === "number" ? data.wrongCount : undefined,
+    unansweredCount: typeof data.unansweredCount === "number" ? data.unansweredCount : undefined,
     penaltyTotal: typeof data.penaltyTotal === "number" ? data.penaltyTotal : undefined,
   };
 }
@@ -140,6 +148,7 @@ export function StudentTest() {
   const [startingLevel, setStartingLevel] = useState<string | null>(null);
   const [subjectId, setSubjectId] = useState<string | null>(null);
   const [wrongPenalty, setWrongPenalty] = useState(0);
+  const [allowSkip, setAllowSkip] = useState(false);
 
   useEffect(() => {
     function blockCopyHotkeys(e: KeyboardEvent) {
@@ -214,6 +223,7 @@ export function StudentTest() {
     setStartingLevel(null);
     setSubjectId(null);
     setWrongPenalty(0);
+    setAllowSkip(false);
 
     void (async () => {
       const r = await api<unknown>(`/api/v1/student/tests/${testId}`);
@@ -226,6 +236,7 @@ export function StudentTest() {
       const data = r.data as Record<string, unknown>;
       if (typeof data.subjectId === "string") setSubjectId(data.subjectId);
       if (typeof data.wrongPenalty === "number") setWrongPenalty(data.wrongPenalty);
+      setAllowSkip(data.kind === "chapter");
       if (data.status === "completed") {
         const key = progressKey(testId);
         if (key) localStorage.removeItem(key);
@@ -288,7 +299,7 @@ export function StudentTest() {
   async function submitAll() {
     if (!testId) return;
     const missing = questions.filter((q) => !isDraftAnswered(q.type, answers[q.id]));
-    if (missing.length) {
+    if (!allowSkip && missing.length) {
       setErr("Answer all questions before submitting.");
       return;
     }
@@ -364,11 +375,16 @@ export function StudentTest() {
               <p className="mt-1 text-xs text-slate-500">
                 −{formatMarks(done.wrongPenalty ?? 0)} for each wrong
                 {done.wrongCount != null ? ` (${done.wrongCount} wrong)` : ""}
+                {done.unansweredCount != null && done.unansweredCount > 0
+                  ? ` · ${done.unansweredCount} blank (0 marks)`
+                  : ""}
                 {done.penaltyTotal != null && done.penaltyTotal > 0
                   ? ` · −${formatMarks(done.penaltyTotal)} total`
                   : ""}
                 . Marks can go below 0; percentage stays at 0%.
               </p>
+            ) : done.kind === "chapter" && done.unansweredCount != null && done.unansweredCount > 0 ? (
+              <p className="mt-1 text-xs text-slate-500">{done.unansweredCount} left blank (0 marks).</p>
             ) : null}
           </div>
           <div className="rounded-xl bg-white border p-4 shadow-sm">
@@ -493,6 +509,7 @@ export function StudentTest() {
                       const ps = practice[q.id] ?? { picks: [], solved: false };
                       const wrongPicks = new Set(ps.picks.filter((p) => p !== q.correctOption));
                       const showCorrectStatic = ps.picks.length === 0; // before any practice click
+                      const skipped = isReviewSkipped(q);
                       return (
                         <li
                           key={q.id}
@@ -507,6 +524,10 @@ export function StudentTest() {
                             {q.isCorrect ? (
                               <span className="text-xs rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5">
                                 ✓ Correct
+                              </span>
+                            ) : skipped ? (
+                              <span className="text-xs rounded-full bg-slate-100 text-slate-700 px-2 py-0.5">
+                                Skipped
                               </span>
                             ) : (
                               <span className="text-xs rounded-full bg-rose-100 text-rose-800 px-2 py-0.5">
@@ -708,8 +729,17 @@ export function StudentTest() {
         </div>
         <p className="text-sm text-slate-600 mt-2">
           Question {idx + 1} of {questions.length}
+          {allowSkip
+            ? ` · ${questions.filter((q) => isDraftAnswered(q.type, answers[q.id])).length} answered`
+            : ""}
         </p>
-        {wrongPenalty > 0 ? (
+        {allowSkip ? (
+          <p className="mt-1 text-xs text-amber-800">
+            {wrongPenalty > 0
+              ? `Negative marking: −${formatMarks(wrongPenalty)} for each wrong answer. Left blank scores 0. Marks can go below 0.`
+              : "You can skip questions. Left blank scores 0."}
+          </p>
+        ) : wrongPenalty > 0 ? (
           <p className="mt-1 text-xs text-amber-800">
             Negative marking: −{formatMarks(wrongPenalty)} for each wrong answer. Marks can go below 0.
           </p>
@@ -736,6 +766,21 @@ export function StudentTest() {
           onSelect={(i) => setAnswers((a) => ({ ...a, [current.id]: { selectedOption: i } }))}
           onNumeric={(raw) => setAnswers((a) => ({ ...a, [current.id]: { numericRaw: raw } }))}
         />
+        {allowSkip && isDraftAnswered(current.type, answers[current.id]) ? (
+          <button
+            type="button"
+            onClick={() =>
+              setAnswers((a) => {
+                const next = { ...a };
+                delete next[current.id];
+                return next;
+              })
+            }
+            className="mt-3 text-sm font-medium text-slate-600 underline-offset-2 hover:underline"
+          >
+            Clear answer (leave blank)
+          </button>
+        ) : null}
       </div>
       <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <button
@@ -754,17 +799,25 @@ export function StudentTest() {
           >
             Next
           </button>
-        ) : (
+        ) : null}
+        {allowSkip || idx === questions.length - 1 ? (
           <button
             type="button"
             disabled={submitting}
             onClick={() => void submitAll()}
-            className="rounded-xl bg-emerald-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] flex-1 disabled:opacity-60"
+            className={`rounded-xl bg-emerald-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-60 ${
+              idx < questions.length - 1 ? "" : "flex-1"
+            }`}
           >
             {submitting ? "Submitting…" : "Submit test"}
           </button>
-        )}
+        ) : null}
       </div>
+      {allowSkip ? (
+        <p className="mt-2 text-xs text-slate-500">
+          {questions.filter((q) => !isDraftAnswered(q.type, answers[q.id])).length} unanswered will score 0.
+        </p>
+      ) : null}
       {err && <p className="text-red-600 mt-4">{err}</p>}
     </AppShell>
   );

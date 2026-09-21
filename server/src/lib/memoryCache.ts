@@ -5,6 +5,7 @@ const store = new Map<string, CacheEntry>();
 export const CACHE_TTL_MS = {
   catalog: 2 * 60 * 1000,
   branding: 5 * 60 * 1000,
+  holidays: 5 * 60 * 1000,
   teacherClasses: 60 * 1000,
   studentProfile: 2 * 60 * 1000,
   studentMastery: 30 * 1000,
@@ -18,10 +19,12 @@ export const CACHE_KEY = {
   adminTopics: "catalog:admin-topics",
   adminAreas: "catalog:admin-areas",
   branding: "branding:school",
+  holidaySettings: "holidays:settings",
   studentSubjects: (classId: string) => `student-catalog:subjects:${classId}`,
   studentAreas: (classId: string) => `student-catalog:areas:${classId}`,
   studentByUser: (userId: string) => `student:${userId}`,
   studentMastery: (studentId: string, filter = "all") => `student-mastery:${studentId}:${filter}`,
+  holidaysResolved: (from: string, to: string) => `holidays:resolved:${from}:${to}`,
 } as const;
 
 export function cacheGet<T>(key: string): T | undefined {
@@ -68,6 +71,11 @@ export function invalidateCatalog(): void {
 
 export function invalidateBranding(): void {
   cacheDelete(CACHE_KEY.branding);
+}
+
+export function invalidateHolidays(): void {
+  cacheDelete(CACHE_KEY.holidaySettings);
+  cacheDeletePrefix("holidays:");
 }
 
 export function invalidateStudentMastery(studentId: string): void {

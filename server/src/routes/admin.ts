@@ -33,6 +33,16 @@ import {
 } from "../services/schoolBranding.js";
 import { sendBrandingError } from "../utils/brandingErrors.js";
 import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateCatalog } from "../lib/memoryCache.js";
+import {
+  deleteHolidayException,
+  getHolidaySettings,
+  holidayNameForDate,
+  parseIsoDate,
+  resolveHolidays,
+  updateHolidaySettings,
+  upsertHolidayException,
+} from "../services/schoolHolidays.js";
+import feesRoutes from "./fees.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("ADMIN", "OFFICE"));
@@ -44,6 +54,7 @@ function officeMayAccessAdminRoute(method: string, path: string): boolean {
     "/students",
     "/teachers",
     "/attendance",
+    "/fees",
     "/generate-students",
     "/upload-students",
     "/save-students",
@@ -69,6 +80,8 @@ router.use((req, res, next) => {
   }
   res.status(403).json({ error: "Forbidden" });
 });
+
+router.use(feesRoutes);
 
 router.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
@@ -532,7 +545,7 @@ router.get("/attendance/marking-status", async (req, res) => {
     return;
   }
 
-  const [classes, sessions] = await Promise.all([
+  const [classes, sessions, holidayName] = await Promise.all([
     prisma.schoolClass.findMany({
       include: { sections: { orderBy: { name: "asc" } } },
       orderBy: { name: "asc" },
@@ -551,6 +564,7 @@ router.get("/attendance/marking-status", async (req, res) => {
         _count: { select: { entries: true } },
       },
     }),
+    holidayNameForDate(prisma, dateInput),
   ]);
 
   const sessionByKey = new Map(
@@ -587,11 +601,65 @@ router.get("/attendance/marking-status", async (req, res) => {
   const markedCount = rows.filter((r) => r.marked).length;
   res.json({
     date: dateInput,
+    isHoliday: holidayName != null,
+    holidayName,
     totalSections: rows.length,
     markedCount,
     unmarkedCount: rows.length - markedCount,
     rows,
   });
+});
+
+const holidaySettingsSchema = z.object({
+  sundaysOff: z.boolean().optional(),
+  saturdayRule: z.enum(["NONE", "SECOND", "ALL"]).optional(),
+});
+
+const holidayExceptionSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  kind: z.enum(["EXTRA", "WORKING"]),
+  name: z.string().trim().max(120).optional(),
+});
+
+router.get("/attendance/holiday-settings", async (req, res) => {
+  const from = typeof req.query.from === "string" ? req.query.from : "";
+  const to = typeof req.query.to === "string" ? req.query.to : "";
+  if (from && to) {
+    if (!parseIsoDate(from) || !parseIsoDate(to) || from > to) {
+      res.status(400).json({ error: "from and to must be YYYY-MM-DD with from ≤ to" });
+      return;
+    }
+    const resolved = await resolveHolidays(prisma, from, to);
+    res.json({ from, to, ...resolved });
+    return;
+  }
+  const settings = await getHolidaySettings(prisma);
+  res.json({ settings });
+});
+
+router.patch("/attendance/holiday-settings", async (req, res) => {
+  const p = holidaySettingsSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  if (p.data.sundaysOff == null && p.data.saturdayRule == null) {
+    res.status(400).json({ error: "Provide sundaysOff and/or saturdayRule" });
+    return;
+  }
+  const settings = await updateHolidaySettings(prisma, p.data);
+  res.json({ settings });
+});
+
+router.post("/attendance/holidays", async (req, res) => {
+  const p = holidayExceptionSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const row = await upsertHolidayException(prisma, p.data);
+  if ("error" in row) return res.status(400).json({ error: row.error });
+  res.json(row);
+});
+
+router.delete("/attendance/holidays/:id", async (req, res) => {
+  const ok = await deleteHolidayException(prisma, req.params.id);
+  if (!ok) return res.status(404).json({ error: "Holiday not found" });
+  res.json({ ok: true });
 });
 
 router.post("/classes", async (req, res) => {

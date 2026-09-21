@@ -18,8 +18,10 @@
     "db:ensure-areas": "tsx scripts/ensure-subject-areas.ts",
     "db:ensure-classroom": "tsx scripts/ensure-classroom-assessments.ts",
     "db:ensure-care-calls": "tsx scripts/ensure-care-calls.ts",
+    "db:ensure-fees": "tsx scripts/ensure-office-fees.ts",
     "db:ensure-question-types": "tsx scripts/ensure-question-types.ts",
     "db:ensure-chapter-mode": "tsx scripts/ensure-chapter-test-mode.ts",
+    "db:ensure-holidays": "tsx scripts/ensure-school-holidays.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

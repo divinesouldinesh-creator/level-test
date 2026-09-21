@@ -4,6 +4,7 @@ import { AttendanceRangeFilters } from "../../components/AttendanceRangeFilters"
 import { AttendanceMarkingStatusPanel } from "../../components/attendance/AttendanceMarkingStatusPanel";
 import { ClassAttendanceSummaryPanel } from "../../components/ClassAttendanceSummaryPanel";
 import { SchoolAttendanceOverviewPanel } from "../../components/attendance/SchoolAttendanceOverviewPanel";
+import { HolidaySettingsPanel } from "../../components/attendance/HolidaySettingsPanel";
 import {
   type AttendanceRange,
   type AttendanceReportSummary,
@@ -30,7 +31,7 @@ type AttendanceReport = {
   records: { date: string; status: AttendanceStatus; remark: string; notes: string }[];
 };
 
-type AttendanceTab = "school" | "marking" | "individual" | "class";
+type AttendanceTab = "school" | "marking" | "holidays" | "individual" | "class";
 
 export function AdminAttendancePage() {
   const [tab, setTab] = useState<AttendanceTab>("school");
@@ -160,13 +161,14 @@ export function AdminAttendancePage() {
     <div>
       <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
       <p className="text-slate-600 mt-1">
-        See school-wide attendance, who has marked today, check one student, or view a class summary.
+        See school-wide attendance, holidays, who has marked today, or a class summary.
       </p>
 
       <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
         {(
           [
             ["school", "School"],
+            ["holidays", "Holidays"],
             ["marking", "Marking status"],
             ["class", "Class"],
             ["individual", "Individual"],
@@ -207,6 +209,17 @@ export function AdminAttendancePage() {
               setTab("class");
             }}
           />
+        </section>
+      ) : tab === "holidays" ? (
+        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Holidays</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Sundays and the 2nd Saturday are holidays by default. Change the weekly rule, add extra
+              closed days, or mark a holiday as a working day.
+            </p>
+          </div>
+          <HolidaySettingsPanel />
         </section>
       ) : tab === "marking" ? (
         <AttendanceMarkingStatusPanel />

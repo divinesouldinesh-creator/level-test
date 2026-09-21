@@ -64,6 +64,8 @@ model User {
   attendanceSessionsTaken AttendanceSession[] @relation("AttendanceTakenBy")
   classroomAssessmentsRecorded ClassroomAssessmentSession[] @relation("ClassroomRecordedBy")
   careCallsRecorded            CareCall[]                   @relation("CareCallRecordedBy")
+  feeChargesCreated            FeeCharge[]                  @relation("FeeChargeCreatedBy")
+  feePaymentsRecorded          FeePayment[]                 @relation("FeePaymentRecordedBy")
 }
 
 model Admin {
@@ -96,6 +98,7 @@ model SchoolClass {
   subjects             ClassSubject[]
   attendanceSessions   AttendanceSession[]
   classroomAssessments ClassroomAssessmentSession[]
+  feeStructures        FeeStructure[]
 }
 
 model Section {
@@ -129,6 +132,8 @@ model Student {
   masterySessions            MasterySession[]
   classroomAssessmentEntries ClassroomAssessmentEntry[]
   careCalls                  CareCall[]
+  feeMembership              FeeAccountMember?
+  feePaymentsAgainst         FeePayment[]       @relation("FeePaymentAgainstStudent")
 
   @@index([classId, sectionId])
 }
@@ -703,4 +708,140 @@ model SchoolBranding {
   schoolName String   @default("Your School") @map("school_name")
   logoUrl    String?  @map("logo_url")
   updatedAt  DateTime @updatedAt @map("updated_at")
+}
+
+enum SaturdayHolidayRule {
+  NONE
+  SECOND
+  ALL
+}
+
+enum SchoolHolidayKind {
+  EXTRA
+  WORKING
+}
+
+/// Singleton: Sundays off and which Saturdays are holidays.
+model SchoolHolidaySettings {
+  id           String              @id @default("default")
+  sundaysOff   Boolean             @default(true) @map("sundays_off")
+  saturdayRule SaturdayHolidayRule @default(SECOND) @map("saturday_rule")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
+}
+
+/// Extra holiday dates, or a default holiday turned into a working day.
+model SchoolHolidayException {
+  id        String            @id @default(cuid())
+  date      DateTime          @unique
+  kind      SchoolHolidayKind
+  name      String?
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  @@index([date])
+}
+
+enum FeeChargeKind {
+  MONTHLY
+  ANNUAL
+  ADMISSION
+  EXAM
+  OTHER
+  OPENING
+}
+
+enum FeePaymentMode {
+  CASH
+  UPI
+  BANK
+}
+
+/// One ledger for a child, or for a sibling group. School totals count each row once.
+model FeeAccount {
+  id         String   @id @default(cuid())
+  parentName String?  @map("parent_name")
+  phone      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  members  FeeAccountMember[]
+  charges  FeeCharge[]
+  payments FeePayment[]
+}
+
+model FeeAccountMember {
+  id            String   @id @default(cuid())
+  feeAccountId  String   @map("fee_account_id")
+  studentId     String   @unique @map("student_id")
+  usesTransport Boolean  @default(false) @map("uses_transport")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  feeAccount FeeAccount @relation(fields: [feeAccountId], references: [id], onDelete: Cascade)
+  student    Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([feeAccountId])
+}
+
+/// Class fee amounts for one academic year (April–March). Rupees.
+model FeeStructure {
+  id              String @id @default(cuid())
+  academicYear    String @map("academic_year")
+  classId         String @map("class_id")
+  tuitionAmount   Int    @default(0) @map("tuition_amount")
+  transportAmount Int    @default(0) @map("transport_amount")
+  annualAmount    Int    @default(0) @map("annual_amount")
+  admissionAmount Int    @default(0) @map("admission_amount")
+  examAmount      Int    @default(0) @map("exam_amount")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([academicYear, classId])
+  @@index([academicYear])
+}
+
+model FeeCharge {
+  id           String        @id @default(cuid())
+  feeAccountId String        @map("fee_account_id")
+  kind         FeeChargeKind
+  /// MONTHLY: YYYY-MM. ANNUAL/ADMISSION/EXAM: academic year. OTHER/OPENING: unique key.
+  periodKey    String        @map("period_key")
+  amount       Int
+  note         String?
+  detailJson   String?       @map("detail_json")
+  createdById  String?       @map("created_by_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  feeAccount FeeAccount @relation(fields: [feeAccountId], references: [id], onDelete: Cascade)
+  createdBy  User?      @relation("FeeChargeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([feeAccountId, kind, periodKey])
+  @@index([feeAccountId])
+  @@index([kind, periodKey])
+}
+
+model FeePayment {
+  id                       String         @id @default(cuid())
+  feeAccountId             String         @map("fee_account_id")
+  amount                   Int
+  mode                     FeePaymentMode
+  receiptNo                String         @unique @map("receipt_no")
+  /// IST calendar day YYYY-MM-DD
+  paidOn                   String         @map("paid_on")
+  note                     String?
+  recordedAgainstStudentId String?        @map("recorded_against_student_id")
+  createdById              String?        @map("created_by_id")
+  createdAt                DateTime       @default(now()) @map("created_at")
+
+  feeAccount             FeeAccount @relation(fields: [feeAccountId], references: [id], onDelete: Cascade)
+  recordedAgainstStudent Student?   @relation("FeePaymentAgainstStudent", fields: [recordedAgainstStudentId], references: [id], onDelete: SetNull)
+  createdBy              User?      @relation("FeePaymentRecordedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([feeAccountId])
+  @@index([paidOn])
+}
+
+model FeeReceiptSeq {
+  academicYear String @id @map("academic_year")
+  lastNumber   Int    @default(0) @map("last_number")
 }

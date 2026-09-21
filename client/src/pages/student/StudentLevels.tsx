@@ -235,7 +235,8 @@ function StudentChapterPicker({
       <p className="mt-1 text-slate-600">Tick one or more chapters, then start the test.</p>
       {payload ? (
         <p className="mt-1 text-sm text-slate-500">
-          Each test has {payload.questionCount} questions from the chapters you tick.
+          Each test has {payload.questionCount} questions from the chapters you tick. You can skip questions
+          (blank = 0).
           {payload.negativeMarking && (payload.wrongPenalty ?? 0) > 0
             ? ` Wrong answers: −${payload.wrongPenalty} marks each. Marks can go below 0.`
             : ""}

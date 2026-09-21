@@ -15,6 +15,8 @@ type MarkingRow = {
 
 type MarkingStatus = {
   date: string;
+  isHoliday?: boolean;
+  holidayName?: string | null;
   totalSections: number;
   markedCount: number;
   unmarkedCount: number;
@@ -61,6 +63,10 @@ export function AttendanceMarkingStatusPanel() {
     })();
   }, [date]);
 
+  useEffect(() => {
+    if (data?.isHoliday) setFilter("all");
+  }, [data?.date, data?.isHoliday]);
+
   const rows = useMemo(() => {
     if (!data) return [];
     if (filter === "unmarked") return data.rows.filter((r) => !r.marked);
@@ -76,6 +82,13 @@ export function AttendanceMarkingStatusPanel() {
           See which class sections have attendance for the day, and who marked them.
         </p>
       </div>
+
+      {data?.isHoliday ? (
+        <p className="text-sm text-violet-900 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+          {data.date} is a holiday{data.holidayName ? ` (${data.holidayName})` : ""}. Marking is
+          optional — teachers are not expected to take attendance.
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-sm">
