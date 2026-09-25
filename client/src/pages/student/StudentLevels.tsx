@@ -17,7 +17,8 @@ type LevelRow = {
 
 type Subject = { id: string; name: string; code: string | null; testMode?: "LEVEL" | "CHAPTER" };
 
-type ChapterRow = { id: string; name: string; questionCount: number };
+type ChapterTopicRow = { id: string; name: string; questionCount: number };
+type ChapterRow = { id: string; name: string; questionCount: number; topics?: ChapterTopicRow[] };
 type ChapterPayload = {
   subjectId: string;
   subjectName: string;
@@ -170,6 +171,7 @@ function StudentChapterPicker({
   const { logout, auth } = useAuth();
   const [payload, setPayload] = useState<ChapterPayload | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
@@ -186,22 +188,53 @@ function StudentChapterPicker({
   const allSelected = allSelectable.length > 0 && allSelectable.every((c) => selected.has(c.id));
 
   function toggle(id: string) {
+    const chapter = chapters.find((c) => c.id === id);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    if (chapter?.topics?.length) {
+      setSelectedTopics((prev) => {
+        const next = new Set(prev);
+        for (const topic of chapter.topics ?? []) next.delete(topic.id);
+        return next;
+      });
+    }
+  }
+
+  function toggleTopic(chapterId: string, topicId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(chapterId);
+      return next;
+    });
+    setSelectedTopics((prev) => {
+      const next = new Set(prev);
+      if (next.has(topicId)) next.delete(topicId);
+      else next.add(topicId);
+      return next;
+    });
   }
 
   function toggleAll() {
-    if (allSelected) setSelected(new Set());
-    else setSelected(new Set(allSelectable.map((c) => c.id)));
+    if (allSelected) {
+      setSelected(new Set());
+      setSelectedTopics(new Set());
+    } else {
+      setSelected(new Set(allSelectable.map((c) => c.id)));
+      setSelectedTopics(new Set());
+    }
   }
 
   async function startTest() {
     const topicIds = [...selected];
-    if (topicIds.length === 0) {
+    const chapterTopicIds = [...selectedTopics].filter((id) => {
+      const owner = chapters.find((c) => (c.topics ?? []).some((t) => t.id === id));
+      return owner ? !selected.has(owner.id) : false;
+    });
+    if (topicIds.length === 0 && chapterTopicIds.length === 0) {
       setErr("Tick at least one chapter");
       return;
     }
@@ -209,7 +242,7 @@ function StudentChapterPicker({
     setErr(null);
     const r = await api<{ testId: string; warnings?: string[] }>("/api/v1/student/tests/start", {
       method: "POST",
-      json: { subjectId, topicIds },
+      json: { subjectId, topicIds, chapterTopicIds },
     });
     setStarting(false);
     if (!r.ok || !r.data?.testId) {
@@ -232,7 +265,7 @@ function StudentChapterPicker({
         ← {title}
       </Link>
       <h1 className="text-2xl font-bold text-slate-900 mt-2">{title}</h1>
-      <p className="mt-1 text-slate-600">Tick one or more chapters, then start the test.</p>
+      <p className="mt-1 text-slate-600">Tick chapters, or open a chapter and tick topics, then start the test.</p>
       {payload ? (
         <p className="mt-1 text-sm text-slate-500">
           Each test has {payload.questionCount} questions from the chapters you tick. You can skip questions
@@ -287,6 +320,39 @@ function StudentChapterPicker({
                     {empty ? "No questions yet" : `${ch.questionCount} in bank`}
                   </span>
                 </label>
+                {(ch.topics ?? []).length > 0 ? (
+                  <ul className="mt-1 ml-8 space-y-1">
+                    {(ch.topics ?? []).map((topic) => {
+                      const topicEmpty = topic.questionCount === 0;
+                      const covered = selected.has(ch.id);
+                      return (
+                        <li key={topic.id}>
+                          <label
+                            className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${
+                              topicEmpty
+                                ? "border-slate-100 bg-slate-50 text-slate-400"
+                                : covered || selectedTopics.has(topic.id)
+                                  ? "border-brand-400 bg-brand-50"
+                                  : "border-slate-200 bg-white"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4"
+                              checked={covered || selectedTopics.has(topic.id)}
+                              disabled={topicEmpty || covered}
+                              onChange={() => toggleTopic(ch.id, topic.id)}
+                            />
+                            <span className="flex-1">{topic.name}</span>
+                            <span className="text-xs text-slate-500">
+                              {topicEmpty ? "No questions" : `${topic.questionCount}`}
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
               </li>
             );
           })
@@ -295,7 +361,7 @@ function StudentChapterPicker({
 
       <button
         type="button"
-        disabled={starting || selected.size === 0}
+        disabled={starting || (selected.size === 0 && selectedTopics.size === 0)}
         onClick={() => void startTest()}
         className="mt-6 rounded-xl bg-brand-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] min-w-[160px] disabled:opacity-50"
       >

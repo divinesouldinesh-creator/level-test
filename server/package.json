@@ -21,6 +21,7 @@
     "db:ensure-fees": "tsx scripts/ensure-office-fees.ts",
     "db:ensure-question-types": "tsx scripts/ensure-question-types.ts",
     "db:ensure-chapter-mode": "tsx scripts/ensure-chapter-test-mode.ts",
+    "db:ensure-chapter-topics": "tsx scripts/ensure-chapter-topics.ts",
     "db:ensure-holidays": "tsx scripts/ensure-school-holidays.ts",
     "postinstall": "prisma generate"
   },

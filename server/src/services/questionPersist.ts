@@ -97,13 +97,14 @@ export function normalizeQuestionFields(data: {
 
 export function parsedQuestionWriteData(
   pq: ParsedQuestion,
-  ids: { subjectId: string; levelId: string | null; topicId: string },
+  ids: { subjectId: string; levelId: string | null; topicId: string; chapterTopicId?: string | null },
   difficulty: Difficulty
 ) {
   return {
     subjectId: ids.subjectId,
     levelId: ids.levelId,
     topicId: ids.topicId,
+    chapterTopicId: ids.chapterTopicId ?? null,
     type: pq.type,
     stem: pq.stem,
     optionA: pq.optionA,
@@ -126,6 +127,7 @@ export async function persistParsedQuestions(
     subjectId: string;
     levelId: string | null;
     topicId: string;
+    chapterTopicId?: string | null;
     mode: "insert" | "sync" | "replace";
     defaultDifficulty: Difficulty;
     createdById: string;
@@ -133,10 +135,11 @@ export async function persistParsedQuestions(
     recordBatch?: boolean;
   }
 ) {
-  const ids = { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId };
+  const chapterTopicId = opts.chapterTopicId ?? null;
+  const ids = { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId, chapterTopicId };
   if (opts.mode === "replace") {
     await prisma.question.deleteMany({
-      where: { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId },
+      where: { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId, chapterTopicId },
     });
   }
 
@@ -155,6 +158,7 @@ export async function persistParsedQuestions(
             subjectId: opts.subjectId,
             topicId: opts.topicId,
             levelId: opts.levelId,
+            chapterTopicId,
             stem: pq.stem,
           },
         });

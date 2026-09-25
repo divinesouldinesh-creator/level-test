@@ -104,6 +104,7 @@ router.use((req, res, next) => {
     p.startsWith("/subject-areas/") ||
     p === "/topics" ||
     p.startsWith("/topics/") ||
+    p.startsWith("/chapter-topics/") ||
     p === "/levels" ||
     p.startsWith("/levels/");
   if (!isCatalogWrite) {
@@ -228,9 +229,10 @@ function parseOptionalLevelId(raw: unknown): string | undefined {
 async function resolveQuestionPlacement(
   subjectId: string,
   topicId: string,
-  levelId?: string | null
+  levelId?: string | null,
+  chapterTopicId?: string | null
 ): Promise<
-  | { ok: true; subjectId: string; levelId: string | null; topicId: string }
+  | { ok: true; subjectId: string; levelId: string | null; topicId: string; chapterTopicId: string | null }
   | { ok: false; status: number; error: string }
 > {
   const subject = await prisma.subject.findUnique({
@@ -244,9 +246,22 @@ async function resolveQuestionPlacement(
   if (subject.testMode === "CHAPTER") {
     const chapter = await prisma.subjectChapter.findUnique({
       where: { subjectId_topicId: { subjectId, topicId } },
+      include: { _count: { select: { chapterTopics: true } } },
     });
     if (!chapter) return { ok: false, status: 400, error: "Chapter is not on this branch" };
-    return { ok: true, subjectId, topicId, levelId: null };
+    const requested = chapterTopicId?.trim() || null;
+    if (requested) {
+      const folder = await prisma.chapterTopic.findFirst({
+        where: { id: requested, subjectChapterId: chapter.id },
+        select: { id: true },
+      });
+      if (!folder) return { ok: false, status: 400, error: "Topic is not in this chapter" };
+      return { ok: true, subjectId, topicId, levelId: null, chapterTopicId: folder.id };
+    }
+    if (chapter._count.chapterTopics > 0) {
+      return { ok: false, status: 400, error: "Choose a topic in this chapter" };
+    }
+    return { ok: true, subjectId, topicId, levelId: null, chapterTopicId: null };
   }
 
   if (!levelId) return { ok: false, status: 400, error: "levelId required" };
@@ -255,7 +270,8 @@ async function resolveQuestionPlacement(
     select: { id: true },
   });
   if (!level) return { ok: false, status: 400, error: "Level not found for this subject" };
-  return { ok: true, subjectId, topicId, levelId };
+  if (chapterTopicId) return { ok: false, status: 400, error: "Topics inside a chapter are only for book branches" };
+  return { ok: true, subjectId, topicId, levelId, chapterTopicId: null };
 }
 
 // --- Dashboard ---
@@ -922,7 +938,10 @@ router.get("/subjects", async (_req, res) => {
         },
         chapters: {
           orderBy: { sortOrder: "asc" },
-          include: { topic: { select: { id: true, name: true } } },
+          include: {
+            topic: { select: { id: true, name: true } },
+            chapterTopics: { orderBy: { sortOrder: "asc" }, select: { id: true, name: true, sortOrder: true } },
+          },
         },
       },
     });
@@ -954,6 +973,7 @@ router.get("/subjects", async (_req, res) => {
           id: ch.topic.id,
           name: ch.topic.name,
           sortOrder: ch.sortOrder,
+          topics: ch.chapterTopics.map((t) => ({ id: t.id, name: t.name, sortOrder: t.sortOrder })),
         })),
         topics,
       };
@@ -1146,6 +1166,68 @@ router.post("/subjects/:subjectId/topics", async (req, res) => {
     }
   }
   res.json(t);
+});
+
+router.post("/subjects/:subjectId/chapters/:topicId/topics", async (req, res) => {
+  const { subjectId, topicId } = req.params;
+  const schema = z.object({ name: z.string() });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const name = p.data.name.trim();
+  if (!name) return res.status(400).json({ error: "Name required" });
+
+  const chapter = await prisma.subjectChapter.findUnique({
+    where: { subjectId_topicId: { subjectId, topicId } },
+    include: { chapterTopics: { select: { sortOrder: true }, orderBy: { sortOrder: "desc" }, take: 1 } },
+  });
+  if (!chapter) return res.status(404).json({ error: "Chapter not found on this branch" });
+
+  const duplicate = await prisma.chapterTopic.findFirst({
+    where: { subjectChapterId: chapter.id, name: { equals: name, mode: "insensitive" } },
+  });
+  if (duplicate) return res.status(400).json({ error: "This chapter already has that topic" });
+
+  const created = await prisma.chapterTopic.create({
+    data: {
+      subjectChapterId: chapter.id,
+      name,
+      sortOrder: (chapter.chapterTopics[0]?.sortOrder ?? -1) + 1,
+    },
+  });
+  res.json(created);
+});
+
+router.patch("/chapter-topics/:id", async (req, res) => {
+  const schema = z.object({ name: z.string() });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const name = p.data.name.trim();
+  if (!name) return res.status(400).json({ error: "Name required" });
+  const existing = await prisma.chapterTopic.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: "Topic not found" });
+  const duplicate = await prisma.chapterTopic.findFirst({
+    where: {
+      subjectChapterId: existing.subjectChapterId,
+      name: { equals: name, mode: "insensitive" },
+      id: { not: existing.id },
+    },
+  });
+  if (duplicate) return res.status(400).json({ error: "This chapter already has that topic" });
+  const updated = await prisma.chapterTopic.update({ where: { id: existing.id }, data: { name } });
+  res.json(updated);
+});
+
+router.delete("/chapter-topics/:id", async (req, res) => {
+  const existing = await prisma.chapterTopic.findUnique({
+    where: { id: req.params.id },
+    include: { _count: { select: { questions: true } } },
+  });
+  if (!existing) return res.status(404).json({ error: "Topic not found" });
+  if (existing._count.questions > 0) {
+    return res.status(400).json({ error: "Delete the questions in this topic first" });
+  }
+  await prisma.chapterTopic.delete({ where: { id: existing.id } });
+  res.json({ ok: true });
 });
 
 router.delete("/subjects/:subjectId/chapters/:topicId", async (req, res) => {
@@ -1386,14 +1468,17 @@ router.post("/question-images", (req, res, next) => {
   res.json({ url: `/uploads/questions/${req.file.filename}` });
 });
 
-function questionListWhere(query: { topicId?: string; levelId?: string; subjectId?: string }) {
+function questionListWhere(query: { topicId?: string; levelId?: string; subjectId?: string; chapterTopicId?: string }) {
   const levelRaw = query.levelId;
   const noLevel = levelRaw === "none" || levelRaw === "null";
   const levelId = parseOptionalLevelId(levelRaw);
+  const folder = query.chapterTopicId?.trim();
+  const untagged = folder === "none" || folder === "null";
   return {
     ...(query.topicId ? { topicId: query.topicId } : {}),
     ...(noLevel ? { levelId: null } : levelId ? { levelId } : {}),
     ...(query.subjectId ? { subjectId: query.subjectId } : {}),
+    ...(untagged ? { chapterTopicId: null } : folder ? { chapterTopicId: folder } : {}),
   };
 }
 
@@ -1402,18 +1487,25 @@ router.get("/questions/counts", async (req, res) => {
   const levelRaw = typeof req.query.levelId === "string" ? req.query.levelId : undefined;
   if (!subjectId) return res.status(400).json({ error: "subjectId required" });
   const grouped = await prisma.question.groupBy({
-    by: ["topicId"],
+    by: ["topicId", "chapterTopicId"],
     where: questionListWhere({ subjectId, levelId: levelRaw }),
     _count: { _all: true },
   });
-  res.json(grouped.map((row) => ({ topicId: row.topicId, count: row._count._all })));
+  res.json(
+    grouped.map((row) => ({
+      topicId: row.topicId,
+      chapterTopicId: row.chapterTopicId,
+      count: row._count._all,
+    }))
+  );
 });
 
 router.get("/questions", async (req, res) => {
   const topicId = req.query.topicId as string | undefined;
   const levelRaw = typeof req.query.levelId === "string" ? req.query.levelId : undefined;
   const subjectId = req.query.subjectId as string | undefined;
-  const where = questionListWhere({ topicId, levelId: levelRaw, subjectId });
+  const chapterTopicId = typeof req.query.chapterTopicId === "string" ? req.query.chapterTopicId : undefined;
+  const where = questionListWhere({ topicId, levelId: levelRaw, subjectId, chapterTopicId });
   const list = await prisma.question.findMany({
     where,
     take: 5000,
@@ -1428,6 +1520,7 @@ router.post("/questions", async (req, res) => {
     subjectId: z.string(),
     levelId: z.string().optional(),
     topicId: z.string(),
+    chapterTopicId: z.string().nullable().optional(),
     stem: z.string(),
     type: z.enum(["MCQ", "MCQ2", "NUMERIC"]).optional(),
     optionA: z.string().optional(),
@@ -1445,7 +1538,8 @@ router.post("/questions", async (req, res) => {
   const placement = await resolveQuestionPlacement(
     p.data.subjectId,
     p.data.topicId,
-    parseOptionalLevelId(p.data.levelId)
+    parseOptionalLevelId(p.data.levelId),
+    p.data.chapterTopicId
   );
   if (!placement.ok) return res.status(placement.status).json({ error: placement.error });
   const normalized = normalizeQuestionFields(p.data);
@@ -1461,6 +1555,7 @@ router.post("/questions", async (req, res) => {
       subjectId: placement.subjectId,
       levelId: placement.levelId,
       topicId: placement.topicId,
+      chapterTopicId: placement.chapterTopicId,
       ...normalized.fields,
       stemImageUrl: p.data.stemImageUrl || null,
       contentHash: hash,
@@ -1531,6 +1626,7 @@ router.post("/questions/import", withSingleUpload("file"), async (req, res) => {
     subjectId: z.string(),
     levelId: z.string().optional(),
     topicId: z.string(),
+    chapterTopicId: z.string().optional(),
     difficulty: z.string().optional(),
   });
   const p = schema.safeParse(req.body);
@@ -1543,7 +1639,8 @@ router.post("/questions/import", withSingleUpload("file"), async (req, res) => {
   const placement = await resolveQuestionPlacement(
     p.data.subjectId,
     p.data.topicId,
-    parseOptionalLevelId(p.data.levelId)
+    parseOptionalLevelId(p.data.levelId),
+    p.data.chapterTopicId
   );
   if (!placement.ok) {
     fs.unlink(req.file.path, () => {});
@@ -1584,6 +1681,7 @@ router.post("/questions/import", withSingleUpload("file"), async (req, res) => {
     subjectId: placement.subjectId,
     levelId: placement.levelId,
     topicId: placement.topicId,
+    chapterTopicId: placement.chapterTopicId,
     mode,
     defaultDifficulty: parseDifficulty(p.data.difficulty),
     createdById: req.user!.sub,
@@ -1603,6 +1701,7 @@ router.post("/questions/import-text", async (req, res) => {
     subjectId: z.string(),
     levelId: z.string().optional(),
     topicId: z.string(),
+    chapterTopicId: z.string().optional(),
     text: z.string(),
     mode: z.enum(["insert", "sync", "replace"]).optional(),
     difficulty: z.string().optional(),
@@ -1626,7 +1725,8 @@ router.post("/questions/import-text", async (req, res) => {
   const placement = await resolveQuestionPlacement(
     p.data.subjectId,
     p.data.topicId,
-    parseOptionalLevelId(p.data.levelId)
+    parseOptionalLevelId(p.data.levelId),
+    p.data.chapterTopicId
   );
   if (!placement.ok) return res.status(placement.status).json({ error: placement.error });
 
@@ -1635,6 +1735,7 @@ router.post("/questions/import-text", async (req, res) => {
     subjectId: placement.subjectId,
     levelId: placement.levelId,
     topicId: placement.topicId,
+    chapterTopicId: placement.chapterTopicId,
     mode: p.data.mode ?? "insert",
     defaultDifficulty: parseDifficulty(p.data.difficulty),
     createdById: req.user!.sub,
@@ -1652,6 +1753,7 @@ router.post("/questions/import-sheet", withSheetUpload("file"), async (req, res)
     subjectId: z.string(),
     levelId: z.string().optional(),
     topicId: z.string(),
+    chapterTopicId: z.string().optional(),
     mode: z.enum(["insert", "sync", "replace"]).optional(),
     difficulty: z.string().optional(),
   });
@@ -1664,7 +1766,8 @@ router.post("/questions/import-sheet", withSheetUpload("file"), async (req, res)
   const placement = await resolveQuestionPlacement(
     p.data.subjectId,
     p.data.topicId,
-    parseOptionalLevelId(p.data.levelId)
+    parseOptionalLevelId(p.data.levelId),
+    p.data.chapterTopicId
   );
   if (!placement.ok) {
     fs.unlink(req.file.path, () => {});
@@ -1688,6 +1791,7 @@ router.post("/questions/import-sheet", withSheetUpload("file"), async (req, res)
     subjectId: placement.subjectId,
     levelId: placement.levelId,
     topicId: placement.topicId,
+    chapterTopicId: placement.chapterTopicId,
     mode: p.data.mode ?? "insert",
     defaultDifficulty: parseDifficulty(p.data.difficulty),
     createdById: req.user!.sub,

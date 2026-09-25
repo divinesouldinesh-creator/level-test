@@ -77,53 +77,94 @@ export async function pickQuestionsForTest(
   return { questionIds: shuffle(picked.slice(0, total)), warnings };
 }
 
-/** Book/chapter tests: draw from selected chapters only. Questions have no level. */
+type ChapterPickUnit = {
+  key: string;
+  label: string;
+  where: { subjectId: string; levelId: null; topicId?: string; chapterTopicId?: string };
+};
+
+/** Book tests: whole chapters, or topics inside a chapter. Questions have no level. */
 export async function pickQuestionsForChapterTest(
   prisma: PrismaClient,
   subjectId: string,
   topicIds: string[],
-  total: number
+  total: number,
+  chapterTopicIds: string[] = []
 ): Promise<{ questionIds: string[]; warnings: string[] }> {
   const warnings: string[] = [];
-  const uniqueIds = [...new Set(topicIds.filter(Boolean))];
-  if (uniqueIds.length === 0) {
+  const uniqueChapterIds = [...new Set(topicIds.filter(Boolean))];
+  const uniqueTopicIds = [...new Set(chapterTopicIds.filter(Boolean))];
+  if (uniqueChapterIds.length === 0 && uniqueTopicIds.length === 0) {
     throw new Error("Select at least one chapter");
   }
   if (total <= 0) {
     throw new Error("Question count must be at least 1");
   }
 
-  const topics = await prisma.topic.findMany({
-    where: { id: { in: uniqueIds } },
-    select: { id: true, name: true },
-  });
-  const nameById = new Map(topics.map((t) => [t.id, t.name]));
+  const chapterTopics = uniqueTopicIds.length
+    ? await prisma.chapterTopic.findMany({
+        where: { id: { in: uniqueTopicIds } },
+        select: { id: true, name: true, subjectChapter: { select: { topicId: true } } },
+      })
+    : [];
+  const coveredChapters = new Set(uniqueChapterIds);
+  const units: ChapterPickUnit[] = uniqueChapterIds.map((topicId) => ({
+    key: `ch:${topicId}`,
+    label: topicId,
+    where: { subjectId, levelId: null, topicId },
+  }));
+  for (const row of chapterTopics) {
+    if (coveredChapters.has(row.subjectChapter.topicId)) continue;
+    units.push({
+      key: `tp:${row.id}`,
+      label: row.name,
+      where: { subjectId, levelId: null, chapterTopicId: row.id },
+    });
+  }
+  if (units.length === 0) {
+    throw new Error("Select at least one chapter");
+  }
 
+  const chapterNames = uniqueChapterIds.length
+    ? await prisma.topic.findMany({
+        where: { id: { in: uniqueChapterIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const nameByKey = new Map<string, string>();
+  for (const ch of chapterNames) nameByKey.set(`ch:${ch.id}`, ch.name);
+  for (const row of chapterTopics) nameByKey.set(`tp:${row.id}`, row.name);
+
+  const unitKeys = units.map((u) => u.key);
   const quotas = new Map<string, number | null>();
-  for (const id of uniqueIds) quotas.set(id, null);
-  const counts = allocateQuestionCounts(total, uniqueIds, quotas);
+  for (const key of unitKeys) quotas.set(key, null);
+  const counts = allocateQuestionCounts(total, unitKeys, quotas);
   let sum = 0;
   for (const n of counts.values()) sum += n;
   if (sum !== total) {
-    const first = uniqueIds[0];
+    const first = unitKeys[0];
     counts.set(first, (counts.get(first) ?? 0) + (total - sum));
   }
 
   const picked: string[] = [];
-  for (const [topicId, need] of counts) {
+  const pickedSet = new Set<string>();
+  for (const unit of units) {
+    const need = counts.get(unit.key) ?? 0;
     if (need <= 0) continue;
     const pool = await prisma.question.findMany({
-      where: { subjectId, topicId, levelId: null },
+      where: unit.where,
       select: { id: true },
     });
     const shuffled = shuffle(pool.map((p) => p.id));
     const take = Math.min(need, shuffled.length);
     if (take < need) {
-      warnings.push(
-        `Chapter "${nameById.get(topicId) ?? topicId}": need ${need}, only ${shuffled.length} in bank`
-      );
+      const label = nameByKey.get(unit.key) ?? unit.label;
+      warnings.push(`${unit.key.startsWith("tp:") ? "Topic" : "Chapter"} "${label}": need ${need}, only ${shuffled.length} in bank`);
     }
-    picked.push(...shuffled.slice(0, take));
+    for (const id of shuffled.slice(0, take)) {
+      picked.push(id);
+      pickedSet.add(id);
+    }
   }
 
   const missing = total - picked.length;
@@ -131,9 +172,9 @@ export async function pickQuestionsForChapterTest(
     const extraPool = await prisma.question.findMany({
       where: {
         subjectId,
-        topicId: { in: uniqueIds },
         levelId: null,
-        id: { notIn: picked },
+        OR: units.map((u) => u.where),
+        id: { notIn: [...pickedSet] },
       },
       select: { id: true },
     });

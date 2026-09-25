@@ -10,7 +10,7 @@ type SubjectRow = {
   name: string;
   code: string | null;
   testMode?: "LEVEL" | "CHAPTER";
-  chapters?: { id: string; name: string; sortOrder: number }[];
+  chapters?: { id: string; name: string; sortOrder: number; topics?: { id: string; name: string; sortOrder: number }[] }[];
   levels: LevelRow[];
   topics: TopicRow[];
   classSubjects?: { schoolClass: { id: string; name: string; grade: string | null } }[];
@@ -68,8 +68,12 @@ export function AdminQuestionBankPage() {
   const [subjectId, setSubjectId] = useState("");
   const [levelId, setLevelId] = useState("");
   const [topicId, setTopicId] = useState("");
+  const [chapterTopicId, setChapterTopicId] = useState("");
+  const [newTopicName, setNewTopicName] = useState("");
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [topicQuestionCount, setTopicQuestionCount] = useState<Map<string, number>>(new Map());
+  const [folderQuestionCount, setFolderQuestionCount] = useState<Map<string, number>>(new Map());
+  const [untaggedQuestionCount, setUntaggedQuestionCount] = useState<Map<string, number>>(new Map());
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -131,7 +135,13 @@ export function AdminQuestionBankPage() {
     return (selectedSubject.topics ?? []).filter((t) => (levelId ? t.levelId === levelId : false));
   }, [selectedSubject, levelId, isChapterMode]);
   const apiLevelId = isChapterMode ? "none" : levelId;
-  const bankReady = Boolean(subjectId && topicId && (isChapterMode || levelId));
+  const chapterFolders = useMemo(() => {
+    if (!isChapterMode || !topicId) return [];
+    return selectedSubject?.chapters?.find((c) => c.id === topicId)?.topics ?? [];
+  }, [isChapterMode, selectedSubject, topicId]);
+  const needsFolder = chapterFolders.length > 0;
+  const viewingUntagged = chapterTopicId === "none";
+  const bankReady = Boolean(subjectId && topicId && (isChapterMode || levelId) && (!needsFolder || (chapterTopicId && !viewingUntagged)));
   const levelNameById = useMemo(
     () => new Map((selectedSubject?.levels ?? []).map((l) => [l.id, l.name])),
     [selectedSubject]
@@ -153,12 +163,20 @@ export function AdminQuestionBankPage() {
   }, [topicOptions, topicId]);
 
   useEffect(() => {
+    setChapterTopicId("");
+  }, [topicId]);
+
+  useEffect(() => {
     if (!topicId) {
       setQuestions([]);
       return;
     }
-    void loadQuestions(topicId, subjectId, apiLevelId);
-  }, [topicId, subjectId, apiLevelId]);
+    if (needsFolder && !chapterTopicId) {
+      setQuestions([]);
+      return;
+    }
+    void loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
+  }, [topicId, subjectId, apiLevelId, chapterTopicId, needsFolder]);
 
   useEffect(() => {
     if (!subjectId || (!isChapterMode && !levelId)) {
@@ -168,11 +186,12 @@ export function AdminQuestionBankPage() {
     void loadLevelQuestionStatus(subjectId, apiLevelId);
   }, [subjectId, levelId, isChapterMode, apiLevelId]);
 
-  async function loadQuestions(currentTopicId: string, currentSubjectId: string, currentLevelId: string) {
+  async function loadQuestions(currentTopicId: string, currentSubjectId: string, currentLevelId: string, currentFolderId = "") {
     const q = new URLSearchParams();
     q.set("topicId", currentTopicId);
     if (currentSubjectId) q.set("subjectId", currentSubjectId);
     if (currentLevelId) q.set("levelId", currentLevelId);
+    if (currentFolderId) q.set("chapterTopicId", currentFolderId);
     const r = await api<QuestionRow[]>(`/api/v1/admin/questions?${q.toString()}`);
     if (!r.ok) setErr(r.error ?? "Failed to load questions");
     else setQuestions(r.data ?? []);
@@ -182,14 +201,24 @@ export function AdminQuestionBankPage() {
     const q = new URLSearchParams();
     q.set("subjectId", currentSubjectId);
     if (currentLevelId) q.set("levelId", currentLevelId);
-    const r = await api<{ topicId: string; count: number }[]>(`/api/v1/admin/questions/counts?${q.toString()}`);
+    const r = await api<{ topicId: string; chapterTopicId?: string | null; count: number }[]>(
+      `/api/v1/admin/questions/counts?${q.toString()}`
+    );
     if (!r.ok) {
       setErr(r.error ?? "Failed to load topic question status");
       return;
     }
     const map = new Map<string, number>();
-    for (const row of r.data ?? []) map.set(row.topicId, row.count);
+    const folders = new Map<string, number>();
+    const untagged = new Map<string, number>();
+    for (const row of r.data ?? []) {
+      map.set(row.topicId, (map.get(row.topicId) ?? 0) + row.count);
+      if (row.chapterTopicId) folders.set(row.chapterTopicId, row.count);
+      else untagged.set(row.topicId, (untagged.get(row.topicId) ?? 0) + row.count);
+    }
     setTopicQuestionCount(map);
+    setFolderQuestionCount(folders);
+    setUntaggedQuestionCount(untagged);
   }
 
   async function refreshSubjects() {
@@ -251,6 +280,10 @@ export function AdminQuestionBankPage() {
   async function saveQuestion(e: React.FormEvent) {
     e.preventDefault();
     if (!subjectId || !topicId || (!isChapterMode && !levelId)) return;
+    if (needsFolder && (!chapterTopicId || chapterTopicId === "none")) {
+      setErr("Choose a topic in this chapter");
+      return;
+    }
     const type = form.type;
     const numericAnswer = parseNumericInput(form.correctNumeric);
     if (type === "NUMERIC" && numericAnswer == null) {
@@ -263,6 +296,7 @@ export function AdminQuestionBankPage() {
       subjectId,
       ...(isChapterMode ? {} : { levelId }),
       topicId,
+      ...(needsFolder && chapterTopicId && chapterTopicId !== "none" ? { chapterTopicId } : {}),
       type,
       stem: form.stem.trim(),
       optionA: type === "NUMERIC" ? "" : form.optionA.trim(),
@@ -299,7 +333,7 @@ export function AdminQuestionBankPage() {
       return;
     }
     resetForm();
-    await loadQuestions(topicId, subjectId, apiLevelId);
+    await loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
     if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
@@ -344,7 +378,7 @@ export function AdminQuestionBankPage() {
     const r = await api(`/api/v1/admin/questions/${id}`, { method: "DELETE" });
     setBusy(false);
     if (!r.ok) setErr(r.error ?? "Delete failed");
-    else await loadQuestions(topicId, subjectId, apiLevelId);
+    else await loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
   }
 
   async function importDocx(e: React.FormEvent) {
@@ -360,6 +394,7 @@ export function AdminQuestionBankPage() {
     fd.set("subjectId", subjectId);
     if (!isChapterMode) fd.set("levelId", levelId);
     fd.set("topicId", topicId);
+    if (needsFolder && chapterTopicId && chapterTopicId !== "none") fd.set("chapterTopicId", chapterTopicId);
     fd.set("mode", replaceMode ? "replace" : syncMode ? "sync" : "insert");
 
     try {
@@ -390,7 +425,7 @@ export function AdminQuestionBankPage() {
         `Upload completed. Mode ${result.mode}: imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} (parsed ${result.parseCount}).`
       );
       if (result.errors?.length) setImportErrors(result.errors);
-      await loadQuestions(topicId, subjectId, apiLevelId);
+      await loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
     } catch {
       setErr("Upload failed due to network/server error. Please try again.");
     } finally {
@@ -412,6 +447,7 @@ export function AdminQuestionBankPage() {
     fd.set("subjectId", subjectId);
     if (!isChapterMode) fd.set("levelId", levelId);
     fd.set("topicId", topicId);
+    if (needsFolder && chapterTopicId && chapterTopicId !== "none") fd.set("chapterTopicId", chapterTopicId);
     fd.set("mode", replaceMode ? "replace" : syncMode ? "sync" : "insert");
     try {
       const token = getToken();
@@ -443,7 +479,7 @@ export function AdminQuestionBankPage() {
         }.`
       );
       if (result.errors?.length) setImportErrors(result.errors);
-      await loadQuestions(topicId, subjectId, apiLevelId);
+      await loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
       if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
     } catch {
       setErr("Sheet upload failed due to network/server error. Please try again.");
@@ -461,6 +497,64 @@ export function AdminQuestionBankPage() {
   function cancelEditTopic() {
     setEditingTopicId(null);
     setEditingTopicName("");
+  }
+
+  async function addChapterTopic() {
+    const name = newTopicName.trim();
+    if (!subjectId || !topicId || !name) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api<{ id: string }>(`/api/v1/admin/subjects/${subjectId}/chapters/${topicId}/topics`, {
+      method: "POST",
+      json: { name },
+    });
+    setBusy(false);
+    if (!r.ok || !r.data) {
+      setErr(r.error ?? "Could not add topic");
+      return;
+    }
+    setNewTopicName("");
+    setChapterTopicId(r.data.id);
+    await refreshSubjects();
+    if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
+  }
+
+  async function renameChapterTopic(id: string) {
+    const name = editingTopicName.trim();
+    if (!name) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/chapter-topics/${id}`, { method: "PATCH", json: { name } });
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Could not rename topic");
+      return;
+    }
+    cancelEditTopic();
+    await refreshSubjects();
+  }
+
+  function removeChapterTopic(id: string, name: string) {
+    confirmDialog.setRequest({
+      title: "Remove topic",
+      message: `Remove topic "${name}" from this chapter? Delete its questions first if it still has any.`,
+      confirmLabel: "Remove topic",
+      onConfirm: () => doRemoveChapterTopic(id),
+    });
+  }
+
+  async function doRemoveChapterTopic(id: string) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/chapter-topics/${id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Could not remove topic");
+      return;
+    }
+    if (chapterTopicId === id) setChapterTopicId("");
+    await refreshSubjects();
+    if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
   async function saveTopicRename(topicIdToRename: string) {
@@ -537,6 +631,7 @@ export function AdminQuestionBankPage() {
         subjectId,
         levelId: isChapterMode ? undefined : levelId,
         topicId,
+      ...(needsFolder && chapterTopicId && chapterTopicId !== "none" ? { chapterTopicId } : {}),
         text: pasteText,
         dryRun: true,
       },
@@ -571,6 +666,7 @@ export function AdminQuestionBankPage() {
         subjectId,
         levelId: isChapterMode ? undefined : levelId,
         topicId,
+      ...(needsFolder && chapterTopicId && chapterTopicId !== "none" ? { chapterTopicId } : {}),
         text: pasteText,
         mode: replaceMode ? "replace" : syncMode ? "sync" : "insert",
         difficulty: pasteDifficulty,
@@ -592,7 +688,7 @@ export function AdminQuestionBankPage() {
     setPasteText("");
     setPastePreview(null);
     setPasteUnparsed(0);
-    await loadQuestions(topicId, subjectId, apiLevelId);
+    await loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
     if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
@@ -614,8 +710,8 @@ export function AdminQuestionBankPage() {
     <>
       <h1 className="text-2xl font-bold text-slate-900">Question bank</h1>
       <p className="mt-1 text-slate-600">
-        For level branches, select subject, level, and chapter. For book branches (NCERT), select subject and chapter
-        only.
+        For level branches, select subject, level, and topic. For book branches, select the chapter. Add topics only
+        when that chapter is large.
       </p>
       {err && <p className="mt-4 text-red-600">{err}</p>}
       {importMsg && <p className="mt-4 text-emerald-700">{importMsg}</p>}
@@ -708,7 +804,96 @@ export function AdminQuestionBankPage() {
               ))}
             </select>
           </label>
+          {needsFolder ? (
+            <label className="text-sm">
+              <span className="text-slate-600">Topic</span>
+              <select
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"
+                value={chapterTopicId}
+                onChange={(e) => setChapterTopicId(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">Select topic</option>
+                {chapterFolders.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({folderQuestionCount.get(t.id) ?? 0})
+                  </option>
+                ))}
+                {(untaggedQuestionCount.get(topicId) ?? 0) > 0 ? (
+                  <option value="none">Not in a topic ({untaggedQuestionCount.get(topicId)})</option>
+                ) : null}
+              </select>
+            </label>
+          ) : null}
         </div>
+        {isChapterMode && topicId ? (
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <h2 className="text-sm font-semibold text-slate-900">Topics in this chapter</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              {needsFolder
+                ? "New questions go into a topic. A test of the whole chapter still uses every topic."
+                : "No topics yet. Questions upload to the whole chapter. Add a topic only if this chapter is large."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                placeholder="Topic name"
+                value={newTopicName}
+                onChange={(e) => setNewTopicName(e.target.value)}
+                disabled={busy}
+              />
+              <button
+                type="button"
+                onClick={() => void addChapterTopic()}
+                disabled={busy || !newTopicName.trim()}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium disabled:opacity-50"
+              >
+                Add topic
+              </button>
+            </div>
+            {chapterFolders.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {chapterFolders.map((t) => {
+                  const count = folderQuestionCount.get(t.id) ?? 0;
+                  const isEditing = editingTopicId === t.id;
+                  return (
+                    <li key={t.id} className="flex flex-wrap items-center gap-2 text-sm">
+                      {isEditing ? (
+                        <>
+                          <input
+                            className="rounded border border-slate-300 px-2 py-1"
+                            value={editingTopicName}
+                            onChange={(e) => setEditingTopicName(e.target.value)}
+                            disabled={busy}
+                          />
+                          <button type="button" className="text-brand-700" onClick={() => void renameChapterTopic(t.id)} disabled={busy}>
+                            Save
+                          </button>
+                          <button type="button" onClick={cancelEditTopic}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" className="font-medium text-slate-900" onClick={() => setChapterTopicId(t.id)}>
+                            {t.name}
+                          </button>
+                          <span className="text-slate-500">{count} question{count === 1 ? "" : "s"}</span>
+                          <button type="button" className="text-slate-600" onClick={() => startEditTopic({ id: t.id, name: t.name, levelId: null })}>
+                            Rename
+                          </button>
+                          <button type="button" className="text-red-700" onClick={() => removeChapterTopic(t.id, t.name)}>
+                            Remove
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {subjectId && (isChapterMode || levelId) ? (
@@ -859,7 +1044,11 @@ export function AdminQuestionBankPage() {
           </button>
           {!bankReady && (
             <span className="text-xs text-amber-700">
-              {isChapterMode ? "Select subject and chapter above first." : "Select subject, level, and topic above first."}
+              {isChapterMode
+                ? needsFolder
+                  ? "Select a topic in this chapter first."
+                  : "Select subject and chapter above first."
+                : "Select subject, level, and topic above first."}
             </span>
           )}
         </div>
@@ -1159,7 +1348,11 @@ export function AdminQuestionBankPage() {
             </button>
             {!bankReady && (
               <span className="ml-2 text-xs text-amber-700">
-                {isChapterMode ? "Select subject and chapter above first." : "Select subject, level, and topic above first."}
+                {isChapterMode
+                ? needsFolder
+                  ? "Select a topic in this chapter first."
+                  : "Select subject and chapter above first."
+                : "Select subject, level, and topic above first."}
               </span>
             )}
           </form>

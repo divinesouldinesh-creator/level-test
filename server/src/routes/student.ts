@@ -441,10 +441,13 @@ router.get("/subjects/:subjectId/chapters", async (req, res) => {
   const chapters = await prisma.subjectChapter.findMany({
     where: { subjectId },
     orderBy: { sortOrder: "asc" },
-    include: { topic: { select: { id: true, name: true } } },
+    include: {
+      topic: { select: { id: true, name: true } },
+      chapterTopics: { orderBy: { sortOrder: "asc" }, select: { id: true, name: true } },
+    },
   });
   const counts = await prisma.question.groupBy({
-    by: ["topicId"],
+    by: ["topicId", "chapterTopicId"],
     where: {
       subjectId,
       levelId: null,
@@ -452,7 +455,12 @@ router.get("/subjects/:subjectId/chapters", async (req, res) => {
     },
     _count: { _all: true },
   });
-  const countByTopic = new Map(counts.map((c) => [c.topicId, c._count._all]));
+  const countByChapter = new Map<string, number>();
+  const countByFolder = new Map<string, number>();
+  for (const row of counts) {
+    countByChapter.set(row.topicId, (countByChapter.get(row.topicId) ?? 0) + row._count._all);
+    if (row.chapterTopicId) countByFolder.set(row.chapterTopicId, row._count._all);
+  }
 
   res.json({
     subjectId: allowed.subject.id,
@@ -464,7 +472,12 @@ router.get("/subjects/:subjectId/chapters", async (req, res) => {
     chapters: chapters.map((c) => ({
       id: c.topic.id,
       name: c.topic.name,
-      questionCount: countByTopic.get(c.topicId) ?? 0,
+      questionCount: countByChapter.get(c.topicId) ?? 0,
+      topics: c.chapterTopics.map((t) => ({
+        id: t.id,
+        name: t.name,
+        questionCount: countByFolder.get(t.id) ?? 0,
+      })),
     })),
   });
 });
@@ -527,9 +540,10 @@ const startSchema = z
   .object({
     subjectId: z.string(),
     levelId: z.string().optional(),
-    topicIds: z.array(z.string()).min(1).optional(),
+    topicIds: z.array(z.string()).optional(),
+    chapterTopicIds: z.array(z.string()).optional(),
   })
-  .refine((d) => Boolean(d.levelId) || Boolean(d.topicIds?.length), {
+  .refine((d) => Boolean(d.levelId) || Boolean(d.topicIds?.length) || Boolean(d.chapterTopicIds?.length), {
     message: "levelId or topicIds required",
   });
 
@@ -546,7 +560,7 @@ router.post("/tests/start", async (req, res) => {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const { subjectId, levelId, topicIds } = parsed.data;
+  const { subjectId, levelId, topicIds, chapterTopicIds } = parsed.data;
 
   const student = await requireStudent(req.user!.sub);
   if (!student) {
@@ -565,18 +579,33 @@ router.post("/tests/start", async (req, res) => {
 
   if (allowed.subject.testMode === "CHAPTER") {
     const requestedIds = [...new Set((topicIds ?? []).filter(Boolean))];
-    if (requestedIds.length === 0) {
+    const requestedFolders = [...new Set((chapterTopicIds ?? []).filter(Boolean))];
+    if (requestedIds.length === 0 && requestedFolders.length === 0) {
       res.status(400).json({ error: "Select at least one chapter" });
       return;
     }
-    const chapters = await prisma.subjectChapter.findMany({
-      where: { subjectId, topicId: { in: requestedIds } },
-      select: { topicId: true },
-    });
+    const chapters = requestedIds.length
+      ? await prisma.subjectChapter.findMany({
+          where: { subjectId, topicId: { in: requestedIds } },
+          select: { topicId: true },
+        })
+      : [];
     if (chapters.length !== requestedIds.length) {
       res.status(400).json({ error: "One or more chapters are not on this branch" });
       return;
     }
+    const folders = requestedFolders.length
+      ? await prisma.chapterTopic.findMany({
+          where: { id: { in: requestedFolders }, subjectChapter: { subjectId } },
+          select: { id: true, subjectChapter: { select: { topicId: true } } },
+        })
+      : [];
+    if (folders.length !== requestedFolders.length) {
+      res.status(400).json({ error: "One or more topics are not on this book" });
+      return;
+    }
+    const wholeChapters = new Set(requestedIds);
+    const folderIds = folders.filter((f) => !wholeChapters.has(f.subjectChapter.topicId)).map((f) => f.id);
 
     const existing = await prisma.test.findFirst({
       where: {
@@ -590,7 +619,12 @@ router.post("/tests/start", async (req, res) => {
       },
       orderBy: { startedAt: "desc" },
     });
-    if (existing && existing.testQuestions.length > 0 && sameIdSet(existing.selectedTopicIds, requestedIds)) {
+    if (
+      existing &&
+      existing.testQuestions.length > 0 &&
+      sameIdSet(existing.selectedTopicIds, requestedIds) &&
+      sameIdSet(existing.selectedChapterTopicIds, folderIds)
+    ) {
       res.json({ testId: existing.id, questionCount: existing.testQuestions.length, warnings: [], resumed: true });
       return;
     }
@@ -606,7 +640,8 @@ router.post("/tests/start", async (req, res) => {
       prisma,
       subjectId,
       requestedIds,
-      total
+      total,
+      folderIds
     );
     if (questionIds.length === 0) {
       res.status(400).json({ error: "No questions available for the selected chapters", warnings });
@@ -623,6 +658,7 @@ router.post("/tests/start", async (req, res) => {
         subjectId,
         levelId: null,
         selectedTopicIds: requestedIds,
+        selectedChapterTopicIds: folderIds,
         wrongPenalty,
         status: "IN_PROGRESS",
         testQuestions: {
@@ -690,6 +726,16 @@ router.post("/tests/start", async (req, res) => {
   res.json({ testId: test.id, questionCount: questionIds.length, warnings, resumed: false });
 });
 
+function resultSlice(q: {
+  topicId: string;
+  topic?: { name: string } | null;
+  chapterTopicId?: string | null;
+  chapterTopic?: { name: string } | null;
+}) {
+  if (q.chapterTopicId && q.chapterTopic) return { id: q.chapterTopicId, name: q.chapterTopic.name };
+  return { id: q.topicId, name: q.topic?.name ?? "Chapter" };
+}
+
 function stripQuestion(q: {
   id: string;
   type?: string;
@@ -722,7 +768,7 @@ router.get("/tests/:testId", async (req, res) => {
         level: true,
         testQuestions: {
           orderBy: { orderIndex: "asc" },
-          include: { question: { include: { topic: true } } },
+          include: { question: { include: { topic: true, chapterTopic: true } } },
         },
         attempts: true,
       },
@@ -737,16 +783,16 @@ router.get("/tests/:testId", async (req, res) => {
       const attempt = test.attempts[0];
       const answers = await prisma.studentAnswer.findMany({
         where: { testAttemptId: attempt.id },
-        include: { question: { include: { topic: true } } },
+        include: { question: { include: { topic: true, chapterTopic: true } } },
       });
 
       const topicMap = new Map<string, { correct: number; total: number; name: string }>();
       for (const a of answers) {
-        const tid = a.question.topicId;
-        const cur = topicMap.get(tid) ?? { correct: 0, total: 0, name: a.question.topic.name };
+        const slice = resultSlice(a.question);
+        const cur = topicMap.get(slice.id) ?? { correct: 0, total: 0, name: slice.name };
         cur.total += 1;
         if (a.isCorrect) cur.correct += 1;
-        topicMap.set(tid, cur);
+        topicMap.set(slice.id, cur);
       }
 
       const topicWise = [...topicMap.entries()].map(([topicId, v]) => ({
@@ -888,7 +934,7 @@ router.post("/tests/:testId/submit", async (req, res) => {
     const test = await prisma.test.findFirst({
       where: { id: req.params.testId, studentId: studentRecordId, status: "IN_PROGRESS" },
       include: {
-        testQuestions: { include: { question: true } },
+        testQuestions: { include: { question: { include: { topic: true, chapterTopic: true } } } },
         subject: true,
         level: true,
       },
@@ -926,11 +972,17 @@ router.post("/tests/:testId/submit", async (req, res) => {
     const band = bandFromPercentage(percentage);
 
     const topicScores = new Map<string, { correct: number; total: number }>();
+    const displayScores = new Map<string, { correct: number; total: number; name: string }>();
     for (const { tq, result } of scored) {
       const cur = topicScores.get(tq.question.topicId) ?? { correct: 0, total: 0 };
       cur.total += 1;
       if (result.isCorrect) cur.correct += 1;
       topicScores.set(tq.question.topicId, cur);
+      const slice = resultSlice(tq.question);
+      const shown = displayScores.get(slice.id) ?? { correct: 0, total: 0, name: slice.name };
+      shown.total += 1;
+      if (result.isCorrect) shown.correct += 1;
+      displayScores.set(slice.id, shown);
     }
 
     let suggestedNextLevelId: string | null = null;
@@ -985,18 +1037,13 @@ router.post("/tests/:testId/submit", async (req, res) => {
 
     const practice = await recordDailyPractice(prisma, studentRecordId);
 
-    const topicWise = await Promise.all(
-      [...topicScores.entries()].map(async ([topicId, v]) => {
-        const topic = await prisma.topic.findUnique({ where: { id: topicId } });
-        return {
-          topicId,
-          topicName: topic?.name ?? topicId,
-          correct: v.correct,
-          total: v.total,
-          percentage: v.total ? Math.round((100 * v.correct) / v.total) : 0,
-        };
-      })
-    );
+    const topicWise = [...displayScores.entries()].map(([topicId, v]) => ({
+      topicId,
+      topicName: v.name,
+      correct: v.correct,
+      total: v.total,
+      percentage: v.total ? Math.round((100 * v.correct) / v.total) : 0,
+    }));
 
     const strongTopics = topicWise.filter((t) => t.percentage >= 80).map((t) => t.topicName);
     const weakTopics = topicWise.filter((t) => t.percentage < 50).map((t) => t.topicName);

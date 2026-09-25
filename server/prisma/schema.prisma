@@ -286,11 +286,25 @@ model SubjectChapter {
   subjectId String  @map("subject_id")
   topicId   String  @map("topic_id")
   sortOrder Int     @default(0) @map("sort_order")
-  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  topic     Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  subject       Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topic         Topic          @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  chapterTopics ChapterTopic[]
 
   @@unique([subjectId, topicId])
   @@index([subjectId])
+}
+
+/// Optional folder inside a book chapter. Absent on smaller-class chapters.
+model ChapterTopic {
+  id               String         @id @default(cuid())
+  subjectChapterId String         @map("subject_chapter_id")
+  name             String
+  sortOrder        Int            @default(0) @map("sort_order")
+  subjectChapter   SubjectChapter @relation(fields: [subjectChapterId], references: [id], onDelete: Cascade)
+  questions        Question[]
+
+  @@unique([subjectChapterId, name])
+  @@index([subjectChapterId])
 }
 
 /// Join: which subjects a class studies (students see these subjects)
@@ -365,6 +379,8 @@ model Question {
   /// Null for chapter-mode book questions (no level).
   levelId          String?      @map("level_id")
   topicId          String       @map("topic_id")
+  /// Set only when the question is filed under a topic inside a book chapter.
+  chapterTopicId   String?      @map("chapter_topic_id")
   type             QuestionType @default(MCQ)
   stem             String
   stemImageUrl     String?      @map("stem_image_url")
@@ -382,9 +398,10 @@ model Question {
   createdById      String?    @map("created_by_id")
   createdAt        DateTime   @default(now()) @map("created_at")
 
-  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  level      Level?     @relation(fields: [levelId], references: [id], onDelete: Cascade)
-  topic      Topic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  subject      Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  level        Level?        @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  topic        Topic         @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  chapterTopic ChapterTopic? @relation(fields: [chapterTopicId], references: [id], onDelete: SetNull)
   parent     Question?  @relation("QuestionVariations", fields: [parentQuestionId], references: [id], onDelete: SetNull)
   variations Question[] @relation("QuestionVariations")
   createdBy  User?      @relation("QuestionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -396,6 +413,7 @@ model Question {
 
   @@unique([contentHash])
   @@index([topicId])
+  @@index([chapterTopicId])
   @@index([subjectId, levelId])
 }
 
@@ -405,7 +423,9 @@ model Test {
   subjectId        String     @map("subject_id")
   /// Null for chapter-mode tests (no level).
   levelId          String?    @map("level_id")
-  selectedTopicIds String[]   @default([]) @map("selected_topic_ids")
+  selectedTopicIds        String[]   @default([]) @map("selected_topic_ids")
+  /// Topics inside chapters. Empty when the student ticked whole chapters only.
+  selectedChapterTopicIds String[]   @default([]) @map("selected_chapter_topic_ids")
   /// Snapshot at start. 0 = no negative marking (level tests always 0).
   wrongPenalty     Float      @default(0) @map("wrong_penalty")
   status           TestStatus @default(IN_PROGRESS)
