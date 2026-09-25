@@ -45,6 +45,19 @@ export function visibleOptions(
   return [optionA, optionB, optionC, optionD];
 }
 
+export function visibleOptionImages(
+  type: QuestionType | string | null | undefined,
+  optionImageA?: string | null,
+  optionImageB?: string | null,
+  optionImageC?: string | null,
+  optionImageD?: string | null
+): (string | null)[] {
+  const images = [optionImageA, optionImageB, optionImageC, optionImageD].map((url) => url || null);
+  if (type === "NUMERIC") return [];
+  if (type === "MCQ2") return images.slice(0, 2);
+  return images;
+}
+
 export function questionAnswerKey(q: {
   type?: QuestionType | string | null;
   correctOption: number;
@@ -136,6 +149,10 @@ export function toPublicQuestion(q: {
   optionB: string;
   optionC: string;
   optionD: string;
+  optionImageA?: string | null;
+  optionImageB?: string | null;
+  optionImageC?: string | null;
+  optionImageD?: string | null;
   topicId: string;
 }) {
   const type = (q.type as QuestionType | undefined) ?? "MCQ";
@@ -145,6 +162,7 @@ export function toPublicQuestion(q: {
     stem: q.stem,
     stemImageUrl: q.stemImageUrl ?? null,
     options: visibleOptions(type, q.optionA, q.optionB, q.optionC, q.optionD),
+    optionImageUrls: visibleOptionImages(type, q.optionImageA, q.optionImageB, q.optionImageC, q.optionImageD),
     topicId: q.topicId,
   };
 }

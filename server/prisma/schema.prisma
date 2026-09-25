@@ -61,6 +61,7 @@ model User {
 
   questionsCreated        Question[]          @relation("QuestionCreatedBy")
   questionImports         QuestionImport[]
+  questionReportsResolved QuestionReport[]    @relation("QuestionReportResolvedBy")
   attendanceSessionsTaken AttendanceSession[] @relation("AttendanceTakenBy")
   classroomAssessmentsRecorded ClassroomAssessmentSession[] @relation("ClassroomRecordedBy")
   careCallsRecorded            CareCall[]                   @relation("CareCallRecordedBy")
@@ -134,6 +135,7 @@ model Student {
   careCalls                  CareCall[]
   feeMembership              FeeAccountMember?
   feePaymentsAgainst         FeePayment[]       @relation("FeePaymentAgainstStudent")
+  questionReports            QuestionReport[]
 
   @@index([classId, sectionId])
 }
@@ -388,6 +390,10 @@ model Question {
   optionB          String       @default("") @map("option_b")
   optionC          String       @default("") @map("option_c")
   optionD          String       @default("") @map("option_d")
+  optionImageA     String?      @map("option_image_a")
+  optionImageB     String?      @map("option_image_b")
+  optionImageC     String?      @map("option_image_c")
+  optionImageD     String?      @map("option_image_d")
   /// 0=A, 1=B, 2=C, 3=D — unused for NUMERIC
   correctOption    Int          @default(0) @map("correct_option")
   correctNumeric   Float?       @map("correct_numeric")
@@ -410,6 +416,7 @@ model Question {
   studentAnswers          StudentAnswer[]
   dailyChallengeQuestions DailyChallengeQuestion[]
   masterySessionQuestions MasterySessionQuestion[]
+  reports                 QuestionReport[]
 
   @@unique([contentHash])
   @@index([topicId])
@@ -438,6 +445,7 @@ model Test {
 
   testQuestions TestQuestion[]
   attempts      TestAttempt[]
+  questionReports QuestionReport[]
 
   @@index([studentId, status, completedAt])
   @@index([startedAt])
@@ -590,6 +598,42 @@ model MasterySessionQuestion {
 
   @@unique([sessionId, orderIndex])
   @@index([sessionId])
+}
+
+enum QuestionReportReason {
+  WRONG_ANSWER
+  UNCLEAR
+  BAD_DIAGRAM
+  OTHER
+}
+
+enum QuestionReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+/// A student flag that a question from a finished test looks wrong. Does not change the score.
+model QuestionReport {
+  id           String               @id @default(cuid())
+  questionId   String               @map("question_id")
+  studentId    String               @map("student_id")
+  testId       String               @map("test_id")
+  reason       QuestionReportReason
+  note         String               @default("")
+  status       QuestionReportStatus @default(OPEN)
+  createdAt    DateTime             @default(now()) @map("created_at")
+  resolvedAt   DateTime?            @map("resolved_at")
+  resolvedById String?              @map("resolved_by_id")
+
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  test       Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  resolvedBy User?    @relation("QuestionReportResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@unique([questionId, studentId, testId])
+  @@index([status, createdAt])
+  @@index([questionId, status])
 }
 
 model QuestionImport {

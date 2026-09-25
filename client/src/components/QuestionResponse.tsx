@@ -1,21 +1,26 @@
+import { mediaUrl } from "../api";
 import { isNumericType } from "../questionTypes";
 
 const LABELS = ["A", "B", "C", "D"];
 
 export function QuestionChoices({
   options,
+  optionImageUrls,
   selected,
   onSelect,
   disabled,
 }: {
   options: string[];
+  optionImageUrls?: (string | null)[];
   selected?: number;
   onSelect: (index: number) => void;
   disabled?: boolean;
 }) {
   return (
     <div className="mt-4 space-y-2">
-      {options.map((opt, i) => (
+      {options.map((opt, i) => {
+        const imageUrl = optionImageUrls?.[i];
+        return (
         <button
           key={i}
           type="button"
@@ -29,8 +34,16 @@ export function QuestionChoices({
         >
           <span className="font-semibold text-brand-700 mr-2">{LABELS[i] ?? i + 1}.</span>
           {opt}
+          {imageUrl ? (
+            <img
+              src={mediaUrl(imageUrl)}
+              alt=""
+              className="mt-2 max-h-40 w-full object-contain rounded-lg border border-slate-100 bg-white"
+            />
+          ) : null}
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -65,6 +78,7 @@ export function NumericAnswerInput({
 export function QuestionResponse({
   type,
   options,
+  optionImageUrls,
   selectedOption,
   numericRaw,
   onSelect,
@@ -73,6 +87,7 @@ export function QuestionResponse({
 }: {
   type?: string;
   options: string[];
+  optionImageUrls?: (string | null)[];
   selectedOption?: number;
   numericRaw?: string;
   onSelect: (index: number) => void;
@@ -82,5 +97,13 @@ export function QuestionResponse({
   if (isNumericType(type)) {
     return <NumericAnswerInput value={numericRaw ?? ""} onChange={onNumeric} disabled={disabled} />;
   }
-  return <QuestionChoices options={options} selected={selectedOption} onSelect={onSelect} disabled={disabled} />;
+  return (
+    <QuestionChoices
+      options={options}
+      optionImageUrls={optionImageUrls}
+      selected={selectedOption}
+      onSelect={onSelect}
+      disabled={disabled}
+    />
+  );
 }

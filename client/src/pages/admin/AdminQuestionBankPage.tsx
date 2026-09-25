@@ -26,10 +26,34 @@ type QuestionRow = {
   optionB: string;
   optionC: string;
   optionD: string;
+  optionImageA?: string | null;
+  optionImageB?: string | null;
+  optionImageC?: string | null;
+  optionImageD?: string | null;
   correctOption: number;
   correctNumeric?: number | null;
   numericTolerance?: number;
   difficulty: "EASY" | "MEDIUM" | "HARD";
+};
+
+type ReportReason = "WRONG_ANSWER" | "UNCLEAR" | "BAD_DIAGRAM" | "OTHER";
+
+const REPORT_REASON_LABEL: Record<ReportReason, string> = {
+  WRONG_ANSWER: "Wrong answer",
+  UNCLEAR: "Unclear question",
+  BAD_DIAGRAM: "Bad or missing diagram",
+  OTHER: "Other",
+};
+
+type QuestionReportRow = {
+  id: string;
+  reason: ReportReason;
+  note: string;
+  createdAt: string;
+  studentName: string;
+  subjectName: string;
+  levelName: string | null;
+  question: QuestionRow & { topicName: string };
 };
 
 type ImportResult = {
@@ -77,6 +101,9 @@ export function AdminQuestionBankPage() {
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [bankTab, setBankTab] = useState<"reports" | "questions">("reports");
+  const [reports, setReports] = useState<QuestionReportRow[]>([]);
+  const [reportsErr, setReportsErr] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importErrors, setImportErrors] = useState<string[]>([]);
 
@@ -88,6 +115,10 @@ export function AdminQuestionBankPage() {
     optionB: "",
     optionC: "",
     optionD: "",
+    optionImageA: "",
+    optionImageB: "",
+    optionImageC: "",
+    optionImageD: "",
     correctOption: "0",
     correctNumeric: "",
     numericTolerance: "0",
@@ -116,6 +147,7 @@ export function AdminQuestionBankPage() {
   useEffect(() => {
     void refreshSubjects();
     void refreshClasses();
+    void loadReports();
   }, []);
 
   const visibleSubjects = useMemo(() => {
@@ -186,6 +218,31 @@ export function AdminQuestionBankPage() {
     void loadLevelQuestionStatus(subjectId, apiLevelId);
   }, [subjectId, levelId, isChapterMode, apiLevelId]);
 
+  async function loadReports() {
+    const r = await api<QuestionReportRow[]>("/api/v1/admin/question-reports");
+    if (!r.ok) {
+      setReportsErr(r.error ?? "Could not load question reports");
+      return;
+    }
+    setReportsErr(null);
+    setReports(r.data ?? []);
+  }
+
+  async function closeReports(questionId: string, status: "RESOLVED" | "DISMISSED") {
+    setBusy(true);
+    setErr(null);
+    const r = await api("/api/v1/admin/question-reports/close", {
+      method: "POST",
+      json: { questionId, status },
+    });
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Could not update the report");
+      return;
+    }
+    await loadReports();
+  }
+
   async function loadQuestions(currentTopicId: string, currentSubjectId: string, currentLevelId: string, currentFolderId = "") {
     const q = new URLSearchParams();
     q.set("topicId", currentTopicId);
@@ -242,6 +299,10 @@ export function AdminQuestionBankPage() {
       optionB: "",
       optionC: "",
       optionD: "",
+      optionImageA: "",
+      optionImageB: "",
+      optionImageC: "",
+      optionImageD: "",
       correctOption: "0",
       correctNumeric: "",
       numericTolerance: "0",
@@ -251,7 +312,7 @@ export function AdminQuestionBankPage() {
     if (stemImageInputRef.current) stemImageInputRef.current.value = "";
   }
 
-  async function uploadStemImage(file: File) {
+  async function uploadQuestionImage(file: File, field: "stemImageUrl" | "optionImageA" | "optionImageB" | "optionImageC" | "optionImageD") {
     setImageUploading(true);
     setErr(null);
     try {
@@ -269,7 +330,7 @@ export function AdminQuestionBankPage() {
         setErr(data.error ?? "Image upload failed");
         return;
       }
-      setForm((x) => ({ ...x, stemImageUrl: data.url! }));
+      setForm((x) => ({ ...x, [field]: data.url! }));
     } catch {
       setErr("Image upload failed");
     } finally {
@@ -308,6 +369,10 @@ export function AdminQuestionBankPage() {
       numericTolerance: type === "NUMERIC" ? parseNumericInput(form.numericTolerance) ?? 0 : 0,
       difficulty: form.difficulty,
       stemImageUrl: form.stemImageUrl || null,
+      optionImageA: type === "NUMERIC" ? null : form.optionImageA || null,
+      optionImageB: type === "NUMERIC" ? null : form.optionImageB || null,
+      optionImageC: type === "MCQ" ? form.optionImageC || null : null,
+      optionImageD: type === "MCQ" ? form.optionImageD || null : null,
     };
     const r = form.editId
       ? await api(`/api/v1/admin/questions/${form.editId}`, {
@@ -324,6 +389,10 @@ export function AdminQuestionBankPage() {
             numericTolerance: payload.numericTolerance,
             difficulty: payload.difficulty,
             stemImageUrl: payload.stemImageUrl,
+            optionImageA: payload.optionImageA,
+            optionImageB: payload.optionImageB,
+            optionImageC: payload.optionImageC,
+            optionImageD: payload.optionImageD,
           },
         })
       : await api("/api/v1/admin/questions", { method: "POST", json: payload });
@@ -334,6 +403,7 @@ export function AdminQuestionBankPage() {
     }
     resetForm();
     await loadQuestions(topicId, subjectId, apiLevelId, needsFolder ? chapterTopicId : "");
+    await loadReports();
     if (subjectId) await loadLevelQuestionStatus(subjectId, apiLevelId);
   }
 
@@ -346,6 +416,10 @@ export function AdminQuestionBankPage() {
       optionB: q.optionB,
       optionC: q.optionC,
       optionD: q.optionD,
+      optionImageA: q.optionImageA ?? "",
+      optionImageB: q.optionImageB ?? "",
+      optionImageC: q.optionImageC ?? "",
+      optionImageD: q.optionImageD ?? "",
       correctOption: String(q.correctOption),
       correctNumeric: q.correctNumeric != null ? String(q.correctNumeric) : "",
       numericTolerance: String(q.numericTolerance ?? 0),
@@ -706,17 +780,44 @@ export function AdminQuestionBankPage() {
     XLSX.writeFile(wb, "question_bank_template.xlsx");
   }
 
+  const reportGroups = new Map<string, { question: QuestionReportRow["question"]; items: QuestionReportRow[] }>();
+  for (const row of reports) {
+    const group = reportGroups.get(row.question.id) ?? { question: row.question, items: [] };
+    group.items.push(row);
+    reportGroups.set(row.question.id, group);
+  }
+
   return (
     <>
       <h1 className="text-2xl font-bold text-slate-900">Question bank</h1>
-      <p className="mt-1 text-slate-600">
-        For level branches, select subject, level, and topic. For book branches, select the chapter. Add topics only
-        when that chapter is large.
-      </p>
+      <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
+        <button
+          type="button"
+          onClick={() => setBankTab("reports")}
+          className={`flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm font-medium min-h-[44px] ${
+            bankTab === "reports"
+              ? "bg-white text-brand-900 shadow-sm border border-slate-200"
+              : "text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          Reports{reportGroups.size ? ` (${reportGroups.size})` : ""}
+        </button>
+        <button
+          type="button"
+          onClick={() => setBankTab("questions")}
+          className={`flex-1 min-w-[140px] rounded-lg px-4 py-2.5 text-sm font-medium min-h-[44px] ${
+            bankTab === "questions"
+              ? "bg-white text-brand-900 shadow-sm border border-slate-200"
+              : "text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          Questions
+        </button>
+      </div>
       {err && <p className="mt-4 text-red-600">{err}</p>}
-      {importMsg && <p className="mt-4 text-emerald-700">{importMsg}</p>}
-      {importing && <p className="mt-2 text-indigo-700">Uploading question bank…</p>}
-      {importErrors.length > 0 ? (
+      {bankTab === "questions" && importMsg && <p className="mt-4 text-emerald-700">{importMsg}</p>}
+      {bankTab === "questions" && importing && <p className="mt-2 text-indigo-700">Uploading question bank…</p>}
+      {bankTab === "questions" && importErrors.length > 0 ? (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
           <p className="text-sm font-medium text-amber-900">Some rows could not be imported:</p>
           <ul className="mt-1 list-disc list-inside text-xs text-amber-900">
@@ -727,6 +828,77 @@ export function AdminQuestionBankPage() {
         </div>
       ) : null}
 
+      {bankTab === "reports" ? (
+      <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Reports ({reportGroups.size})</h2>
+        <p className="mt-1 text-xs text-slate-600">
+          Students send these from a finished test. Fix the question, then mark it done. Dismiss it if the question is fine.
+          A report does not change the student’s score.
+        </p>
+        {reportsErr ? <p className="mt-2 text-sm text-rose-700">{reportsErr}</p> : null}
+        {reportGroups.size === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No open reports.</p>
+        ) : (
+          <ul className="mt-3 space-y-3">
+            {[...reportGroups.values()].map((group) => (
+              <li key={group.question.id} className="rounded-lg border border-amber-200 bg-white p-3">
+                <p className="text-sm text-slate-900">{group.question.stem}</p>
+                <p className="mt-1 text-xs text-slate-500">Chapter: {group.question.topicName}</p>
+                <ul className="mt-2 space-y-1">
+                  {group.items.map((item) => (
+                    <li key={item.id} className="text-xs text-slate-700">
+                      <span className="font-medium">{item.studentName}</span>
+                      {" · "}
+                      {REPORT_REASON_LABEL[item.reason]}
+                      {" · "}
+                      {item.subjectName}
+                      {item.levelName ? ` · ${item.levelName}` : ""}
+                      {item.note ? <span className="block text-slate-600">“{item.note}”</span> : null}
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setBankTab("questions");
+                      startEdit(group.question);
+                    }}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs"
+                  >
+                    Edit question
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void closeReports(group.question.id, "RESOLVED")}
+                    className="rounded border border-emerald-300 text-emerald-800 px-2 py-1 text-xs"
+                  >
+                    Mark fixed
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void closeReports(group.question.id, "DISMISSED")}
+                    className="rounded border border-slate-300 text-slate-700 px-2 py-1 text-xs"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      ) : null}
+
+      {bankTab === "questions" ? (
+      <>
+      <p className="mt-6 text-slate-600">
+        For level branches, select subject, level, and topic. For book branches, select the chapter. Add topics only
+        when that chapter is large.
+      </p>
       <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="grid gap-3 md:grid-cols-4">
           <label className="text-sm">
@@ -1160,7 +1332,7 @@ export function AdminQuestionBankPage() {
                 disabled={busy || imageUploading}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
-                  if (file) void uploadStemImage(file);
+                  if (file) void uploadQuestionImage(file, "stemImageUrl");
                 }}
               />
               {imageUploading ? (
@@ -1215,16 +1387,52 @@ export function AdminQuestionBankPage() {
             {(form.type === "MCQ2"
               ? (["optionA", "optionB"] as const)
               : (["optionA", "optionB", "optionC", "optionD"] as const)
-            ).map((k, idx) => (
-              <input
-                key={k}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                placeholder={`Option ${String.fromCharCode(65 + idx)}`}
-                value={form[k]}
-                onChange={(e) => setForm((x) => ({ ...x, [k]: e.target.value }))}
-                disabled={busy}
-              />
-            ))}
+            ).map((k, idx) => {
+              const imageKey = `optionImage${k.slice(-1)}` as "optionImageA" | "optionImageB" | "optionImageC" | "optionImageD";
+              const imageUrl = form[imageKey];
+              return (
+              <div key={k} className="rounded-lg border border-slate-200 px-3 py-2">
+                <input
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  placeholder={`Option ${String.fromCharCode(65 + idx)}`}
+                  value={form[k]}
+                  onChange={(e) => setForm((x) => ({ ...x, [k]: e.target.value }))}
+                  disabled={busy}
+                />
+                <label className="mt-2 block text-xs text-slate-600">
+                  Option {String.fromCharCode(65 + idx)} image
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    className="mt-1 block w-full text-xs"
+                    disabled={busy || imageUploading}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void uploadQuestionImage(file, imageKey);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {imageUrl ? (
+                  <div className="mt-2 flex flex-wrap items-start gap-2">
+                    <img
+                      src={mediaUrl(imageUrl)}
+                      alt=""
+                      className="max-h-28 max-w-full rounded border border-slate-200 object-contain bg-white"
+                    />
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setForm((x) => ({ ...x, [imageKey]: "" }))}
+                      className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                    >
+                      Remove image
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              );
+            })}
             <div className="grid grid-cols-2 gap-2">
               <label className="text-sm">
                 Correct option
@@ -1448,6 +1656,8 @@ export function AdminQuestionBankPage() {
           </ul>
         )}
       </div>
+      </>
+      ) : null}
       {confirmDialog.element}
     </>
   );

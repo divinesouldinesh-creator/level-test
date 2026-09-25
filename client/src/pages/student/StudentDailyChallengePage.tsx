@@ -18,6 +18,7 @@ type Q = {
   stem: string;
   stemImageUrl?: string | null;
   options: string[];
+  optionImageUrls?: (string | null)[];
   topicId: string;
   topicName: string;
   orderIndex: number;
@@ -215,6 +216,7 @@ export function StudentDailyChallengePage() {
           <QuestionResponse
             type={q.type}
             options={q.options}
+            optionImageUrls={q.optionImageUrls}
             selectedOption={answers[q.id]?.selectedOption}
             numericRaw={answers[q.id]?.numericRaw}
             onSelect={(oi) => setAnswers((a) => ({ ...a, [q.id]: { selectedOption: oi } }))}

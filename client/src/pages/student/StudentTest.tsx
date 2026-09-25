@@ -29,6 +29,7 @@ type Q = {
   stem: string;
   stemImageUrl?: string | null;
   options: string[];
+  optionImageUrls?: (string | null)[];
   topicId: string;
 };
 type SavedTestProgress = {
@@ -42,6 +43,7 @@ type ReviewItem = {
   stem: string;
   stemImageUrl?: string | null;
   options: string[];
+  optionImageUrls?: (string | null)[];
   selectedOption: number | null;
   numericAnswer?: number | null;
   correctOption: number;
@@ -51,11 +53,21 @@ type ReviewItem = {
   topicName: string;
 };
 
+type ReportReason = "WRONG_ANSWER" | "UNCLEAR" | "BAD_DIAGRAM" | "OTHER";
+
+const REPORT_REASONS: { id: ReportReason; label: string }[] = [
+  { id: "WRONG_ANSWER", label: "Wrong answer" },
+  { id: "UNCLEAR", label: "Unclear question" },
+  { id: "BAD_DIAGRAM", label: "Bad or missing diagram" },
+  { id: "OTHER", label: "Other" },
+];
+
 type ReviewPayload = {
   score: number;
   maxScore: number;
   percentage: number;
   questions: ReviewItem[];
+  reportedQuestionIds?: string[];
 };
 
 type PracticeState = { picks: number[]; solved: boolean };
@@ -145,6 +157,12 @@ export function StudentTest() {
   const [reviewErr, setReviewErr] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<"wrong" | "all">("wrong");
   const [practice, setPractice] = useState<Record<string, PracticeState>>({});
+  const [reportedIds, setReportedIds] = useState<Set<string>>(new Set());
+  const [reportFor, setReportFor] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState<ReportReason>("WRONG_ANSWER");
+  const [reportNote, setReportNote] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportErr, setReportErr] = useState<string | null>(null);
   const [startingLevel, setStartingLevel] = useState<string | null>(null);
   const [subjectId, setSubjectId] = useState<string | null>(null);
   const [wrongPenalty, setWrongPenalty] = useState(0);
@@ -275,6 +293,31 @@ export function StudentTest() {
       return;
     }
     setReviewItems(r.data.questions);
+    setReportedIds(new Set(r.data.reportedQuestionIds ?? []));
+  }
+
+  function openReport(questionId: string) {
+    setReportFor(questionId);
+    setReportReason("WRONG_ANSWER");
+    setReportNote("");
+    setReportErr(null);
+  }
+
+  async function submitReport(questionId: string) {
+    if (!testId || reportBusy) return;
+    setReportBusy(true);
+    setReportErr(null);
+    const r = await api<{ ok: boolean; alreadyReported: boolean }>(
+      `/api/v1/student/tests/${testId}/questions/${questionId}/report`,
+      { method: "POST", json: { reason: reportReason, note: reportNote } }
+    );
+    setReportBusy(false);
+    if (!r.ok) {
+      setReportErr(r.error ?? "Could not send the report");
+      return;
+    }
+    setReportedIds((prev) => new Set(prev).add(questionId));
+    setReportFor(null);
   }
 
   function practicePick(item: ReviewItem, optIdx: number) {
@@ -452,7 +495,10 @@ export function StudentTest() {
             onCut={(e) => e.preventDefault()}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="font-semibold text-slate-900">Review &amp; practice</p>
+              <div>
+                <p className="font-semibold text-slate-900">Review &amp; practice</p>
+                <p className="text-xs text-slate-500">If a question looks wrong, report it. Your score stays the same.</p>
+              </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden">
                   <button
@@ -614,6 +660,13 @@ export function StudentTest() {
                                 >
                                   <span className="font-semibold mr-2">{labels[idx]}.</span>
                                   {opt}
+                                  {q.optionImageUrls?.[idx] ? (
+                                    <img
+                                      src={mediaUrl(q.optionImageUrls[idx])}
+                                      alt=""
+                                      className="mt-2 max-h-40 w-full object-contain rounded-lg border border-slate-100 bg-white"
+                                    />
+                                  ) : null}
                                   {suffix ? <span className="text-xs ml-2">{suffix}</span> : null}
                                 </button>
                               );
@@ -660,6 +713,66 @@ export function StudentTest() {
                               )}
                             </div>
                           ) : null}
+
+                          {reportedIds.has(q.id) ? (
+                            <p className="mt-3 text-xs font-medium text-amber-800">Reported. A teacher will check this question.</p>
+                          ) : reportFor === q.id ? (
+                            <form
+                              className="mt-3 space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3"
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                void submitReport(q.id);
+                              }}
+                            >
+                              <p className="text-xs font-medium text-slate-800">What’s wrong with this question?</p>
+                              <div className="flex flex-wrap gap-2">
+                                {REPORT_REASONS.map((reason) => (
+                                  <label key={reason.id} className="inline-flex items-center gap-1 text-xs text-slate-700">
+                                    <input
+                                      type="radio"
+                                      name={`report-${q.id}`}
+                                      checked={reportReason === reason.id}
+                                      onChange={() => setReportReason(reason.id)}
+                                    />
+                                    {reason.label}
+                                  </label>
+                                ))}
+                              </div>
+                              <textarea
+                                value={reportNote}
+                                onChange={(e) => setReportNote(e.target.value)}
+                                maxLength={500}
+                                rows={2}
+                                placeholder="Optional note"
+                                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+                              />
+                              {reportErr ? <p className="text-xs text-rose-700">{reportErr}</p> : null}
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="submit"
+                                  disabled={reportBusy}
+                                  className="rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                                >
+                                  {reportBusy ? "Sending…" : "Send report"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setReportFor(null)}
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openReport(q.id)}
+                              className="mt-3 rounded-lg border border-amber-300 bg-white text-amber-900 px-3 py-1.5 text-xs font-medium"
+                            >
+                              Report this question
+                            </button>
+                          )}
                         </li>
                       );
                     })}
@@ -761,6 +874,7 @@ export function StudentTest() {
         <QuestionResponse
           type={current.type}
           options={current.options}
+          optionImageUrls={current.optionImageUrls}
           selectedOption={answers[current.id]?.selectedOption}
           numericRaw={answers[current.id]?.numericRaw}
           onSelect={(i) => setAnswers((a) => ({ ...a, [current.id]: { selectedOption: i } }))}
@@ -800,14 +914,12 @@ export function StudentTest() {
             Next
           </button>
         ) : null}
-        {allowSkip || idx === questions.length - 1 ? (
+        {idx === questions.length - 1 ? (
           <button
             type="button"
             disabled={submitting}
             onClick={() => void submitAll()}
-            className={`rounded-xl bg-emerald-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-60 ${
-              idx < questions.length - 1 ? "" : "flex-1"
-            }`}
+            className="rounded-xl bg-emerald-600 text-white px-6 py-4 text-base font-semibold min-h-[52px] disabled:opacity-60 flex-1"
           >
             {submitting ? "Submitting…" : "Submit test"}
           </button>

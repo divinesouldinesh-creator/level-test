@@ -885,6 +885,10 @@ router.get("/tests/:testId/review", async (req, res) => {
 
   const attempt = test.attempts[0];
   const answerByQ = new Map(attempt.studentAnswers.map((a) => [a.questionId, a]));
+  const reports = await prisma.questionReport.findMany({
+    where: { testId: test.id, studentId: user.student.id },
+    select: { questionId: true },
+  });
 
   const questions = test.testQuestions.map((tq) => {
     const q = tq.question;
@@ -906,7 +910,75 @@ router.get("/tests/:testId/review", async (req, res) => {
     maxScore: attempt.maxScore,
     percentage: attempt.percentage,
     questions,
+    reportedQuestionIds: reports.map((r) => r.questionId),
   });
+});
+
+const reportReasonSchema = z.enum(["WRONG_ANSWER", "UNCLEAR", "BAD_DIAGRAM", "OTHER"]);
+
+router.post("/tests/:testId/questions/:questionId/report", async (req, res) => {
+  const parsed = z
+    .object({
+      reason: reportReasonSchema,
+      note: z.string().max(500).optional(),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Choose a reason" });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.sub },
+    include: { student: true },
+  });
+  if (!user?.student) {
+    res.status(400).json({ error: "Not a student" });
+    return;
+  }
+
+  const test = await prisma.test.findFirst({
+    where: { id: req.params.testId, studentId: user.student.id, status: "COMPLETED" },
+    select: {
+      id: true,
+      testQuestions: { where: { questionId: req.params.questionId }, select: { questionId: true } },
+    },
+  });
+  if (!test) {
+    res.status(404).json({ error: "Test not found" });
+    return;
+  }
+  if (!test.testQuestions.length) {
+    res.status(404).json({ error: "Question is not on this test" });
+    return;
+  }
+
+  const note = (parsed.data.note ?? "").trim().slice(0, 500);
+  const existing = await prisma.questionReport.findUnique({
+    where: {
+      questionId_studentId_testId: {
+        questionId: req.params.questionId,
+        studentId: user.student.id,
+        testId: test.id,
+      },
+    },
+    select: { id: true },
+  });
+  if (existing) {
+    res.json({ ok: true, alreadyReported: true });
+    return;
+  }
+
+  await prisma.questionReport.create({
+    data: {
+      questionId: req.params.questionId,
+      studentId: user.student.id,
+      testId: test.id,
+      reason: parsed.data.reason,
+      note,
+    },
+  });
+  res.json({ ok: true, alreadyReported: false });
 });
 
 const submitSchema = z.object({

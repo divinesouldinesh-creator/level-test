@@ -1532,6 +1532,10 @@ router.post("/questions", async (req, res) => {
     numericTolerance: z.number().finite().min(0).optional(),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
     stemImageUrl: stemImageUrlSchema,
+    optionImageA: stemImageUrlSchema,
+    optionImageB: stemImageUrlSchema,
+    optionImageC: stemImageUrlSchema,
+    optionImageD: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -1558,12 +1562,105 @@ router.post("/questions", async (req, res) => {
       chapterTopicId: placement.chapterTopicId,
       ...normalized.fields,
       stemImageUrl: p.data.stemImageUrl || null,
+      optionImageA: p.data.optionImageA || null,
+      optionImageB: p.data.optionImageB || null,
+      optionImageC: p.data.optionImageC || null,
+      optionImageD: p.data.optionImageD || null,
       contentHash: hash,
       createdById: req.user!.sub,
       difficulty: p.data.difficulty ?? "MEDIUM",
     },
   });
   res.json(q);
+});
+
+router.get("/question-reports", async (req, res) => {
+  const statusRaw = typeof req.query.status === "string" ? req.query.status : "OPEN";
+  const status = statusRaw === "RESOLVED" || statusRaw === "DISMISSED" ? statusRaw : "OPEN";
+  const rows = await prisma.questionReport.findMany({
+    where: { status },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    include: {
+      student: { select: { fullName: true } },
+      test: {
+        select: {
+          subject: { select: { name: true } },
+          level: { select: { name: true } },
+        },
+      },
+      question: {
+        select: {
+          id: true,
+          type: true,
+          stem: true,
+          stemImageUrl: true,
+          optionA: true,
+          optionB: true,
+          optionC: true,
+          optionD: true,
+          optionImageA: true,
+          optionImageB: true,
+          optionImageC: true,
+          optionImageD: true,
+          correctOption: true,
+          correctNumeric: true,
+          numericTolerance: true,
+          difficulty: true,
+          topic: { select: { name: true } },
+        },
+      },
+    },
+  });
+  res.json(
+    rows.map((row) => ({
+      id: row.id,
+      reason: row.reason,
+      note: row.note,
+      createdAt: row.createdAt,
+      studentName: row.student.fullName,
+      subjectName: row.test.subject.name,
+      levelName: row.test.level?.name ?? null,
+      question: {
+        id: row.question.id,
+        type: row.question.type,
+        stem: row.question.stem,
+        stemImageUrl: row.question.stemImageUrl,
+        optionA: row.question.optionA,
+        optionB: row.question.optionB,
+        optionC: row.question.optionC,
+        optionD: row.question.optionD,
+        optionImageA: row.question.optionImageA,
+        optionImageB: row.question.optionImageB,
+        optionImageC: row.question.optionImageC,
+        optionImageD: row.question.optionImageD,
+        correctOption: row.question.correctOption,
+        correctNumeric: row.question.correctNumeric,
+        numericTolerance: row.question.numericTolerance,
+        difficulty: row.question.difficulty,
+        topicName: row.question.topic.name,
+      },
+    }))
+  );
+});
+
+router.post("/question-reports/close", async (req, res) => {
+  const parsed = z
+    .object({
+      questionId: z.string().min(1),
+      status: z.enum(["RESOLVED", "DISMISSED"]),
+    })
+    .safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid report update" });
+  const result = await prisma.questionReport.updateMany({
+    where: { questionId: parsed.data.questionId, status: "OPEN" },
+    data: {
+      status: parsed.data.status,
+      resolvedAt: new Date(),
+      resolvedById: req.user!.sub,
+    },
+  });
+  res.json({ ok: true, updated: result.count });
 });
 
 router.delete("/questions/:id", async (req, res) => {
@@ -1584,6 +1681,10 @@ router.patch("/questions/:id", async (req, res) => {
     numericTolerance: z.number().finite().min(0).optional(),
     difficulty: z.enum(["EASY", "MEDIUM", "HARD"]).optional(),
     stemImageUrl: stemImageUrlSchema,
+    optionImageA: stemImageUrlSchema,
+    optionImageB: stemImageUrlSchema,
+    optionImageC: stemImageUrlSchema,
+    optionImageD: stemImageUrlSchema,
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -1614,6 +1715,10 @@ router.patch("/questions/:id", async (req, res) => {
       ...normalized.fields,
       ...(p.data.difficulty !== undefined ? { difficulty: p.data.difficulty } : {}),
       ...(p.data.stemImageUrl !== undefined ? { stemImageUrl: p.data.stemImageUrl || null } : {}),
+      ...(p.data.optionImageA !== undefined ? { optionImageA: p.data.optionImageA || null } : {}),
+      ...(p.data.optionImageB !== undefined ? { optionImageB: p.data.optionImageB || null } : {}),
+      ...(p.data.optionImageC !== undefined ? { optionImageC: p.data.optionImageC || null } : {}),
+      ...(p.data.optionImageD !== undefined ? { optionImageD: p.data.optionImageD || null } : {}),
       contentHash: nextHash,
     },
   });
