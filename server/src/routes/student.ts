@@ -427,7 +427,7 @@ router.get("/subjects/:subjectId/chapters", async (req, res) => {
   const subjectId = req.params.subjectId;
   const allowed = await prisma.classSubject.findFirst({
     where: { classId: student.classId, subjectId },
-    include: { subject: { select: { id: true, name: true, testMode: true, chapterTestQuestionCount: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
+    include: { subject: { select: { id: true, name: true, testMode: true, chapterTestQuestionCount: true, chapterWeightByBank: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
   });
   if (!allowed) {
     res.status(403).json({ error: "Subject not available for your class" });
@@ -467,6 +467,7 @@ router.get("/subjects/:subjectId/chapters", async (req, res) => {
     subjectName: allowed.subject.name,
     testMode: allowed.subject.testMode,
     questionCount: allowed.subject.chapterTestQuestionCount,
+    weightByBank: allowed.subject.chapterWeightByBank,
     negativeMarking: allowed.subject.chapterNegativeMarking,
     wrongPenalty: allowed.subject.chapterNegativeMarking ? allowed.subject.chapterWrongPenalty : 0,
     chapters: chapters.map((c) => ({
@@ -570,7 +571,7 @@ router.post("/tests/start", async (req, res) => {
 
   const allowed = await prisma.classSubject.findFirst({
     where: { classId: student.classId, subjectId },
-    include: { subject: { select: { id: true, testMode: true, chapterTestQuestionCount: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
+    include: { subject: { select: { id: true, testMode: true, chapterTestQuestionCount: true, chapterWeightByBank: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
   });
   if (!allowed) {
     res.status(403).json({ error: "Subject not allowed" });
@@ -641,7 +642,8 @@ router.post("/tests/start", async (req, res) => {
       subjectId,
       requestedIds,
       total,
-      folderIds
+      folderIds,
+      allowed.subject.chapterWeightByBank
     );
     if (questionIds.length === 0) {
       res.status(400).json({ error: "No questions available for the selected chapters", warnings });

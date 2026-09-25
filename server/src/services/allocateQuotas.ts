@@ -47,3 +47,26 @@ export function allocateQuestionCounts(
 
   return out;
 }
+
+/** Split `total` in proportion to positive weights. Counts sum to `total`. Zero-weight ids get 0. */
+export function allocateByWeights(total: number, weights: Map<string, number>): Map<string, number> {
+  const ids = [...weights.keys()];
+  const out = new Map<string, number>();
+  if (ids.length === 0 || total <= 0) return out;
+  const sum = ids.reduce((s, id) => s + Math.max(0, weights.get(id) ?? 0), 0);
+  if (sum <= 0) return allocateQuestionCounts(total, ids, new Map(ids.map((id) => [id, null])));
+
+  const parts = ids.map((id) => {
+    const exact = (Math.max(0, weights.get(id) ?? 0) / sum) * total;
+    const base = Math.floor(exact);
+    return { id, base, frac: exact - base };
+  });
+  parts.sort((a, b) => b.frac - a.frac || a.id.localeCompare(b.id));
+  let left = total - parts.reduce((s, p) => s + p.base, 0);
+  for (const p of parts) {
+    const add = left > 0 ? 1 : 0;
+    if (left > 0) left -= 1;
+    out.set(p.id, p.base + add);
+  }
+  return out;
+}

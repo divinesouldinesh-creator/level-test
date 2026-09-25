@@ -1274,6 +1274,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
     areaId: z.string().nullable().optional(),
     testMode: subjectTestModeSchema.optional(),
     chapterTestQuestionCount: z.number().int().positive().max(100).optional(),
+    chapterWeightByBank: z.boolean().optional(),
     chapterNegativeMarking: z.boolean().optional(),
     chapterWrongPenalty: z.number().finite().min(0).max(1).optional(),
   });
@@ -1307,6 +1308,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
       ...(p.data.chapterTestQuestionCount !== undefined
         ? { chapterTestQuestionCount: p.data.chapterTestQuestionCount }
         : {}),
+      ...(p.data.chapterWeightByBank !== undefined ? { chapterWeightByBank: p.data.chapterWeightByBank } : {}),
       ...(p.data.chapterNegativeMarking !== undefined
         ? { chapterNegativeMarking: p.data.chapterNegativeMarking }
         : {}),

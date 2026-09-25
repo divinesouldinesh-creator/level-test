@@ -23,6 +23,7 @@ type ChapterPayload = {
   subjectId: string;
   subjectName: string;
   questionCount: number;
+  weightByBank?: boolean;
   negativeMarking?: boolean;
   wrongPenalty?: number;
   chapters: ChapterRow[];
@@ -268,7 +269,11 @@ function StudentChapterPicker({
       <p className="mt-1 text-slate-600">Tick chapters, or open a chapter and tick topics, then start the test.</p>
       {payload ? (
         <p className="mt-1 text-sm text-slate-500">
-          Each test has {payload.questionCount} questions from the chapters you tick. You can skip questions
+          Each test has {payload.questionCount} questions from the chapters you tick.
+          {payload.weightByBank
+            ? " Chapters and topics with more questions in the bank contribute more of the test."
+            : ""}{" "}
+          You can skip questions
           (blank = 0).
           {payload.negativeMarking && (payload.wrongPenalty ?? 0) > 0
             ? ` Wrong answers: −${payload.wrongPenalty} marks each. Marks can go below 0.`

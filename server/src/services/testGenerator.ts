@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { allocateQuestionCounts } from "./allocateQuotas.js";
+import { allocateByWeights, allocateQuestionCounts } from "./allocateQuotas.js";
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -89,7 +89,8 @@ export async function pickQuestionsForChapterTest(
   subjectId: string,
   topicIds: string[],
   total: number,
-  chapterTopicIds: string[] = []
+  chapterTopicIds: string[] = [],
+  weightByBank = false
 ): Promise<{ questionIds: string[]; warnings: string[] }> {
   const warnings: string[] = [];
   const uniqueChapterIds = [...new Set(topicIds.filter(Boolean))];
@@ -136,9 +137,18 @@ export async function pickQuestionsForChapterTest(
   for (const row of chapterTopics) nameByKey.set(`tp:${row.id}`, row.name);
 
   const unitKeys = units.map((u) => u.key);
-  const quotas = new Map<string, number | null>();
-  for (const key of unitKeys) quotas.set(key, null);
-  const counts = allocateQuestionCounts(total, unitKeys, quotas);
+  let counts: Map<string, number>;
+  if (weightByBank) {
+    const weights = new Map<string, number>();
+    for (const unit of units) {
+      weights.set(unit.key, await prisma.question.count({ where: unit.where }));
+    }
+    counts = allocateByWeights(total, weights);
+  } else {
+    const quotas = new Map<string, number | null>();
+    for (const key of unitKeys) quotas.set(key, null);
+    counts = allocateQuestionCounts(total, unitKeys, quotas);
+  }
   let sum = 0;
   for (const n of counts.values()) sum += n;
   if (sum !== total) {

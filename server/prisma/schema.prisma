@@ -266,6 +266,8 @@ model Subject {
   /// LEVEL = existing skill tests. CHAPTER = book chapters, no unlock ladder.
   testMode                 SubjectTestMode @default(LEVEL) @map("test_mode")
   chapterTestQuestionCount Int             @default(10) @map("chapter_test_question_count")
+  /// When on, a chapter test draws more questions from chapters/topics with a larger bank.
+  chapterWeightByBank      Boolean         @default(false) @map("chapter_weight_by_bank")
   chapterNegativeMarking   Boolean         @default(false) @map("chapter_negative_marking")
   /// Marks subtracted per wrong answer when chapterNegativeMarking is on (e.g. 0.25).
   chapterWrongPenalty      Float           @default(0.25) @map("chapter_wrong_penalty")

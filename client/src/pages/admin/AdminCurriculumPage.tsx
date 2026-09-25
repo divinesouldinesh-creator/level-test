@@ -44,6 +44,7 @@ type CurriculumSubject = {
   areaId: string | null;
   testMode?: "LEVEL" | "CHAPTER";
   chapterTestQuestionCount?: number;
+  chapterWeightByBank?: boolean;
   chapterNegativeMarking?: boolean;
   chapterWrongPenalty?: number;
   area: { id: string; name: string; code: string | null } | null;
@@ -1089,14 +1090,16 @@ function BranchChapterPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [qCount, setQCount] = useState(String(subject.chapterTestQuestionCount ?? 10));
+  const [weightByBank, setWeightByBank] = useState(Boolean(subject.chapterWeightByBank));
   const [negativeMarking, setNegativeMarking] = useState(Boolean(subject.chapterNegativeMarking));
   const [penalty, setPenalty] = useState(String(subject.chapterWrongPenalty ?? 0.25));
 
   useEffect(() => {
     setQCount(String(subject.chapterTestQuestionCount ?? 10));
+    setWeightByBank(Boolean(subject.chapterWeightByBank));
     setNegativeMarking(Boolean(subject.chapterNegativeMarking));
     setPenalty(String(subject.chapterWrongPenalty ?? 0.25));
-  }, [subject.chapterTestQuestionCount, subject.chapterNegativeMarking, subject.chapterWrongPenalty]);
+  }, [subject.chapterTestQuestionCount, subject.chapterWeightByBank, subject.chapterNegativeMarking, subject.chapterWrongPenalty]);
 
   const chapters = subject.chapters ?? [];
 
@@ -1134,6 +1137,7 @@ function BranchChapterPanel({
       method: "PATCH",
       json: {
         chapterTestQuestionCount: n,
+        chapterWeightByBank: weightByBank,
         chapterNegativeMarking: negativeMarking,
         chapterWrongPenalty: Number.isFinite(p) ? p : 0.25,
       },
@@ -1193,6 +1197,15 @@ function BranchChapterPanel({
             onChange={(e) => setQCount(e.target.value)}
             disabled={busy}
           />
+        </label>
+        <label className="flex items-center gap-2 text-sm pb-2 max-w-md">
+          <input
+            type="checkbox"
+            checked={weightByBank}
+            onChange={(e) => setWeightByBank(e.target.checked)}
+            disabled={busy}
+          />
+          More questions from larger banks
         </label>
         <label className="flex items-center gap-2 text-sm pb-2">
           <input

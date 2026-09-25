@@ -24,6 +24,7 @@
     "db:ensure-chapter-topics": "tsx scripts/ensure-chapter-topics.ts",
     "db:ensure-question-reports": "tsx scripts/ensure-question-reports.ts",
     "db:ensure-option-images": "tsx scripts/ensure-option-images.ts",
+    "db:ensure-chapter-weight": "tsx scripts/ensure-chapter-weight-by-bank.ts",
     "db:ensure-holidays": "tsx scripts/ensure-school-holidays.ts",
     "postinstall": "prisma generate"
   },
