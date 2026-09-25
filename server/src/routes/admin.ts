@@ -4,7 +4,6 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
-import * as XLSX from "xlsx";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
@@ -16,9 +15,15 @@ import {
 } from "../schemas/attendanceReportQuery.js";
 import { updateStudentNameSchema } from "../schemas/student.js";
 import { questionContentHash } from "../utils/questionHash.js";
-import { extractTextFromDocx, parseQuestionBlocks, parseDifficulty, type ParsedQuestion } from "../services/wordImport.js";
-import { parseNumericInput, parseQuestionType, questionAnswerKey } from "../services/questionAnswer.js";
+import {
+  extractTextFromDocx,
+  parseQuestionDocument,
+  parseDifficulty,
+  type ParsedQuestion,
+} from "../services/wordImport.js";
+import { questionAnswerKey } from "../services/questionAnswer.js";
 import { persistParsedQuestions, normalizeQuestionFields } from "../services/questionPersist.js";
+import { parseQuestionSheetWithImages } from "../services/sheetQuestionImport.js";
 import {
   buildRowsFromUpload,
   classLabelForDisplay,
@@ -43,6 +48,7 @@ import {
   upsertHolidayException,
 } from "../services/schoolHolidays.js";
 import feesRoutes from "./fees.js";
+import { todayLoginCompletionCounts } from "../services/studentEngagement.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("ADMIN", "OFFICE"));
@@ -127,8 +133,47 @@ if (!fs.existsSync(schoolUploadDir)) {
 
 const upload = multer({
   dest: uploadDir,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
+
+function withSingleUpload(field: string) {
+  return (req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) => {
+    upload.single(field)(req, res, (err: unknown) => {
+      if (!err) {
+        next();
+        return;
+      }
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        res.status(400).json({ error: "File is too large (max 15 MB)" });
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Upload failed";
+      res.status(400).json({ error: message });
+    });
+  };
+}
+
+const sheetUpload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 40 * 1024 * 1024 },
+});
+
+function withSheetUpload(field: string) {
+  return (req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) => {
+    sheetUpload.single(field)(req, res, (err: unknown) => {
+      if (!err) {
+        next();
+        return;
+      }
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        res.status(400).json({ error: "File is too large (max 40 MB)" });
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Upload failed";
+      res.status(400).json({ error: message });
+    });
+  };
+}
 
 const imageUpload = multer({
   storage: multer.diskStorage({
@@ -213,122 +258,12 @@ async function resolveQuestionPlacement(
   return { ok: true, subjectId, topicId, levelId };
 }
 
-function normHeader(s: string): string {
-  return s.trim().toLowerCase().replace(/[\s_]+/g, "");
-}
-
-function letterIndex(answer: string): number | null {
-  const letter = answer.trim().toUpperCase()[0] ?? "";
-  const idx = letter.charCodeAt(0) - 65;
-  if (idx < 0 || idx > 3) return null;
-  return idx;
-}
-
-function parseQuestionSheetBuffer(buf: Buffer): ParsedQuestion[] {
-  const wb = XLSX.read(buf, { type: "buffer" });
-  if (!wb.SheetNames.length) throw new Error("Empty workbook");
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-  const out: ParsedQuestion[] = [];
-  for (let i = 0; i < rawRows.length; i++) {
-    const raw = rawRows[i];
-    const mapped = new Map<string, string>();
-    for (const [k, v] of Object.entries(raw)) mapped.set(normHeader(String(k)), String(v ?? "").trim());
-    const stem = mapped.get("question") ?? mapped.get("stem") ?? "";
-    const optionA = mapped.get("optiona") ?? mapped.get("a") ?? "";
-    const optionB = mapped.get("optionb") ?? mapped.get("b") ?? "";
-    const optionC = mapped.get("optionc") ?? mapped.get("c") ?? "";
-    const optionD = mapped.get("optiond") ?? mapped.get("d") ?? "";
-    const answerOriginal = (mapped.get("answer") ?? "").trim();
-    const typeRaw = mapped.get("type") ?? mapped.get("questiontype") ?? "";
-    if (!stem && !optionA && !optionB && !optionC && !optionD && !answerOriginal && !typeRaw) continue;
-    if (!stem || !answerOriginal) {
-      throw new Error(`Row ${i + 2}: question and answer are required`);
-    }
-    const diffRaw = (mapped.get("difficulty") ?? "").trim().toUpperCase();
-    const difficulty: "EASY" | "MEDIUM" | "HARD" | undefined =
-      diffRaw === "EASY" || diffRaw === "E"
-        ? "EASY"
-        : diffRaw === "HARD" || diffRaw === "H"
-          ? "HARD"
-          : diffRaw === "MEDIUM" || diffRaw === "M"
-            ? "MEDIUM"
-            : undefined;
-    const declared = parseQuestionType(typeRaw);
-    const numeric = parseNumericInput(answerOriginal);
-    const letter = letterIndex(answerOriginal);
-    const inferred =
-      declared ??
-      (numeric != null && !optionA && !optionB && !optionC && !optionD
-        ? "NUMERIC"
-        : optionA && optionB && !optionC && !optionD && letter != null && letter <= 1
-          ? "MCQ2"
-          : "MCQ");
-    const tolerance = parseNumericInput(mapped.get("tolerance") ?? mapped.get("tol") ?? "") ?? 0;
-    if (inferred === "NUMERIC") {
-      if (numeric == null) throw new Error(`Row ${i + 2}: numeric answer required`);
-      out.push({
-        type: "NUMERIC",
-        stem,
-        optionA: "",
-        optionB: "",
-        optionC: "",
-        optionD: "",
-        correctOption: 0,
-        correctNumeric: numeric,
-        numericTolerance: Math.max(0, tolerance),
-        difficulty,
-      });
-      continue;
-    }
-    if (inferred === "MCQ2") {
-      if (!optionA || !optionB) throw new Error(`Row ${i + 2}: optionA and optionB are required`);
-      if (letter == null || letter > 1) throw new Error(`Row ${i + 2}: answer must be A or B`);
-      out.push({
-        type: "MCQ2",
-        stem,
-        optionA,
-        optionB,
-        optionC: "",
-        optionD: "",
-        correctOption: letter,
-        correctNumeric: null,
-        numericTolerance: 0,
-        difficulty,
-      });
-      continue;
-    }
-    if (!optionA || !optionB || !optionC || !optionD) {
-      throw new Error(`Row ${i + 2}: question, optionA-D and answer are required`);
-    }
-    if (letter == null) throw new Error(`Row ${i + 2}: answer must be A/B/C/D`);
-    out.push({
-      type: "MCQ",
-      stem,
-      optionA,
-      optionB,
-      optionC,
-      optionD,
-      correctOption: letter,
-      correctNumeric: null,
-      numericTolerance: 0,
-      difficulty,
-    });
-  }
-  if (!out.length) throw new Error("No valid question rows found in file");
-  return out;
-}
-
 // --- Dashboard ---
 router.get("/dashboard/summary", async (_req, res) => {
   const activeWindowDays = 30;
   const activeSince = new Date(Date.now() - activeWindowDays * 24 * 60 * 60 * 1000);
-  const [topicRows, classRows, studentCount, studentsUsedRecently, activeClassRows, classes] =
+  const [classRows, studentCount, studentsUsedRecently, activeClassRows, classes, todayLogin] =
     await Promise.all([
-      prisma.topicPerformance.groupBy({
-        by: ["topicId"],
-        _sum: { correctTotal: true, attemptedTotal: true },
-      }),
       prisma.student.groupBy({
         by: ["classId"],
         _count: { _all: true },
@@ -350,32 +285,16 @@ router.get("/dashboard/summary", async (_req, res) => {
         _count: { _all: true },
       }),
       prisma.schoolClass.findMany({ select: { id: true, name: true } }),
+      todayLoginCompletionCounts(prisma).catch((err) => {
+        console.error("today login completion counts failed", err);
+        return {
+          dayKey: "",
+          loggedIn: 0,
+          completed: 0,
+          leftWithoutCompleting: 0,
+        };
+      }),
     ]);
-
-  const ranked = topicRows
-    .map((r) => {
-      const att = r._sum.attemptedTotal ?? 0;
-      const cor = r._sum.correctTotal ?? 0;
-      const pct = att ? (100 * cor) / att : 0;
-      return { topicId: r.topicId, avgPercentage: Math.round(pct * 10) / 10 };
-    })
-    .sort((a, b) => a.avgPercentage - b.avgPercentage);
-  const weakestSlice = ranked.slice(0, 10);
-  const strongestSlice = [...ranked].sort((a, b) => b.avgPercentage - a.avgPercentage).slice(0, 10);
-  const topicIds = [...new Set([...weakestSlice, ...strongestSlice].map((t) => t.topicId))];
-  const topics = topicIds.length
-    ? await prisma.topic.findMany({
-        where: { id: { in: topicIds } },
-        select: { id: true, name: true },
-      })
-    : [];
-  const topicMap = new Map(topics.map((t) => [t.id, t.name]));
-  const withNames = (rows: typeof weakestSlice) =>
-    rows.map((r) => ({
-      topicId: r.topicId,
-      name: topicMap.get(r.topicId),
-      avgPercentage: r.avgPercentage,
-    }));
 
   const classMap = new Map(classes.map((c) => [c.id, c.name]));
   const classAgg = classRows.map((c) => ({
@@ -392,13 +311,16 @@ router.get("/dashboard/summary", async (_req, res) => {
   }));
 
   res.json({
-    weakestTopics: withNames(weakestSlice),
-    strongestTopics: withNames(strongestSlice),
-    classSizes: classAgg,
     studentCount,
     activeWindowDays,
     studentsUsedRecentlyCount: studentsUsedRecently.length,
     classActivity,
+    today: {
+      dayKey: todayLogin.dayKey,
+      loggedIn: todayLogin.loggedIn,
+      completed: todayLogin.completed,
+      leftWithoutCompleting: todayLogin.leftWithoutCompleting,
+    },
   });
 });
 
@@ -1495,7 +1417,7 @@ router.get("/questions", async (req, res) => {
   const list = await prisma.question.findMany({
     where,
     take: 5000,
-    orderBy: { createdAt: "desc" },
+    orderBy: { createdAt: "asc" },
     include: { topic: true, level: true, subject: true },
   });
   res.json(list);
@@ -1604,7 +1526,7 @@ router.patch("/questions/:id", async (req, res) => {
 });
 
 // --- Word import ---
-router.post("/questions/import", upload.single("file"), async (req, res) => {
+router.post("/questions/import", withSingleUpload("file"), async (req, res) => {
   const schema = z.object({
     subjectId: z.string(),
     levelId: z.string().optional(),
@@ -1629,6 +1551,11 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
   }
 
   const originalname = req.file.originalname;
+  if (/\.doc$/i.test(originalname) && !/\.docx$/i.test(originalname)) {
+    fs.unlink(req.file.path, () => {});
+    res.status(400).json({ error: "Upload a .docx file (the older .doc format is not supported)." });
+    return;
+  }
   const buf = fs.readFileSync(req.file.path);
   fs.unlink(req.file.path, () => {});
 
@@ -1640,11 +1567,20 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
     return;
   }
 
-  const parsed = parseQuestionBlocks(text);
+  const parsedDoc = parseQuestionDocument(text);
+  if (!parsedDoc.questions.length) {
+    res.status(400).json({
+      error:
+        parsedDoc.warnings[0] ??
+        "No questions found in the Word file. Use stems like 1. or Q1., options A–D or (1)–(4), and Answer: B or an Answer Key at the end.",
+      warnings: parsedDoc.warnings,
+    });
+    return;
+  }
   const modeRaw = String(req.body.mode ?? "insert").toLowerCase();
   const mode = modeRaw === "sync" || modeRaw === "replace" ? modeRaw : "insert";
   const result = await persistParsedQuestions(prisma, {
-    parsed,
+    parsed: parsedDoc.questions,
     subjectId: placement.subjectId,
     levelId: placement.levelId,
     topicId: placement.topicId,
@@ -1654,7 +1590,11 @@ router.post("/questions/import", upload.single("file"), async (req, res) => {
     filename: originalname,
     recordBatch: true,
   });
-  res.json(result);
+  res.json({
+    ...result,
+    warnings: parsedDoc.warnings,
+    errors: [...parsedDoc.warnings, ...(result.errors ?? [])],
+  });
 });
 
 // --- Paste-text import ---
@@ -1671,12 +1611,14 @@ router.post("/questions/import-text", async (req, res) => {
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
 
-  const parsed = parseQuestionBlocks(p.data.text);
+  const parsedDoc = parseQuestionDocument(p.data.text);
+  const parsed = parsedDoc.questions;
   if (p.data.dryRun) {
     res.json({
       dryRun: true,
       parseCount: parsed.length,
       questions: parsed,
+      warnings: parsedDoc.warnings,
     });
     return;
   }
@@ -1703,7 +1645,9 @@ router.post("/questions/import-text", async (req, res) => {
 });
 
 // --- Excel/CSV import ---
-router.post("/questions/import-sheet", upload.single("file"), async (req, res) => {
+router.post("/questions/import-sheet", withSheetUpload("file"), async (req, res) => {
+  req.setTimeout(10 * 60 * 1000);
+  res.setTimeout(10 * 60 * 1000);
   const schema = z.object({
     subjectId: z.string(),
     levelId: z.string().optional(),
@@ -1729,8 +1673,11 @@ router.post("/questions/import-sheet", upload.single("file"), async (req, res) =
   const buf = fs.readFileSync(req.file.path);
   fs.unlink(req.file.path, () => {});
   let parsed: ParsedQuestion[];
+  let imagesAttached = 0;
   try {
-    parsed = parseQuestionSheetBuffer(buf);
+    const sheet = await parseQuestionSheetWithImages(buf, questionsUploadDir);
+    parsed = sheet.questions;
+    imagesAttached = sheet.imagesAttached;
   } catch (e) {
     res.status(400).json({ error: String(e) });
     return;
@@ -1745,7 +1692,7 @@ router.post("/questions/import-sheet", upload.single("file"), async (req, res) =
     defaultDifficulty: parseDifficulty(p.data.difficulty),
     createdById: req.user!.sub,
   });
-  res.json(result);
+  res.json({ ...result, imagesAttached });
 });
 
 // --- Student account management ---

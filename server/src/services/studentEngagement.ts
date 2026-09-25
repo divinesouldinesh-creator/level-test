@@ -1,5 +1,5 @@
 import { PrismaClient, XpReason } from "@prisma/client";
-import { daysBetweenIst, istDayKey, previousIstDayKey } from "./engagementCalendar.js";
+import { daysBetweenIst, istDayKey, istDayUtcRange, previousIstDayKey } from "./engagementCalendar.js";
 
 export const XP_CHECK_IN = 5;
 export const XP_CHALLENGE_COMPLETE = 15;
@@ -173,6 +173,73 @@ export async function awardDailyChallengeXp(
     daysSinceLastPractice: engagement.lastPracticeDay
       ? daysBetweenIst(engagement.lastPracticeDay, today)
       : null,
+  };
+}
+
+/** Stamp the IST calendar day a student logged in. Idempotent within the same day. */
+export async function recordStudentLogin(prisma: PrismaClient, studentId: string) {
+  const today = istDayKey();
+  const engagement = await ensureEngagement(prisma, studentId);
+  if (engagement.lastLoginDay === today) return;
+  await prisma.studentEngagement.update({
+    where: { studentId },
+    data: { lastLoginDay: today },
+  });
+}
+
+/** Admin dashboard totals only: logged in today vs completed vs left without completing. */
+export async function todayLoginCompletionCounts(prisma: PrismaClient) {
+  const today = istDayKey();
+  const range = istDayUtcRange(today);
+  const loggedInRows = await prisma.studentEngagement.findMany({
+    where: { lastLoginDay: today },
+    select: { studentId: true },
+  });
+  const loggedInIds = loggedInRows.map((r) => r.studentId);
+  const loggedIn = loggedInIds.length;
+  if (!loggedIn || !range) {
+    return { dayKey: today, loggedIn: 0, completed: 0, leftWithoutCompleting: 0 };
+  }
+
+  const [tests, challenges, mastery] = await Promise.all([
+    prisma.test.findMany({
+      where: {
+        status: "COMPLETED",
+        studentId: { in: loggedInIds },
+        completedAt: { gte: range.start, lt: range.end },
+      },
+      distinct: ["studentId"],
+      select: { studentId: true },
+    }),
+    prisma.dailyChallenge.findMany({
+      where: {
+        status: "COMPLETED",
+        dayKey: today,
+        studentId: { in: loggedInIds },
+      },
+      select: { studentId: true },
+    }),
+    prisma.masterySession.findMany({
+      where: {
+        status: "COMPLETED",
+        studentId: { in: loggedInIds },
+        completedAt: { gte: range.start, lt: range.end },
+      },
+      distinct: ["studentId"],
+      select: { studentId: true },
+    }),
+  ]);
+
+  const completedSet = new Set<string>();
+  for (const row of tests) completedSet.add(row.studentId);
+  for (const row of challenges) completedSet.add(row.studentId);
+  for (const row of mastery) completedSet.add(row.studentId);
+  const completed = completedSet.size;
+  return {
+    dayKey: today,
+    loggedIn,
+    completed,
+    leftWithoutCompleting: loggedIn - completed,
   };
 }
 

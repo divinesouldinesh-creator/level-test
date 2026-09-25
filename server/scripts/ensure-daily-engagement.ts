@@ -114,6 +114,13 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$`);
   }
 
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "StudentEngagement" ADD COLUMN IF NOT EXISTS "last_login_day" TEXT`
+  );
+  await prisma.$executeRawUnsafe(
+    `CREATE INDEX IF NOT EXISTS "StudentEngagement_last_login_day_idx" ON "StudentEngagement"("last_login_day")`
+  );
+
   const migrationName = "20260902153000_student_daily_engagement";
   const existing = await prisma.$queryRaw<{ migration_name: string }[]>`
     SELECT migration_name FROM "_prisma_migrations" WHERE migration_name = ${migrationName}
@@ -131,6 +138,24 @@ END $$`);
       VALUES (${id}, ${checksum}, ${now}, ${migrationName}, NULL, NULL, ${now}, 1)
     `;
     console.log("Recorded migration:", migrationName);
+  }
+
+  const loginMigration = "20260921080000_student_last_login_day";
+  const loginExisting = await prisma.$queryRaw<{ migration_name: string }[]>`
+    SELECT migration_name FROM "_prisma_migrations" WHERE migration_name = ${loginMigration}
+  `;
+  if (loginExisting.length === 0) {
+    const sqlPath = path.join(__dirname, `../prisma/migrations/${loginMigration}/migration.sql`);
+    if (fs.existsSync(sqlPath)) {
+      const checksum = createHash("sha256").update(fs.readFileSync(sqlPath, "utf8")).digest("hex");
+      const id = randomUUID();
+      const now = new Date();
+      await prisma.$executeRaw`
+        INSERT INTO "_prisma_migrations" (id, checksum, finished_at, migration_name, logs, rolled_back_at, started_at, applied_steps_count)
+        VALUES (${id}, ${checksum}, ${now}, ${loginMigration}, NULL, NULL, ${now}, 1)
+      `;
+      console.log("Recorded migration:", loginMigration);
+    }
   }
 
   console.log("Daily engagement tables ready.");

@@ -40,6 +40,7 @@ type ImportResult = {
   skipped: number;
   parseCount: number;
   errors: string[];
+  imagesAttached?: number;
 };
 
 type ParsedQuestionPreview = {
@@ -421,18 +422,25 @@ export function AdminQuestionBankPage() {
         body: fd,
       });
       const text = await res.text();
-      const data = text ? (JSON.parse(text) as ImportResult | { error?: string }) : null;
+      let data: ImportResult | { error?: string } | null = null;
+      try {
+        data = text ? (JSON.parse(text) as ImportResult | { error?: string }) : null;
+      } catch {
+        data = null;
+      }
       if (!res.ok) {
         const msg =
           data && typeof data === "object" && "error" in data && typeof data.error === "string"
             ? data.error
-            : "Sheet import failed";
+            : "Sheet import failed. Keep the file closed in Excel, use .xlsx, and try again.";
         setErr(msg);
         return;
       }
       const result = data as ImportResult;
       setImportMsg(
-        `Sheet upload completed. Mode ${result.mode}: imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} (parsed ${result.parseCount}).`
+        `Sheet upload completed. Mode ${result.mode}: imported ${result.imported}, updated ${result.updated}, skipped ${result.skipped} (parsed ${result.parseCount})${
+          result.imagesAttached ? `, diagrams ${result.imagesAttached}` : ""
+        }.`
       );
       if (result.errors?.length) setImportErrors(result.errors);
       await loadQuestions(topicId, subjectId, apiLevelId);
@@ -591,10 +599,10 @@ export function AdminQuestionBankPage() {
   async function downloadQuestionTemplate() {
     const XLSX = await import("xlsx");
     const rows = [
-      ["type", "question", "optionA", "optionB", "optionC", "optionD", "answer", "tolerance", "difficulty"],
-      ["MCQ", "Find the distance between (2,3) and (6,6).", "3", "4", "5", "6", "C", "", "MEDIUM"],
-      ["MCQ2", "Water boils at 100°C at sea level.", "True", "False", "", "", "A", "", "EASY"],
-      ["NUMERIC", "What is 7 × 8?", "", "", "", "", "56", "0", "MEDIUM"],
+      ["type", "question", "optionA", "optionB", "optionC", "optionD", "answer", "tolerance", "difficulty", "diagram"],
+      ["MCQ", "Find the distance between (2,3) and (6,6).", "3", "4", "5", "6", "C", "", "MEDIUM", ""],
+      ["MCQ2", "Water boils at 100°C at sea level.", "True", "False", "", "", "A", "", "EASY", ""],
+      ["NUMERIC", "What is 7 × 8?", "", "", "", "", "56", "0", "MEDIUM", ""],
     ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -800,9 +808,10 @@ export function AdminQuestionBankPage() {
           <span className="text-xs text-slate-500">English / Hindi / mixed math — Unicode preserved</span>
         </div>
         <p className="mt-1 text-sm text-slate-600">
-          Paste questions separated by a blank line. Supported types: 4-option MCQ, 2-option (A/B only), and numeric.
-          Labels: <code>Q1.</code> / <code>Question 1.</code> / <code>प्रश्न १.</code> / <code>1.</code>; options{" "}
-          <code>A) B) C) D)</code> or just <code>A) B)</code>; <code>Type: NUMERIC</code> with{" "}
+          Paste questions separated by a blank line — or as a continuous paper with an Answer Key at the end.
+          Supported types: 4-option MCQ, 2-option (A/B only), and numeric. Labels: <code>Q1.</code> /{" "}
+          <code>Question 1.</code> / <code>प्रश्न १.</code> / <code>1.</code>; options <code>A) B) C) D)</code>,{" "}
+          <code>(1) (2) (3) (4)</code>, or just <code>A) B)</code>; <code>Type: NUMERIC</code> with{" "}
           <code>Answer: 56</code>; answers <code>Answer:</code> / <code>Ans:</code> / <code>उत्तर:</code>.
         </p>
         <textarea
@@ -1106,10 +1115,11 @@ export function AdminQuestionBankPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Import from Excel / CSV</h2>
           <p className="text-xs text-slate-500 mt-1">
-            Columns: <span className="font-mono">type, question, optionA-D, answer, tolerance, difficulty</span>.
+            Columns: <span className="font-mono">type, question, optionA-D, answer, tolerance, difficulty, diagram</span>.
             Type is <span className="font-mono">MCQ</span>, <span className="font-mono">MCQ2</span>, or{" "}
             <span className="font-mono">NUMERIC</span>. Leave type blank to infer. 2-option rows use A/B only. Numeric
-            rows use a number in answer.
+            rows use a number in answer. For figures, use <span className="font-mono">.xlsx</span> (not CSV) and insert
+            the picture in the <span className="font-mono">diagram</span> column on that question’s row.
           </p>
           <button
             type="button"
@@ -1121,11 +1131,12 @@ export function AdminQuestionBankPage() {
           <form onSubmit={importSheet} className="mt-3 space-y-3">
             <input
               type="file"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
               onChange={(e) => setSheetFile(e.target.files?.[0] ?? null)}
               disabled={busy}
               className="block text-sm"
             />
+            {sheetFile ? <p className="text-xs text-slate-600">Selected: {sheetFile.name}</p> : null}
             <label className="inline-flex items-center gap-2 text-sm">
               <input type="checkbox" checked={syncMode} onChange={(e) => setSyncMode(e.target.checked)} />
               Auto-update existing questions (best mode)
@@ -1146,13 +1157,21 @@ export function AdminQuestionBankPage() {
             >
               {importing ? "Uploading..." : "Upload Excel/CSV"}
             </button>
+            {!bankReady && (
+              <span className="ml-2 text-xs text-amber-700">
+                {isChapterMode ? "Select subject and chapter above first." : "Select subject, level, and topic above first."}
+              </span>
+            )}
           </form>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Import from Word (.docx)</h2>
           <p className="text-xs text-slate-500 mt-1">
+            Real papers work: questions can be 1. 2. 3. without blank lines; options A–D, (a)–(d), (1)–(4), or
+            (i)–(iv); answers on each question (<code>Answer: B</code>) or an <code>Answer Key</code> at the end.
             Sync updates matching questions in this topic by stem. Replace clears this topic bank first, then imports.
+            Use .docx (not .doc), max 15 MB.
           </p>
           <form onSubmit={importDocx} className="mt-3 space-y-3">
             <input

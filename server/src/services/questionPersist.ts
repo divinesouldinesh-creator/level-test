@@ -114,6 +114,7 @@ export function parsedQuestionWriteData(
     correctNumeric: pq.type === "NUMERIC" ? pq.correctNumeric : null,
     numericTolerance: pq.type === "NUMERIC" ? pq.numericTolerance : 0,
     difficulty,
+    ...(pq.stemImageUrl !== undefined ? { stemImageUrl: pq.stemImageUrl || null } : {}),
     contentHash: questionContentHash(ids.topicId, pq.stem, questionAnswerKey(pq)),
   };
 }

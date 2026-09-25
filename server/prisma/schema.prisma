@@ -181,9 +181,12 @@ model StudentEngagement {
   /// YYYY-MM-DD (IST calendar day)
   lastCheckInDay     String?   @map("last_check_in_day")
   lastPracticeDay    String?   @map("last_practice_day")
+  lastLoginDay       String?   @map("last_login_day")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([lastLoginDay])
 }
 
 model XpEvent {

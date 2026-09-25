@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma, isDatabaseUnreachable } from "../lib/prisma.js";
 import { signToken, authMiddleware } from "../middleware/auth.js";
+import { recordStudentLogin } from "../services/studentEngagement.js";
 
 const router = Router();
 
@@ -110,6 +111,14 @@ router.post("/login", async (req, res) => {
     }
 
     const office = user.role === "OFFICE" ? await loadOfficeProfile(user.id) : null;
+
+    if (user.student?.id) {
+      try {
+        await recordStudentLogin(prisma, user.student.id);
+      } catch (loginErr) {
+        console.error("record student login failed", loginErr);
+      }
+    }
 
     const token = signToken(user.id, user.role);
     res.json({
