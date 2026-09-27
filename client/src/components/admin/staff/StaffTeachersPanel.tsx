@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api";
 import { useConfirmDialog } from "../../ConfirmDialog";
+import { ViewPasswordDialog } from "../ViewPasswordDialog";
 
 type TeacherRow = {
   id: string;
   userId: string;
   fullName: string;
   email: string;
+  password: string;
 };
 
 type ResetDialog = { teacherId: string; teacherName: string; password: string };
@@ -23,6 +25,7 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
   const confirmDialog = useConfirmDialog();
   const [toast, setToast] = useState<Toast | null>(null);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
+  const [viewTeacher, setViewTeacher] = useState<TeacherRow | null>(null);
 
   const showToast = useCallback((t: Toast) => {
     setToast(t);
@@ -109,6 +112,7 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
       message: `Password updated: ${r.data?.password ?? nextPassword}`,
     });
     setResetDialog(null);
+    await loadTeachers();
   }
 
   return (
@@ -117,7 +121,7 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Teachers</h1>
           <p className="text-slate-600 mt-1 text-sm md:text-base">
-            Create, reset password, and remove teacher accounts.
+            Create, view password, reset password, and remove teacher accounts.
           </p>
         </div>
       ) : null}
@@ -158,12 +162,18 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
         </button>
       </form>
 
+      <p className="text-xs text-slate-500">
+        View password shows the saved login for that teacher. Older accounts stay blank until they sign in once or you
+        reset the password.
+      </p>
+
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
             <tr>
               <th className="text-left p-3">Name</th>
               <th className="text-left p-3">Email</th>
+              <th className="text-left p-3">Password</th>
               <th className="text-right p-3">Actions</th>
             </tr>
           </thead>
@@ -172,8 +182,16 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
               <tr key={t.id} className="border-t border-slate-100">
                 <td className="p-3">{t.fullName}</td>
                 <td className="p-3">{t.email}</td>
+                <td className="p-3 font-mono text-xs">{t.password || "—"}</td>
                 <td className="p-3">
                   <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      onClick={() => setViewTeacher(t)}
+                    >
+                      View password
+                    </button>
                     <button
                       type="button"
                       className="rounded border border-slate-300 px-2 py-1 text-xs"
@@ -202,7 +220,7 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
             ))}
             {teachers.length === 0 ? (
               <tr>
-                <td className="p-3 text-slate-500" colSpan={3}>
+                <td className="p-3 text-slate-500" colSpan={4}>
                   No teachers yet.
                 </td>
               </tr>
@@ -261,6 +279,15 @@ export function StaffTeachersPanel({ heading = true }: { heading?: boolean }) {
           </div>
         </div>
       )}
+      {viewTeacher ? (
+        <ViewPasswordDialog
+          name={viewTeacher.fullName}
+          loginLabel="email"
+          login={viewTeacher.email}
+          password={viewTeacher.password}
+          onClose={() => setViewTeacher(null)}
+        />
+      ) : null}
       {confirmDialog.element}
     </div>
   );

@@ -122,10 +122,110 @@ export function istToday(): string {
 
 export function parseRupees(raw: string): number | null {
   const cleaned = raw.replace(/[₹,\s]/g, "").trim();
-  if (!cleaned) return null;
+  if (!cleaned) return 0;
   const n = Number(cleaned);
-  if (!Number.isInteger(n) || n < 0) return null;
-  return n;
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
+function normFeeKey(s: string): string {
+  return s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export type ParsedFeeStructureLine = {
+  className: string;
+  tuitionAmount: number;
+  transportAmount: number;
+  annualAmount: number;
+  admissionAmount: number;
+  examAmount: number;
+};
+
+function cellRupees(mapped: Map<string, string>, keys: string[]): number {
+  for (const key of keys) {
+    const raw = mapped.get(key);
+    if (raw == null || raw === "") continue;
+    const n = parseRupees(raw);
+    if (n != null) return n;
+  }
+  return 0;
+}
+
+/** Parse Excel/CSV rows: Class, Tuition, Transport, Annual, Admission, Exam. */
+export function parseFeeStructureSheet(rows: Record<string, unknown>[]): ParsedFeeStructureLine[] {
+  const out: ParsedFeeStructureLine[] = [];
+  for (const raw of rows) {
+    const mapped = new Map<string, string>();
+    for (const [k, v] of Object.entries(raw)) {
+      mapped.set(normFeeKey(String(k)), String(v ?? "").trim());
+    }
+    const className =
+      mapped.get("class") ??
+      mapped.get("classname") ??
+      mapped.get("classlabel") ??
+      mapped.get("grade") ??
+      mapped.get("classgrade") ??
+      "";
+    if (!className) continue;
+    out.push({
+      className,
+      tuitionAmount: cellRupees(mapped, ["tuition", "tuitionamount", "monthly", "monthlyfee", "fee"]),
+      transportAmount: cellRupees(mapped, ["transport", "transportamount", "van", "bus"]),
+      annualAmount: cellRupees(mapped, ["annual", "annualamount", "development"]),
+      admissionAmount: cellRupees(mapped, ["admission", "admissionamount"]),
+      examAmount: cellRupees(mapped, ["exam", "examamount", "examination"]),
+    });
+  }
+  if (!out.length) {
+    throw new Error("No class rows found. Use columns: Class, Tuition, Transport, Annual, Admission, Exam.");
+  }
+  return out;
+}
+
+export function matchFeeStructureClass(
+  classes: FeeStructureRow[],
+  fileClass: string
+): FeeStructureRow | undefined {
+  const want = normFeeKey(fileClass);
+  if (!want) return undefined;
+  return classes.find((c) => {
+    const names = [c.className, c.classLabel, `class${c.classLabel}`].map(normFeeKey);
+    return names.includes(want);
+  });
+}
+
+export function applyFeeStructureUpload(
+  current: FeeStructureRow[],
+  parsed: ParsedFeeStructureLine[]
+): { rows: FeeStructureRow[]; matched: number; unmatched: string[] } {
+  const next = current.map((row) => ({ ...row }));
+  const unmatched: string[] = [];
+  let matched = 0;
+  for (const line of parsed) {
+    const hit = matchFeeStructureClass(next, line.className);
+    if (!hit) {
+      unmatched.push(line.className);
+      continue;
+    }
+    matched += 1;
+    hit.tuitionAmount = line.tuitionAmount;
+    hit.transportAmount = line.transportAmount;
+    hit.annualAmount = line.annualAmount;
+    hit.admissionAmount = line.admissionAmount;
+    hit.examAmount = line.examAmount;
+  }
+  return { rows: next, matched, unmatched };
+}
+
+export function feeStructureTemplateCsv(rows: FeeStructureRow[]): string {
+  const header = "Class,Tuition,Transport,Annual,Admission,Exam";
+  const body = rows
+    .map(
+      (r) =>
+        `${r.classLabel || r.className},${r.tuitionAmount},${r.transportAmount},${r.annualAmount},${r.admissionAmount},${r.examAmount}`
+    )
+    .join("\n");
+  return `${header}\n${body || "1,3000,800,0,0,0"}`;
 }
 
 export function printFeeReceipt(params: {

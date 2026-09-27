@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ViewPasswordDialog } from "../ViewPasswordDialog";
 import { downloadCredentialsCsv, downloadCredentialsXlsx } from "./credentialExport";
 import type { StudentListRow } from "./types";
 import { openPrintWindow } from "./PrintCards";
@@ -53,6 +55,7 @@ export function StudentTable({
   total: number;
   onPage: (page: number) => void;
 }) {
+  const [viewing, setViewing] = useState<StudentListRow | null>(null);
   const selectedSet = new Set(selectedIds);
   const allVisibleSelected = rows.length > 0 && rows.every((row) => selectedSet.has(row.id));
   const someVisibleSelected = rows.some((row) => selectedSet.has(row.id));
@@ -234,6 +237,13 @@ export function StudentTable({
                       <button
                         type="button"
                         className="rounded-md border border-slate-200 px-2 py-1.5 text-xs font-medium hover:bg-slate-50"
+                        onClick={() => setViewing(row)}
+                      >
+                        View password
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-200 px-2 py-1.5 text-xs font-medium hover:bg-slate-50"
                         onClick={() => printOne(row)}
                       >
                         Print
@@ -309,6 +319,15 @@ export function StudentTable({
             </button>
           </div>
         </div>
+      ) : null}
+      {viewing ? (
+        <ViewPasswordDialog
+          name={viewing.fullName}
+          loginLabel="username"
+          login={viewing.username}
+          password={passwordHints[viewing.id] ?? viewing.password ?? ""}
+          onClose={() => setViewing(null)}
+        />
       ) : null}
     </div>
   );

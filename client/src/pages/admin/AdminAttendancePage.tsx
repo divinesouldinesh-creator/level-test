@@ -216,7 +216,8 @@ export function AdminAttendancePage() {
             <h2 className="text-lg font-semibold text-slate-900">Holidays</h2>
             <p className="mt-1 text-sm text-slate-600">
               Sundays and the 2nd Saturday are holidays by default. Change the weekly rule, add extra
-              closed days, or mark a holiday as a working day.
+              closed days, or mark a holiday as a working day. Teachers cannot mark attendance on a
+              holiday.
             </p>
           </div>
           <HolidaySettingsPanel />

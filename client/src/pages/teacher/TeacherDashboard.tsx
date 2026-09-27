@@ -21,6 +21,7 @@ type StudentRow = {
   className: string;
   currentLevel: string;
   latestScore: number | null;
+  marksHidden?: boolean;
   weakTopics: string[];
   strongTopics: string[];
   status: "RED" | "YELLOW" | "GREEN" | "NA";
@@ -28,7 +29,8 @@ type StudentRow = {
 };
 type StudentDetail = {
   student: { id: string; fullName: string; studentLoginId: string | null; className: string };
-  levelProgress: { subject: string; level: string; score: number | null; unlocked: boolean; lastAttemptAt: string | null }[];
+  marksHidden?: boolean;
+  levelProgress: { subject: string; level: string; score: number | null; marksHidden?: boolean; unlocked: boolean; lastAttemptAt: string | null }[];
   weakTopics: { topicName: string; percentage: number }[];
   strongTopics: { topicName: string; percentage: number }[];
   daysSinceLastActivity: number | null;
@@ -64,7 +66,11 @@ export function TeacherDashboard() {
   const [subjectId, setSubjectId] = useState<string>("seed-subject-math");
   const [status, setStatus] = useState<string>("ALL");
   const [selectedStudent, setSelectedStudent] = useState<StudentDetail | null>(null);
-  const [selectedTopic, setSelectedTopic] = useState<{ name: string; students: { studentName: string; percentage: number }[] } | null>(null);
+  const [selectedTopic, setSelectedTopic] = useState<{
+    name: string;
+    marksHidden?: boolean;
+    students: { studentName: string; percentage: number }[];
+  } | null>(null);
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchStudent[]>([]);
   const [searching, setSearching] = useState(false);
@@ -186,11 +192,15 @@ export function TeacherDashboard() {
 
   async function openTopic(topicId: string, topicName?: string) {
     const q = classId !== "ALL" ? `?classId=${encodeURIComponent(classId)}` : "";
-    const r = await api<{ students: { studentName: string; percentage: number }[] }>(
+    const r = await api<{ marksHidden?: boolean; students: { studentName: string; percentage: number }[] }>(
       `/api/v1/teacher/analytics/topic/${topicId}/weak-students${q}`
     );
     if (r.ok && r.data) {
-      setSelectedTopic({ name: topicName ?? "Topic", students: r.data.students });
+      setSelectedTopic({
+        name: topicName ?? "Topic",
+        marksHidden: r.data.marksHidden,
+        students: r.data.students,
+      });
     }
   }
 
@@ -400,11 +410,23 @@ export function TeacherDashboard() {
           <div className="mt-4 grid md:grid-cols-2 gap-4">
             <div>
               <p className="font-medium">Weak topics</p>
-              <p className="text-sm mt-1">{selectedStudent.weakTopics.length ? selectedStudent.weakTopics.map((w) => `${w.topicName} (${w.percentage}%)`).join(", ") : "—"}</p>
+              <p className="text-sm mt-1">
+                {selectedStudent.marksHidden
+                  ? "Hidden"
+                  : selectedStudent.weakTopics.length
+                    ? selectedStudent.weakTopics.map((w) => `${w.topicName} (${w.percentage}%)`).join(", ")
+                    : "—"}
+              </p>
             </div>
             <div>
               <p className="font-medium">Strong topics</p>
-              <p className="text-sm mt-1">{selectedStudent.strongTopics.length ? selectedStudent.strongTopics.map((w) => `${w.topicName} (${w.percentage}%)`).join(", ") : "—"}</p>
+              <p className="text-sm mt-1">
+                {selectedStudent.marksHidden
+                  ? "Hidden"
+                  : selectedStudent.strongTopics.length
+                    ? selectedStudent.strongTopics.map((w) => `${w.topicName} (${w.percentage}%)`).join(", ")
+                    : "—"}
+              </p>
             </div>
           </div>
           <div className="mt-4 text-sm">
@@ -471,10 +493,10 @@ export function TeacherDashboard() {
                   <td className="p-3">{s.fullName}</td>
                   <td className="p-3">{s.className}</td>
                   <td className="p-3">{s.currentLevel}</td>
-                  <td className="p-3 text-right">{s.latestScore != null ? s.latestScore.toFixed(1) : "—"}</td>
-                  <td className="p-3">{s.weakTopics.length ? s.weakTopics.join(", ") : "—"}</td>
-                  <td className="p-3">{s.strongTopics.length ? s.strongTopics.join(", ") : "—"}</td>
-                  <td className="p-3">{s.status}</td>
+                  <td className="p-3 text-right">{s.marksHidden ? "Hidden" : s.latestScore != null ? s.latestScore.toFixed(1) : "—"}</td>
+                  <td className="p-3">{s.marksHidden ? "Hidden" : s.weakTopics.length ? s.weakTopics.join(", ") : "—"}</td>
+                  <td className="p-3">{s.marksHidden ? "Hidden" : s.strongTopics.length ? s.strongTopics.join(", ") : "—"}</td>
+                  <td className="p-3">{s.marksHidden ? "Hidden" : s.status}</td>
                   <td className="p-3">{s.suggestedAction}</td>
                 </tr>
               ))}
@@ -485,10 +507,22 @@ export function TeacherDashboard() {
       {selectedTopic && (
         <section className="mt-8 rounded-xl border bg-white p-4 shadow-sm">
           <h2 className="font-semibold text-lg">Topic detail: {selectedTopic.name}</h2>
-          <p className="text-sm text-slate-600 mt-1">Students weak in this topic</p>
-          <ul className="mt-3 space-y-1 text-sm">
-            {selectedTopic.students.length === 0 ? <li>No weak students found.</li> : selectedTopic.students.map((s, i) => <li key={i}>{s.studentName} - {s.percentage}%</li>)}
-          </ul>
+          <p className="text-sm text-slate-600 mt-1">
+            {selectedTopic.marksHidden ? "Individual app marks are hidden for this subject." : "Students weak in this topic"}
+          </p>
+          {selectedTopic.marksHidden ? null : (
+            <ul className="mt-3 space-y-1 text-sm">
+              {selectedTopic.students.length === 0 ? (
+                <li>No weak students found.</li>
+              ) : (
+                selectedTopic.students.map((s, i) => (
+                  <li key={i}>
+                    {s.studentName} - {s.percentage}%
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
         </section>
       )}
     </AppShell>

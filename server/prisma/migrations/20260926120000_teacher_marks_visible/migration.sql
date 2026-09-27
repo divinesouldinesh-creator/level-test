@@ -1,0 +1,1 @@
+ALTER TABLE "Subject" ADD COLUMN IF NOT EXISTS "teacher_marks_visible" BOOLEAN NOT NULL DEFAULT true;

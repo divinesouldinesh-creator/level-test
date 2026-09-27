@@ -11,6 +11,7 @@ import {
   XP_TOPIC_MASTERY,
   XP_TOPIC_PRACTICE,
 } from "./studentEngagement.js";
+import { levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
 
 const PRACTICE_COUNT = 5;
 const RECHECK_COUNT = 3;
@@ -148,13 +149,22 @@ export async function listMasteryQueue(
   if (parts.length === 0) return [];
 
   const topicIds = [...new Set(parts.map((p) => p.topicId))];
+  const orders = [...new Set(currentLevels.map((level) => level.order))];
+  const sharedLevels = await prisma.level.findMany({
+    where: { order: { in: orders } },
+    select: { id: true, order: true },
+  });
+  const orderByLevelId = new Map(sharedLevels.map((level) => [level.id, level.order]));
   const [perfs, counts, existingMasteries] = await Promise.all([
     prisma.topicPerformance.findMany({
       where: { studentId, topicId: { in: topicIds } },
     }),
     prisma.question.groupBy({
       by: ["levelId", "topicId"],
-      where: { levelId: { in: levelIds }, topicId: { in: topicIds } },
+      where: {
+        topicId: { in: topicIds },
+        levelId: { in: sharedLevels.map((level) => level.id) },
+      },
       _count: { _all: true },
     }),
     prisma.topicMastery.findMany({
@@ -163,7 +173,14 @@ export async function listMasteryQueue(
   ]);
 
   const perfByTopic = new Map(perfs.map((p) => [p.topicId, p]));
-  const countByLevelTopic = new Map(counts.map((c) => [`${c.levelId}:${c.topicId}`, c._count._all]));
+  const countByOrderTopic = new Map<string, number>();
+  for (const row of counts) {
+    if (!row.levelId) continue;
+    const order = orderByLevelId.get(row.levelId);
+    if (order == null) continue;
+    const key = `${order}:${row.topicId}`;
+    countByOrderTopic.set(key, (countByOrderTopic.get(key) ?? 0) + row._count._all);
+  }
   let masteryByLevelTopic = new Map(existingMasteries.map((m) => [`${m.levelId}:${m.topicId}`, m]));
 
   const toCreate: {
@@ -191,7 +208,7 @@ export async function listMasteryQueue(
     if (!level) continue;
     for (const part of parts) {
       if (part.levelId !== level.id) continue;
-      const qCount = countByLevelTopic.get(`${level.id}:${part.topicId}`) ?? 0;
+      const qCount = countByOrderTopic.get(`${level.order}:${part.topicId}`) ?? 0;
       if (qCount < MIN_QUESTIONS_FOR_PATH) continue;
 
       const perf = perfByTopic.get(part.topicId);
@@ -373,8 +390,10 @@ async function pickTopicQuestions(
   topicId: string,
   count: number
 ): Promise<string[]> {
+  const order = await levelOrder(prisma, levelId);
+  if (order == null) return [];
   const pool = await prisma.question.findMany({
-    where: { levelId, topicId },
+    where: sharedLevelQuestionWhere(order, topicId),
     select: { id: true },
   });
   if (pool.length === 0) return [];

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { useAuth } from "../../auth";
-import { api } from "../../api";
+import { api, mediaUrl } from "../../api";
 import { teacherPortalNav } from "./teacherPortalNav";
 import { todayIso } from "../../attendanceReport";
 import { SPEAKING_RUBRIC, isSpeakingSubject } from "../../speakingLevels";
@@ -61,18 +61,32 @@ type RosterResponse = {
 };
 
 type Tab = "mark" | "records";
+type RecordsView = "class" | "student";
+type SnapshotStudent = {
+  studentId: string;
+  fullName: string;
+  studentLoginId: string | null;
+  date: string;
+  percentage?: number | null;
+  levelName?: string | null;
+  concern?: "weak" | "not-improving" | "both" | null;
+  previousPercentage?: number | null;
+  previousDate?: string | null;
+};
 type SnapshotLevel = {
   levelId: string;
   order: number;
   name: string;
   count: number;
-  students: { studentId: string; fullName: string; studentLoginId: string | null; date: string }[];
+  students: SnapshotStudent[];
 };
 type SnapshotResponse = {
   kind: Kind;
   total: number;
   assessed: number;
   notAssessed: number;
+  passMark: number | null;
+  belowPass: { count: number; students: SnapshotStudent[] };
   byLevel: SnapshotLevel[];
 };
 type RecordRow = {
@@ -111,8 +125,24 @@ type HistoryItem = {
   score: number | null;
   maxScore: number | null;
   percentage: number | null;
+  testedLevelId: string | null;
+  testedLevelName: string | null;
   judgedLevelOrder: number | null;
   judgedLevelName: string | null;
+};
+type SectionStudent = { id: string; fullName: string; studentLoginId: string | null };
+type BoardQuestion = {
+  id: string;
+  stem: string;
+  stemImageUrl: string | null;
+  answer: string;
+  answerImageUrl: string | null;
+};
+type BoardQuestionsResponse = {
+  levelName: string;
+  questionCount: number;
+  warnings: string[];
+  questions: BoardQuestion[];
 };
 
 function formatDay(ymd: string): string {
@@ -134,6 +164,7 @@ function bandClass(pct: number): string {
 export function TeacherClassroomTestPage() {
   const { logout, auth } = useAuth();
   const [tab, setTab] = useState<Tab>("mark");
+  const [recordsView, setRecordsView] = useState<RecordsView>("class");
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [subjects, setSubjects] = useState<SubjectRow[]>([]);
   const [classId, setClassId] = useState("");
@@ -153,14 +184,33 @@ export function TeacherClassroomTestPage() {
   const [recordRows, setRecordRows] = useState<RecordRow[]>([]);
   const [recordSummary, setRecordSummary] = useState<RecordsResponse["summary"] | null>(null);
   const [recordSaved, setRecordSaved] = useState(false);
-  const [historyStudent, setHistoryStudent] = useState<{ fullName: string; studentLoginId: string | null } | null>(
-    null
-  );
+  const [historyStudent, setHistoryStudent] = useState<{
+    id: string;
+    fullName: string;
+    studentLoginId: string | null;
+  } | null>(null);
+  const [historyLevelId, setHistoryLevelId] = useState("");
+  const [sectionStudents, setSectionStudents] = useState<SectionStudent[]>([]);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const [questionItems, setQuestionItems] = useState<BoardQuestion[]>([]);
+  const [questionWarnings, setQuestionWarnings] = useState<string[]>([]);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const [questionsError, setQuestionsError] = useState<string | null>(null);
+  const questionPaperKey = useRef("");
+  const [pickedStudentId, setPickedStudentId] = useState("");
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [recordDates, setRecordDates] = useState<string[]>([]);
   const [levelSnapshot, setLevelSnapshot] = useState<SnapshotResponse | null>(null);
   const [openLevelId, setOpenLevelId] = useState<string | null>(null);
+  const [detailCutoff, setDetailCutoff] = useState("75");
+  const [latestTest, setLatestTest] = useState<{
+    testedLevelId: string;
+    testedLevelName: string;
+    levelOrder: number;
+    date: string;
+  } | null>(null);
+  const [latestLoaded, setLatestLoaded] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -196,7 +246,28 @@ export function TeacherClassroomTestPage() {
 
   useEffect(() => {
     setRows([]);
+    setPickedStudentId("");
+    setHistoryStudent(null);
+    setHistoryItems([]);
   }, [classId, sectionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!sectionId) {
+        setSectionStudents([]);
+        return;
+      }
+      const r = await api<SectionStudent[]>(
+        `/api/v1/teacher/sections/${encodeURIComponent(sectionId)}/students`
+      );
+      if (cancelled) return;
+      setSectionStudents(r.ok ? r.data ?? [] : []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sectionId]);
 
   useEffect(() => {
     void (async () => {
@@ -234,20 +305,83 @@ export function TeacherClassroomTestPage() {
   }, [subjectId, subjectLevels, testedLevelId]);
 
   useEffect(() => {
+    questionPaperKey.current = "";
+    setQuestionsOpen(false);
+    setQuestionItems([]);
+    setQuestionWarnings([]);
+    setQuestionsError(null);
+  }, [subjectId]);
+
+  useEffect(() => {
+    questionPaperKey.current = "";
+    setQuestionItems([]);
+    setQuestionWarnings([]);
+    setQuestionsError(null);
+    setQuestionsLoading(true);
+  }, [testedLevelId]);
+
+  useEffect(() => {
+    if (!questionsOpen || kind !== "MARKS" || !subjectId || !testedLevelId) return;
+    const key = `${subjectId}:${testedLevelId}`;
+    if (questionPaperKey.current === key) {
+      setQuestionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setQuestionsLoading(true);
+    setQuestionsError(null);
+    const q = new URLSearchParams({ subjectId, levelId: testedLevelId });
+    void (async () => {
+      const r = await api<BoardQuestionsResponse>(
+        `/api/v1/teacher/classroom-assessments/questions?${q.toString()}`
+      );
+      if (cancelled) return;
+      setQuestionsLoading(false);
+      if (!r.ok || !r.data) {
+        setQuestionItems([]);
+        setQuestionWarnings([]);
+        setQuestionsError(r.error ?? "Could not load questions");
+        return;
+      }
+      questionPaperKey.current = key;
+      setQuestionItems(r.data.questions ?? []);
+      setQuestionWarnings(r.data.warnings ?? []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [questionsOpen, kind, subjectId, testedLevelId]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       if (tab !== "mark") return;
       if (!classId || !sectionId || !subjectId || !date) {
         setRows([]);
+        setSaved(false);
+        setNotes("");
         return;
       }
       if (selectedClass && !selectedClass.sections.some((s) => s.id === sectionId)) {
         return;
       }
-      if (kind === "MARKS" && !testedLevelId) return;
+      if (kind === "MARKS" && !testedLevelId) {
+        setRows([]);
+        setSaved(false);
+        setNotes("");
+        return;
+      }
       const subject = subjects.find((s) => s.id === subjectId);
       if (!subject) return;
-      if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) return;
+      if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) {
+        setRows([]);
+        setSaved(false);
+        setNotes("");
+        return;
+      }
+      setRows([]);
+      setSaved(false);
+      setNotes("");
       setLoading(true);
       setError(null);
       setMessage(null);
@@ -281,9 +415,7 @@ export function TeacherClassroomTestPage() {
           maxScore:
             s.maxScore ??
             (kind === "MARKS" && Number.isFinite(maxHint) && maxHint > 0 ? maxHint : s.maxScore),
-          judgedLevelId:
-            s.judgedLevelId ??
-            (!alreadySaved && kind === "ORAL" && !s.absent ? s.lastOral?.levelId ?? null : s.judgedLevelId),
+          judgedLevelId: s.judgedLevelId,
         }))
       );
     })();
@@ -293,26 +425,72 @@ export function TeacherClassroomTestPage() {
   }, [tab, classId, sectionId, subjectId, kind, date, testedLevelId, subjects, selectedClass]);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       if (!classId || !sectionId || !subjectId) {
         setRecordDates([]);
         return;
       }
+      if (kind === "MARKS" && !testedLevelId) {
+        setRecordDates([]);
+        return;
+      }
+      const subject = subjects.find((s) => s.id === subjectId);
+      if (!subject) return;
+      if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) return;
+      setRecordDates([]);
       const q = new URLSearchParams({ classId, sectionId, subjectId });
+      if (kind === "MARKS") q.set("testedLevelId", testedLevelId);
       const r = await api<{ dates: string[]; latest: string | null }>(
         `/api/v1/teacher/classroom-assessments/dates?${q.toString()}`
       );
+      if (cancelled) return;
       const dates = r.ok ? r.data?.dates ?? [] : [];
       setRecordDates(dates);
       if (tab === "records" && dates.length > 0) {
         setDate((prev) => (dates.includes(prev) ? prev : dates[0]!));
       }
     })();
-  }, [classId, sectionId, subjectId, tab]);
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, sectionId, subjectId, tab, kind, testedLevelId, subjects]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (tab !== "records" || kind !== "MARKS" || !classId || !sectionId || !subjectId) {
+        setLatestTest(null);
+        setLatestLoaded(false);
+        return;
+      }
+      setLatestLoaded(false);
+      const q = new URLSearchParams({ classId, sectionId, subjectId });
+      const r = await api<{
+        latest: {
+          testedLevelId: string;
+          testedLevelName: string;
+          levelOrder: number;
+          date: string;
+        } | null;
+      }>(`/api/v1/teacher/classroom-assessments/latest?${q.toString()}`);
+      if (cancelled) return;
+      const latest = r.ok ? r.data?.latest ?? null : null;
+      setLatestTest(latest);
+      setLatestLoaded(true);
+      if (latest) {
+        setTestedLevelId(latest.testedLevelId);
+        setDate(latest.date);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, kind, classId, sectionId, subjectId]);
 
   useEffect(() => {
     void (async () => {
-      if (tab !== "records" || kind !== "ORAL" || !classId || !sectionId || !subjectId) {
+      if (tab !== "records" || !classId || !sectionId || !subjectId) {
         setLevelSnapshot(null);
         setOpenLevelId(null);
         return;
@@ -334,9 +512,13 @@ export function TeacherClassroomTestPage() {
   useEffect(() => {
     void (async () => {
       if (tab !== "records") return;
-      setHistoryStudent(null);
-      setHistoryItems([]);
       if (!classId || !sectionId || !subjectId) {
+        setRecordRows([]);
+        setRecordSummary(null);
+        setRecordSaved(false);
+        return;
+      }
+      if (kind === "MARKS" && !testedLevelId) {
         setRecordRows([]);
         setRecordSummary(null);
         setRecordSaved(false);
@@ -352,6 +534,7 @@ export function TeacherClassroomTestPage() {
       setLoading(true);
       setError(null);
       const q = new URLSearchParams({ classId, sectionId, subjectId, date });
+      if (kind === "MARKS") q.set("testedLevelId", testedLevelId);
       const r = await api<RecordsResponse>(`/api/v1/teacher/classroom-assessments/records?${q.toString()}`);
       setLoading(false);
       if (!r.ok || !r.data) {
@@ -364,10 +547,15 @@ export function TeacherClassroomTestPage() {
       setRecordRows(r.data.students ?? []);
       setRecordSummary(r.data.summary ?? null);
     })();
-  }, [tab, classId, sectionId, subjectId, date, recordDates]);
+  }, [tab, classId, sectionId, subjectId, date, recordDates, kind, testedLevelId]);
 
   const classMax = Number.parseInt(defaultMax, 10);
   const classMaxOk = Number.isFinite(classMax) && classMax > 0;
+
+  const markedCount = useMemo(
+    () => rows.filter((r) => kind === "ORAL" && !r.absent && Boolean(r.judgedLevelId)).length,
+    [rows, kind]
+  );
 
   const readyCount = useMemo(() => {
     return rows.filter((r) => {
@@ -377,7 +565,10 @@ export function TeacherClassroomTestPage() {
     }).length;
   }, [rows, kind, classMaxOk, classMax]);
 
-  const canSave = rows.length > 0 && readyCount === rows.length && !saving && (kind !== "MARKS" || classMaxOk);
+  const canSave =
+    kind === "ORAL"
+      ? markedCount > 0 && !saving && !loading
+      : rows.length > 0 && readyCount === rows.length && !saving && !loading && classMaxOk;
 
   const snapshot = useMemo(() => {
     const absent = rows.filter((r) => r.absent).length;
@@ -424,12 +615,12 @@ export function TeacherClassroomTestPage() {
         date,
         notes,
         ...(kind === "MARKS" ? { testedLevelId } : {}),
-        entries: rows.map((row) => ({
+        entries: (kind === "ORAL" ? rows.filter((row) => row.judgedLevelId) : rows).map((row) => ({
           studentId: row.studentId,
-          absent: row.absent,
+          absent: kind === "ORAL" ? false : row.absent,
           score: kind === "MARKS" && !row.absent ? row.score : null,
           maxScore: kind === "MARKS" && !row.absent ? classMax : null,
-          judgedLevelId: kind === "ORAL" && !row.absent ? row.judgedLevelId : null,
+          judgedLevelId: kind === "ORAL" ? row.judgedLevelId : null,
           remark: row.remark,
         })),
       },
@@ -443,12 +634,26 @@ export function TeacherClassroomTestPage() {
     setMessage(kind === "ORAL" ? "Levels saved." : "Marks saved.");
   }
 
-  async function openHistory(studentId: string, fullName: string, studentLoginId: string | null) {
+  useEffect(() => {
+    if (!historyStudent) return;
+    document.getElementById("student-record")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [historyStudent]);
+
+  async function openHistory(
+    studentId: string,
+    fullName: string,
+    studentLoginId: string | null,
+    levelId?: string
+  ) {
     if (!subjectId) return;
     setHistoryLoading(true);
-    setHistoryStudent({ fullName, studentLoginId });
+    setRecordsView("student");
+    setPickedStudentId(studentId);
+    setHistoryStudent({ id: studentId, fullName, studentLoginId });
+    setHistoryLevelId(levelId ?? "");
     setHistoryItems([]);
     const q = new URLSearchParams({ studentId, subjectId });
+    if (kind === "MARKS" && levelId) q.set("testedLevelId", levelId);
     const r = await api<{ items: HistoryItem[] }>(
       `/api/v1/teacher/classroom-assessments/history?${q.toString()}`
     );
@@ -490,9 +695,15 @@ export function TeacherClassroomTestPage() {
       <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
         <p className="text-sm text-slate-600">
           {tab === "records"
-            ? "Pick class and subject, then tap a test date. Only days with a saved test are listed."
+            ? recordsView === "student"
+              ? kind === "ORAL"
+                ? "Choose a student to see the speaking levels they have been given."
+                : "Choose a student to see their tests."
+              : kind === "MARKS"
+                ? "See who cleared each level, or open the latest test."
+                : "See how many students are at each speaking level."
             : kind === "ORAL"
-              ? "Tap Abs or L0–L5 for each student. Speaking uses levels, not marks."
+              ? "Tap a level only for the students you heard today. Leave the others blank."
               : "Type the score for each student. Set “out of” once. Enter jumps to the next name."}
         </p>
         <div className="grid gap-3 md:grid-cols-2">
@@ -546,26 +757,20 @@ export function TeacherClassroomTestPage() {
               ))}
             </select>
           </label>
-          <label className="text-sm">
-            <span className="block text-slate-600 mb-1">Date</span>
-            {tab === "records" ? (
-              <p className="rounded-lg border bg-slate-50 px-3 py-2 text-slate-700">
-                {recordDates.length === 0
-                  ? "No tests saved yet"
-                  : formatDay(date)}
-              </p>
-            ) : (
+          {tab === "mark" ? (
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Date</span>
               <input
                 type="date"
                 className="w-full rounded-lg border px-3 py-2"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
               />
-            )}
-          </label>
+            </label>
+          ) : null}
           {tab === "mark" && kind === "MARKS" ? (
-            <>
-              <label className="text-sm">
+            <div className="text-sm">
+              <label>
                 <span className="block text-slate-600 mb-1">Level tested</span>
                 <select
                   className="w-full rounded-lg border px-3 py-2"
@@ -581,20 +786,74 @@ export function TeacherClassroomTestPage() {
                   ))}
                 </select>
               </label>
-              <label className="text-sm">
-                <span className="block text-slate-600 mb-1">Out of (max score)</span>
-                <input
-                  type="number"
-                  min={1}
-                  inputMode="numeric"
-                  className="w-full rounded-lg border px-3 py-2"
-                  value={defaultMax}
-                  onChange={(e) => setDefaultMax(e.target.value)}
-                />
-              </label>
-            </>
+              <button
+                type="button"
+                className="mt-2 w-full rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-900 min-h-[44px] disabled:opacity-50"
+                onClick={() => {
+                  const next = !questionsOpen;
+                  const key = `${subjectId}:${testedLevelId}`;
+                  if (next && questionPaperKey.current !== key) setQuestionsLoading(true);
+                  setQuestionsOpen(next);
+                }}
+                disabled={!testedLevelId}
+              >
+                {questionsOpen ? "Hide questions" : "Questions"}
+              </button>
+            </div>
+          ) : null}
+          {tab === "mark" && kind === "MARKS" ? (
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Out of (max score)</span>
+              <input
+                type="number"
+                min={1}
+                inputMode="numeric"
+                className="w-full rounded-lg border px-3 py-2"
+                value={defaultMax}
+                onChange={(e) => setDefaultMax(e.target.value)}
+              />
+            </label>
           ) : null}
         </div>
+        {tab === "mark" && kind === "MARKS" && questionsOpen && testedLevelId ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+            <p className="text-sm text-slate-600">
+              {questionItems.length > 0 ? `${questionItems.length} questions for ` : ""}
+              {subjectLevels.find((l) => l.id === testedLevelId)?.name ?? "This level"}. Write each question on the board. The answer stays here.
+            </p>
+            {questionsLoading ? <p className="text-sm text-slate-600">Loading questions…</p> : null}
+            {questionsError ? <p className="text-sm text-red-600">{questionsError}</p> : null}
+            {questionWarnings.map((warning) => (
+              <p key={warning} className="text-sm text-amber-700">
+                {warning}
+              </p>
+            ))}
+            {!questionsLoading && !questionsError && questionItems.length === 0 ? (
+              <p className="text-sm text-slate-600">No questions for this level yet.</p>
+            ) : null}
+            {questionItems.map((q, i) => {
+              const stemSrc = mediaUrl(q.stemImageUrl);
+              const answerSrc = mediaUrl(q.answerImageUrl);
+              return (
+                <div key={q.id} className="rounded-lg border bg-white p-3">
+                  <p className="text-sm font-medium text-slate-900 whitespace-pre-wrap">
+                    {i + 1}. {q.stem}
+                  </p>
+                  {stemSrc ? (
+                    <img src={stemSrc} alt="" className="mt-2 max-h-56 rounded-lg border border-slate-100" />
+                  ) : null}
+                  <p className="mt-2 text-sm text-slate-700 whitespace-pre-wrap">
+                    <span className="font-medium text-slate-500">Answer: </span>
+                    {q.answer || (answerSrc ? "" : "—")}
+                  </p>
+                  {answerSrc ? (
+                    <img src={answerSrc} alt="" className="mt-2 max-h-40 rounded-lg border border-slate-100" />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
         {tab === "mark" ? (
           <>
             <textarea
@@ -613,7 +872,9 @@ export function TeacherClassroomTestPage() {
               {saving ? "Saving…" : saved ? "Save changes" : "Save class results"}
             </button>
             <p className="text-xs text-slate-500">
-              {readyCount}/{rows.length || 0} students ready
+              {kind === "ORAL"
+                ? `${markedCount} student${markedCount === 1 ? "" : "s"} marked`
+                : `${readyCount}/${rows.length || 0} students ready`}
             </p>
           </>
         ) : null}
@@ -628,7 +889,7 @@ export function TeacherClassroomTestPage() {
       {tab === "mark" && kind === "ORAL" && levels.length > 0 ? (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm overflow-x-auto">
           <h2 className="font-semibold text-slate-900">Speaking levels</h2>
-          <p className="text-sm text-slate-600 mt-1">One tap per student. Time is how long they should speak.</p>
+          <p className="text-sm text-slate-600 mt-1">Mark only the students you heard. Tap a level again to clear it.</p>
           <table className="mt-3 min-w-full text-sm">
             <thead className="text-left text-slate-500">
               <tr>
@@ -654,7 +915,7 @@ export function TeacherClassroomTestPage() {
           </table>
           {rows.length > 0 ? (
             <p className="text-sm text-slate-600 mt-3">
-              {snapshot.absent} absent · {snapshot.readyCount - snapshot.absent} placed
+              {markedCount} marked
               {snapshot.byLevel.map((l) => (
                 <span key={l.id}>
                   {" "}
@@ -666,7 +927,7 @@ export function TeacherClassroomTestPage() {
         </section>
       ) : null}
 
-      {tab === "mark" && kind === "ORAL" && rows.length > 0 ? (
+      {tab === "mark" && kind === "ORAL" && !loading && rows.length > 0 ? (
         <section className="mt-4 rounded-xl border bg-white shadow-sm overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
@@ -690,40 +951,41 @@ export function TeacherClassroomTestPage() {
                     <td className="p-3 min-w-[140px]">
                       <p className="font-medium text-slate-900">{row.fullName}</p>
                       <p className="text-xs text-slate-500">{row.studentLoginId ?? "—"}</p>
-                      {lastOral ? (
+                      {lastOral && !row.judgedLevelId ? (
+                        <p className="text-xs text-indigo-700 mt-1">
+                          Now: L{lastOral.levelOrder} · {formatDay(lastOral.date)}
+                        </p>
+                      ) : lastOral ? (
                         <p className="text-xs text-slate-600 mt-1">
                           Last: L{lastOral.levelOrder}
                           {movement ? ` · ${movement}` : ""}
                         </p>
                       ) : (
-                        <p className="text-xs text-slate-400 mt-1">No previous oral</p>
+                        <p className="text-xs text-slate-400 mt-1">No level yet</p>
                       )}
                     </td>
                     <td className="p-3">
                       <div className="flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => patchRow(row.studentId, { absent: true, judgedLevelId: null })}
-                          className={`rounded-lg px-2.5 py-2 text-sm font-medium min-h-[40px] border ${
-                            row.absent
-                              ? "bg-slate-700 text-white border-slate-700"
-                              : "bg-white text-slate-700 border-slate-300"
-                          }`}
-                        >
-                          Abs
-                        </button>
                         {levels.map((l) => {
-                          const selected = !row.absent && row.judgedLevelId === l.id;
+                          const selected = row.judgedLevelId === l.id;
+                          const current = !selected && lastOral?.levelId === l.id;
                           return (
                             <button
                               key={l.id}
                               type="button"
-                              title={l.name}
-                              onClick={() => patchRow(row.studentId, { absent: false, judgedLevelId: l.id })}
+                              title={current ? `${l.name} · current level` : l.name}
+                              onClick={() =>
+                                patchRow(row.studentId, {
+                                  absent: false,
+                                  judgedLevelId: selected ? null : l.id,
+                                })
+                              }
                               className={`rounded-lg px-2.5 py-2 text-sm font-medium min-h-[40px] min-w-[44px] border ${
                                 selected
                                   ? "bg-indigo-600 text-white border-indigo-600"
-                                  : "bg-white text-slate-700 border-slate-300"
+                                  : current
+                                    ? "bg-indigo-50 text-indigo-800 border-indigo-600 border-2"
+                                    : "bg-white text-slate-700 border-slate-300"
                               }`}
                             >
                               L{l.order}
@@ -740,7 +1002,7 @@ export function TeacherClassroomTestPage() {
         </section>
       ) : null}
 
-      {tab === "mark" && kind === "MARKS" && rows.length > 0 ? (
+      {tab === "mark" && kind === "MARKS" && !loading && rows.length > 0 ? (
         <section className="mt-4 rounded-xl border bg-white shadow-sm overflow-x-auto">
           <div className="px-3 py-2 border-b border-slate-100 text-sm text-slate-600">
             {snapshot.absent} absent · {snapshot.scoredCount} scored
@@ -766,14 +1028,6 @@ export function TeacherClassroomTestPage() {
                     <td className="p-3 min-w-[140px]">
                       <p className="font-medium text-slate-900">{row.fullName}</p>
                       <p className="text-xs text-slate-500">{row.studentLoginId ?? "—"}</p>
-                      {row.lastMarks ? (
-                        <p className="text-xs text-slate-600 mt-1">
-                          Last: {row.lastMarks.score}/{row.lastMarks.maxScore} (
-                          {row.lastMarks.percentage.toFixed(0)}%)
-                        </p>
-                      ) : (
-                        <p className="text-xs text-slate-400 mt-1">No previous marks</p>
-                      )}
                     </td>
                     <td className="p-3">
                       <button
@@ -841,13 +1095,37 @@ export function TeacherClassroomTestPage() {
       ) : null}
 
       {tab === "records" ? (
+        <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
+          {(
+            [
+              ["class", "Class"],
+              ["student", "One student"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setRecordsView(id)}
+              className={`flex-1 min-w-[120px] rounded-lg px-4 py-2.5 text-sm font-medium transition-colors min-h-[44px] ${
+                recordsView === id
+                  ? "bg-white text-brand-900 shadow-sm border border-slate-200"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {tab === "records" && recordsView === "class" ? (
         <section className="mt-4 rounded-xl border bg-white shadow-sm">
           {kind === "ORAL" && levelSnapshot ? (
             <div className="p-4 border-b border-slate-100">
-              <p className="text-sm font-medium text-slate-900">How many at each level</p>
+              <p className="text-sm font-medium text-slate-900">Who is at each level</p>
               <p className="text-xs text-slate-500 mt-0.5">
-                Latest result per student · {levelSnapshot.assessed} assessed · {levelSnapshot.notAssessed} not
-                yet
+                Latest level the teacher marked · {levelSnapshot.assessed} placed · {levelSnapshot.notAssessed}{" "}
+                not yet
               </p>
               <div className="mt-3 grid grid-cols-3 sm:grid-cols-6 gap-2">
                 {levelSnapshot.byLevel.map((l) => (
@@ -874,64 +1152,185 @@ export function TeacherClassroomTestPage() {
                   ) : (
                     (levelSnapshot.byLevel.find((l) => l.levelId === openLevelId)?.students ?? []).map((s) => (
                       <li key={s.studentId}>
-                        {s.fullName}
-                        <span className="text-xs text-slate-500"> · {formatDay(s.date)}</span>
+                        <button
+                          type="button"
+                          className="text-left font-medium text-indigo-700 hover:underline"
+                          onClick={() => void openHistory(s.studentId, s.fullName, s.studentLoginId)}
+                        >
+                          {s.fullName}
+                        </button>
+                        <span className="text-xs text-slate-500"> · last updated {formatDay(s.date)}</span>
                       </li>
                     ))
                   )}
                 </ul>
               ) : (
-                <p className="mt-2 text-xs text-slate-500">Tap a level to see names.</p>
+                <p className="mt-2 text-xs text-slate-500">Tap a level to see who is there.</p>
               )}
             </div>
           ) : null}
-          <div className="p-4 border-b border-slate-100">
-            <p className="text-sm font-medium text-slate-900">Test dates</p>
-            <p className="text-xs text-slate-500 mt-0.5">Only days this class took this subject.</p>
-            {recordDates.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-500">No tests saved for this subject yet.</p>
-            ) : (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {recordDates.map((d) => (
+          {kind === "MARKS" && levelSnapshot ? (
+            <div className="p-4 border-b border-slate-100">
+              <p className="text-sm font-medium text-slate-900">How many cleared each level</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Each number is students at {levelSnapshot.passMark ?? 75}% or above.{" "}
+                {levelSnapshot.notAssessed} not yet tested.
+              </p>
+              <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {levelSnapshot.byLevel.map((l) => (
                   <button
-                    key={d}
+                    key={l.levelId}
                     type="button"
-                    onClick={() => setDate(d)}
-                    className={`rounded-lg px-3 py-2 text-sm font-medium min-h-[40px] border ${
-                      date === d
-                        ? "bg-indigo-600 text-white border-indigo-600"
-                        : "bg-white text-slate-700 border-slate-300"
+                    onClick={() => setOpenLevelId((id) => (id === l.levelId ? null : l.levelId))}
+                    className={`rounded-xl border p-3 text-center min-h-[72px] ${
+                      openLevelId === l.levelId
+                        ? "border-indigo-600 bg-indigo-50"
+                        : "border-slate-200 bg-slate-50"
                     }`}
                   >
-                    {formatDay(d)}
+                    <p className="text-xs font-medium text-slate-600">L{l.order}</p>
+                    <p className="text-2xl font-bold text-slate-900">{l.count}</p>
                   </button>
                 ))}
               </div>
-            )}
+              {openLevelId ? (
+                <>
+                  <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                    <span>Show students below</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      inputMode="numeric"
+                      className="w-20 rounded-lg border px-2 py-1.5"
+                      value={detailCutoff}
+                      onChange={(e) => setDetailCutoff(e.target.value)}
+                    />
+                    <span>%</span>
+                  </label>
+                  <ul className="mt-3 text-sm text-slate-700 space-y-1">
+                    {(() => {
+                      const cutoff = Number.parseInt(detailCutoff, 10);
+                      const cutoffOk = Number.isFinite(cutoff) && cutoff > 0 && cutoff <= 100;
+                      const opened = (
+                        levelSnapshot.byLevel.find((l) => l.levelId === openLevelId)?.students ?? []
+                      ).filter((s) => cutoffOk && (s.percentage == null || s.percentage < cutoff));
+                      if (!cutoffOk) {
+                        return <li className="text-slate-500">Enter a cutoff from 1 to 100.</li>;
+                      }
+                      if (opened.length === 0) {
+                        return <li className="text-slate-500">No students below {cutoff}% on this level.</li>;
+                      }
+                      return opened.map((s) => (
+                        <li key={s.studentId}>
+                          <button
+                            type="button"
+                            className="text-left font-medium text-indigo-700 hover:underline"
+                            onClick={() =>
+                              void openHistory(s.studentId, s.fullName, s.studentLoginId, openLevelId)
+                            }
+                          >
+                            {s.fullName}
+                          </button>
+                          <span className="text-xs text-slate-500">
+                            {s.previousPercentage != null && s.percentage != null
+                              ? ` · ${s.previousPercentage.toFixed(0)}% then ${s.percentage.toFixed(0)}%`
+                              : s.percentage != null
+                                ? ` · ${s.percentage.toFixed(0)}%`
+                                : ""}
+                            {" · "}
+                            {formatDay(s.date)}
+                          </span>
+                        </li>
+                      ));
+                    })()}
+                  </ul>
+                </>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">Tap a level to see students below a cutoff.</p>
+              )}
+            </div>
+          ) : null}
+          {kind === "MARKS" ? (
+            <div className="p-4 border-b border-slate-100 space-y-3">
+              {latestTest ? (
+                testedLevelId === latestTest.testedLevelId && date === latestTest.date ? (
+                  <p className="text-sm text-slate-700">
+                    Latest test: {latestTest.testedLevelName} · {formatDay(latestTest.date)}
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-sm text-indigo-700 underline"
+                    onClick={() => {
+                      setTestedLevelId(latestTest.testedLevelId);
+                      setDate(latestTest.date);
+                    }}
+                  >
+                    Back to latest test: {latestTest.testedLevelName} · {formatDay(latestTest.date)}
+                  </button>
+                )
+              ) : latestLoaded ? (
+                <p className="text-sm text-slate-500">No tests saved for this subject yet.</p>
+              ) : null}
+              <label className="text-sm block">
+                <span className="block text-slate-600 mb-1">Level</span>
+                <select
+                  className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100"
+                  value={testedLevelId}
+                  onChange={(e) => setTestedLevelId(e.target.value)}
+                  disabled={subjectLevels.length === 0}
+                >
+                  <option value="">
+                    {subjectLevels.length === 0 ? "This subject has no levels yet" : "Select level"}
+                  </option>
+                  {subjectLevels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+          {kind === "MARKS" ? (
+          <>
+          <div className="p-4 border-b border-slate-100">
+            <label className="text-sm block">
+              <span className="block text-slate-600 mb-1">Test date</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100"
+                value={recordDates.includes(date) ? date : ""}
+                onChange={(e) => setDate(e.target.value)}
+                disabled={recordDates.length === 0 || (kind === "MARKS" && !testedLevelId)}
+              >
+                <option value="">
+                  {kind === "MARKS" && !testedLevelId
+                    ? "Select a level first"
+                    : recordDates.length === 0
+                      ? kind === "MARKS"
+                        ? "No tests saved for this level yet"
+                        : "No tests saved for this subject yet"
+                      : "Select date"}
+                </option>
+                {recordDates.map((d) => (
+                  <option key={d} value={d}>
+                    {formatDay(d)}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           {recordDates.length > 0 && !recordSaved && !loading ? (
             <p className="p-4 text-sm text-slate-500">No test saved on this date.</p>
           ) : null}
           {recordSaved && recordSummary ? (
             <p className="px-3 py-2 border-b border-slate-100 text-sm text-slate-600">
-              {kind === "ORAL" ? (
-                <>
-                  {recordSummary.byLevel.map((l) => (
-                    <span key={l.order}>
-                      L{l.order} {l.count}{" "}
-                    </span>
-                  ))}
-                  · {recordSummary.up} up · {recordSummary.down} down · {recordSummary.same} same
-                  {recordSummary.absent ? ` · ${recordSummary.absent} absent` : ""}
-                </>
-              ) : (
-                <>
-                  {recordSummary.avg != null ? `Class avg ${recordSummary.avg.toFixed(0)}%` : "No scores"}
-                  {" · "}
-                  {recordSummary.up} up · {recordSummary.down} down · {recordSummary.same} same
-                  {recordSummary.absent ? ` · ${recordSummary.absent} absent` : ""}
-                </>
-              )}
+              {recordSummary.avg != null ? `Class avg ${recordSummary.avg.toFixed(0)}%` : "No scores"}
+              {" · "}
+              {recordSummary.up} up · {recordSummary.down} down · {recordSummary.same} same
+              {recordSummary.absent ? ` · ${recordSummary.absent} absent` : ""}
+              {" · compared with the previous test of this level"}
             </p>
           ) : null}
           {recordSaved ? (
@@ -951,7 +1350,9 @@ export function TeacherClassroomTestPage() {
                       <button
                         type="button"
                         className="text-left font-medium text-indigo-700 hover:underline"
-                        onClick={() => void openHistory(row.studentId, row.fullName, row.studentLoginId)}
+                        onClick={() =>
+                          void openHistory(row.studentId, row.fullName, row.studentLoginId, testedLevelId)
+                        }
                       >
                         {row.fullName}
                       </button>
@@ -962,22 +1363,14 @@ export function TeacherClassroomTestPage() {
                         ? "—"
                         : row.absent
                           ? "Abs"
-                          : kind === "ORAL"
-                            ? row.judgedLevelOrder != null
-                              ? `L${row.judgedLevelOrder}`
-                              : "—"
-                            : row.score != null && row.maxScore != null
-                              ? `${row.score}/${row.maxScore}`
-                              : "—"}
+                          : row.score != null && row.maxScore != null
+                            ? `${row.score}/${row.maxScore}`
+                            : "—"}
                     </td>
                     <td className="p-3">
-                      {kind === "ORAL"
-                        ? row.lastOral
-                          ? `L${row.lastOral.levelOrder}`
-                          : "—"
-                        : row.lastMarks
-                          ? `${row.lastMarks.score}/${row.lastMarks.maxScore}`
-                          : "—"}
+                      {row.lastMarks
+                        ? `${row.lastMarks.score}/${row.lastMarks.maxScore} · ${formatDay(row.lastMarks.date)}`
+                        : "—"}
                     </td>
                     <td className="p-3">{row.movement ?? "—"}</td>
                   </tr>
@@ -985,11 +1378,48 @@ export function TeacherClassroomTestPage() {
               </tbody>
             </table>
           ) : null}
+          </>
+          ) : null}
         </section>
       ) : null}
 
-      {tab === "records" && historyStudent ? (
-        <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm">
+      {tab === "records" && recordsView === "student" ? (
+        <section id="student-record" className="mt-4 rounded-xl border bg-white p-4 shadow-sm">
+          <label className="text-sm block">
+            <span className="block text-slate-600 mb-1">Student</span>
+            <select
+              className="w-full rounded-lg border px-3 py-2 disabled:bg-slate-100"
+              value={pickedStudentId}
+              disabled={!sectionId || sectionStudents.length === 0}
+              onChange={(e) => {
+                const id = e.target.value;
+                setPickedStudentId(id);
+                const student = sectionStudents.find((s) => s.id === id);
+                if (!student) {
+                  setHistoryStudent(null);
+                  setHistoryItems([]);
+                  return;
+                }
+                void openHistory(student.id, student.fullName, student.studentLoginId);
+              }}
+            >
+              <option value="">
+                {!sectionId
+                  ? "Select a section first"
+                  : sectionStudents.length === 0
+                    ? "No students in this section"
+                    : "Select a student"}
+              </option>
+              {sectionStudents.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.fullName}
+                  {s.studentLoginId ? ` (${s.studentLoginId})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {historyStudent ? (
+            <>
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="font-semibold text-slate-900">{historyStudent.fullName}</h2>
@@ -1001,11 +1431,37 @@ export function TeacherClassroomTestPage() {
               onClick={() => {
                 setHistoryStudent(null);
                 setHistoryItems([]);
+                setPickedStudentId("");
               }}
             >
               Close
             </button>
           </div>
+          {kind === "MARKS" ? (
+            <label className="mt-3 text-sm block">
+              <span className="block text-slate-600 mb-1">Level in this record</span>
+              <select
+                className="w-full rounded-lg border px-3 py-2"
+                value={historyLevelId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  void openHistory(
+                    historyStudent.id,
+                    historyStudent.fullName,
+                    historyStudent.studentLoginId,
+                    next
+                  );
+                }}
+              >
+                <option value="">All levels</option>
+                {subjectLevels.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {historyLoading ? <p className="mt-3 text-sm text-slate-500">Loading…</p> : null}
           <table className="mt-3 min-w-full text-sm">
             <thead className="text-left text-slate-500">
@@ -1023,7 +1479,9 @@ export function TeacherClassroomTestPage() {
                 </tr>
               ) : (
                 historyItems.map((item, idx) => {
-                  const prev = historyItems[idx + 1];
+                  const prev = historyItems.slice(idx + 1).find((older) =>
+                    kind === "MARKS" ? older.testedLevelId === item.testedLevelId : true
+                  );
                   let change = "";
                   if (!item.absent && prev && !prev.absent) {
                     if (kind === "ORAL" && item.judgedLevelOrder != null && prev.judgedLevelOrder != null) {
@@ -1031,28 +1489,30 @@ export function TeacherClassroomTestPage() {
                       else if (item.judgedLevelOrder < prev.judgedLevelOrder) change = " · Down";
                       else change = " · Same";
                     }
-                    if (
-                      kind === "MARKS" &&
-                      item.percentage != null &&
-                      prev.percentage != null
-                    ) {
+                    if (kind === "MARKS" && item.percentage != null && prev.percentage != null) {
                       if (item.percentage > prev.percentage) change = " · Up";
                       else if (item.percentage < prev.percentage) change = " · Down";
                       else change = " · Same";
                     }
                   }
+                  const levelLabel =
+                    kind === "MARKS" && !historyLevelId && item.testedLevelName
+                      ? `${item.testedLevelName} · `
+                      : "";
                   return (
                     <tr key={item.entryId} className="border-t border-slate-100">
                       <td className="pr-3 py-1.5 whitespace-nowrap">{item.date}</td>
                       <td className="py-1.5">
                         {item.absent
-                          ? "Abs"
+                          ? `${levelLabel}Abs`
                           : kind === "ORAL"
                             ? item.judgedLevelOrder != null
-                              ? `L${item.judgedLevelOrder}${change}`
+                              ? `L${item.judgedLevelOrder}${
+                                  item.judgedLevelName ? ` · ${item.judgedLevelName}` : ""
+                                }${change}`
                               : "—"
                             : item.score != null && item.maxScore != null
-                              ? `${item.score}/${item.maxScore}${
+                              ? `${levelLabel}${item.score}/${item.maxScore}${
                                   item.percentage != null ? ` (${item.percentage.toFixed(0)}%)` : ""
                                 }${change}`
                               : "—"}
@@ -1063,6 +1523,8 @@ export function TeacherClassroomTestPage() {
               )}
             </tbody>
           </table>
+            </>
+          ) : null}
         </section>
       ) : null}
 

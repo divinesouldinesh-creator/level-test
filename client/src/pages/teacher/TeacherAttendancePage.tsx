@@ -48,6 +48,7 @@ export function TeacherAttendancePage() {
   const [date, setDate] = useState(() => todayIso());
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [notes, setNotes] = useState("");
+  const [holidayName, setHolidayName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -109,21 +110,29 @@ export function TeacherAttendancePage() {
     void (async () => {
       if (!classId || !sectionId || !date) {
         setRows([]);
+        setHolidayName(null);
         return;
       }
       setLoading(true);
       setMessage(null);
       setError(null);
-      const r = await api<{ notes: string; students: AttendanceRow[] }>(
+      const r = await api<{
+        notes: string;
+        students: AttendanceRow[];
+        isHoliday?: boolean;
+        holidayName?: string | null;
+      }>(
         `/api/v1/teacher/attendance?classId=${encodeURIComponent(classId)}&sectionId=${encodeURIComponent(
           sectionId
         )}&date=${encodeURIComponent(date)}`
       );
       setLoading(false);
       if (!r.ok || !r.data) {
+        setHolidayName(null);
         setError(r.error ?? "Could not load attendance");
         return;
       }
+      setHolidayName(r.data.isHoliday ? r.data.holidayName?.trim() || "Holiday" : null);
       setNotes(r.data.notes ?? "");
       setRows(r.data.students ?? []);
     })();
@@ -188,7 +197,7 @@ export function TeacherAttendancePage() {
   }, [tab, reportStudentId, reportRange, reportDate, reportCustomFrom, reportCustomTo]);
 
   async function saveAttendance() {
-    if (!classId || !sectionId || !date || rows.length === 0) return;
+    if (!classId || !sectionId || !date || rows.length === 0 || holidayName) return;
     setSaving(true);
     setMessage(null);
     setError(null);
@@ -353,7 +362,7 @@ export function TeacherAttendancePage() {
               <h2 className="text-lg font-semibold text-slate-900">Mark attendance</h2>
               <p className="mt-1 text-sm text-slate-600">
                 Green days are marked. Amber days still need attendance. Violet days are holidays
-                (Sundays and 2nd Saturdays by default).
+                (Sundays and 2nd Saturdays by default) and cannot be marked.
               </p>
             </div>
             {classSectionSelectors}
@@ -368,20 +377,26 @@ export function TeacherAttendancePage() {
                 disabled={!classId || !sectionId}
               />
             </div>
+            {holidayName ? (
+              <p className="text-sm text-violet-900 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+                {date} is a holiday ({holidayName}). Attendance cannot be marked.
+              </p>
+            ) : null}
             <button
               type="button"
               className="w-full rounded-lg bg-indigo-600 text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 min-h-[44px]"
               onClick={() => void saveAttendance()}
-              disabled={saving || !classId || !sectionId || rows.length === 0}
+              disabled={saving || !classId || !sectionId || rows.length === 0 || Boolean(holidayName)}
             >
               {saving ? "Saving..." : "Save attendance"}
             </button>
             <textarea
-              className="w-full rounded-lg border px-3 py-2 text-sm"
+              className="w-full rounded-lg border px-3 py-2 text-sm disabled:bg-slate-100"
               rows={2}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Optional notes"
+              disabled={Boolean(holidayName)}
             />
             {loading ? <p className="text-sm text-slate-500">Loading students...</p> : null}
             {error ? <p className="text-sm text-red-600">{error}</p> : null}
@@ -481,8 +496,9 @@ export function TeacherAttendancePage() {
                       <td className="p-3">{row.studentLoginId ?? "—"}</td>
                       <td className="p-3">
                         <select
-                          className="rounded border px-2 py-1"
+                          className="rounded border px-2 py-1 disabled:bg-slate-100"
                           value={row.status}
+                          disabled={Boolean(holidayName)}
                           onChange={(e) =>
                             setRows((prev) =>
                               prev.map((r) =>
@@ -497,9 +513,10 @@ export function TeacherAttendancePage() {
                       </td>
                       <td className="p-3">
                         <input
-                          className="rounded border px-2 py-1 w-full"
+                          className="rounded border px-2 py-1 w-full disabled:bg-slate-100"
                           placeholder="Optional"
                           value={row.remark ?? ""}
+                          disabled={Boolean(holidayName)}
                           onChange={(e) =>
                             setRows((prev) =>
                               prev.map((r) => (r.id === row.id ? { ...r, remark: e.target.value } : r))

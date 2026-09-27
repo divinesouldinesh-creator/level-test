@@ -1,4 +1,5 @@
 import type { Difficulty, PrismaClient, QuestionType } from "@prisma/client";
+import { levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
 import { questionContentHash } from "../utils/questionHash.js";
 import { questionAnswerKey } from "./questionAnswer.js";
 import type { ParsedQuestion } from "./wordImport.js";
@@ -137,9 +138,13 @@ export async function persistParsedQuestions(
 ) {
   const chapterTopicId = opts.chapterTopicId ?? null;
   const ids = { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId, chapterTopicId };
+  const order = opts.levelId ? await levelOrder(prisma, opts.levelId) : null;
   if (opts.mode === "replace") {
     await prisma.question.deleteMany({
-      where: { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId, chapterTopicId },
+      where:
+        opts.levelId && order != null
+          ? { ...sharedLevelQuestionWhere(order, opts.topicId), chapterTopicId }
+          : { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId, chapterTopicId },
     });
   }
 
@@ -154,13 +159,16 @@ export async function persistParsedQuestions(
       const data = parsedQuestionWriteData(pq, ids, difficulty);
       if (opts.mode === "sync") {
         const existingByStem = await prisma.question.findFirst({
-          where: {
-            subjectId: opts.subjectId,
-            topicId: opts.topicId,
-            levelId: opts.levelId,
-            chapterTopicId,
-            stem: pq.stem,
-          },
+          where:
+            opts.levelId && order != null
+              ? { ...sharedLevelQuestionWhere(order, opts.topicId), chapterTopicId, stem: pq.stem }
+              : {
+                  subjectId: opts.subjectId,
+                  topicId: opts.topicId,
+                  levelId: opts.levelId,
+                  chapterTopicId,
+                  stem: pq.stem,
+                },
         });
         if (existingByStem) {
           const clash = await prisma.question.findUnique({ where: { contentHash: data.contentHash } });
@@ -168,9 +176,10 @@ export async function persistParsedQuestions(
             skipped++;
             continue;
           }
+          const { subjectId: _subjectId, levelId: _levelId, ...editable } = data;
           await prisma.question.update({
             where: { id: existingByStem.id },
-            data,
+            data: opts.levelId && order != null ? editable : data,
           });
           updated++;
           continue;

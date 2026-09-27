@@ -18,6 +18,7 @@ type StudentRow = {
   className: string;
   currentLevel: string;
   latestScore: number | null;
+  marksHidden?: boolean;
   weakTopics: string[];
   status: "RED" | "YELLOW" | "GREEN" | "NA";
   lastCompletedTestAt: string | null;
@@ -45,7 +46,8 @@ type ClassroomAssessmentRow = {
 
 type StudentDetail = {
   student: { id: string; fullName: string; studentLoginId: string | null; className: string };
-  tests: { testId: string; level: string; percentage: number | null; completedAt: string | null }[];
+  marksHidden?: boolean;
+  tests: { testId: string; level: string; percentage: number | null; marksHidden?: boolean; completedAt: string | null }[];
   classroomAssessments?: ClassroomAssessmentRow[];
   lastTestAttempt: string | null;
 };
@@ -61,6 +63,7 @@ type TestsByDateItem = {
   subjectCode: string | null;
   levelName: string;
   percentage: number | null;
+  marksHidden?: boolean;
   completedAt: string | null;
 };
 
@@ -77,7 +80,14 @@ type StudentsPayload = {
   total: number;
   page: number;
   pageSize: number;
+  marksHidden?: boolean;
 };
+
+function formatAppMark(value: number | null | undefined, marksHidden?: boolean): string {
+  if (marksHidden) return "Hidden";
+  if (value == null) return "—";
+  return value.toFixed(1);
+}
 
 const ANALYTICS_PAGE_SIZE = 50;
 
@@ -118,6 +128,7 @@ export function TeacherAnalyticsPage() {
   const [searchResults, setSearchResults] = useState<SearchStudent[]>([]);
   const [weakTopics, setWeakTopics] = useState<TopicWeak[]>([]);
   const [students, setStudents] = useState<StudentRow[]>([]);
+  const [subjectMarksHidden, setSubjectMarksHidden] = useState(false);
   const [studentTotal, setStudentTotal] = useState(0);
   const [studentPage, setStudentPage] = useState(1);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
@@ -196,6 +207,7 @@ export function TeacherAnalyticsPage() {
         setWeakTopics([]);
         setStudents([]);
         setStudentTotal(0);
+        setSubjectMarksHidden(false);
         return;
       }
       const qClass = classId !== "ALL" ? `classId=${encodeURIComponent(classId)}&` : "";
@@ -214,6 +226,7 @@ export function TeacherAnalyticsPage() {
       if (s.ok) {
         setStudents(s.data?.students ?? []);
         setStudentTotal(s.data?.total ?? s.data?.students?.length ?? 0);
+        setSubjectMarksHidden(Boolean(s.data?.marksHidden));
       }
     })();
   }, [classId, status, subjectId, levelId, selectedStudentId, studentPage]);
@@ -431,6 +444,11 @@ export function TeacherAnalyticsPage() {
                 </>
               )}
             </p>
+            {testsByDate.items.some((t) => t.marksHidden) ? (
+              <p className="mt-2 text-sm text-slate-600">
+                Some scores are hidden. Those tests still show who finished.
+              </p>
+            ) : null}
             <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50">
@@ -473,9 +491,7 @@ export function TeacherAnalyticsPage() {
                           ) : null}
                         </td>
                         <td className="p-2">{t.levelName}</td>
-                        <td className="p-2 text-right">
-                          {t.percentage != null ? t.percentage.toFixed(1) : "—"}
-                        </td>
+                        <td className="p-2 text-right">{formatAppMark(t.percentage, t.marksHidden)}</td>
                         <td className="p-2 whitespace-nowrap">{formatTestDate(t.completedAt)}</td>
                       </tr>
                     ))
@@ -563,6 +579,13 @@ export function TeacherAnalyticsPage() {
         </ul>
       </section>
 
+      {subjectMarksHidden ? (
+        <p className="mt-4 text-sm text-slate-600">
+          Individual app marks are hidden for this subject. Completion dates are still shown. Classroom marks stay
+          visible.
+        </p>
+      ) : null}
+
       <section className="mt-5 rounded-xl border bg-white shadow-sm overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
@@ -583,10 +606,10 @@ export function TeacherAnalyticsPage() {
                 <td className="p-3">{s.fullName}</td>
                 <td className="p-3">{s.className}</td>
                 <td className="p-3">{s.currentLevel}</td>
-                <td className="p-3 text-right">{s.latestScore != null ? s.latestScore.toFixed(1) : "—"}</td>
+                <td className="p-3 text-right">{formatAppMark(s.latestScore, s.marksHidden)}</td>
                 <td className="p-3 whitespace-nowrap">{formatTestDate(s.lastCompletedTestAt)}</td>
-                <td className="p-3">{s.weakTopics.length ? s.weakTopics.join(", ") : "—"}</td>
-                <td className="p-3">{s.status}</td>
+                <td className="p-3">{s.marksHidden ? "Hidden" : s.weakTopics.length ? s.weakTopics.join(", ") : "—"}</td>
+                <td className="p-3">{s.marksHidden ? "Hidden" : s.status}</td>
                 <td className="p-3">
                   <button
                     type="button"
@@ -673,6 +696,11 @@ export function TeacherAnalyticsPage() {
               Close
             </button>
           </div>
+          {detailStudent.marksHidden ? (
+            <p className="text-sm mt-3 text-slate-600">
+              Individual app marks are hidden for one or more subjects. Classroom marks below stay visible.
+            </p>
+          ) : null}
           <p className="text-sm mt-3 font-medium text-slate-800">Online skill tests</p>
           <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
@@ -694,7 +722,7 @@ export function TeacherAnalyticsPage() {
                   detailStudent.tests.map((t) => (
                     <tr key={t.testId} className="border-t border-slate-100">
                       <td className="p-2">{t.level}</td>
-                      <td className="p-2 text-right">{t.percentage != null ? t.percentage.toFixed(1) : "—"}</td>
+                      <td className="p-2 text-right">{formatAppMark(t.percentage, t.marksHidden)}</td>
                       <td className="p-2 whitespace-nowrap">{formatTestDate(t.completedAt)}</td>
                     </tr>
                   ))

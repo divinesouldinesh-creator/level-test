@@ -2,8 +2,10 @@ import { Router } from "express";
 import { ClassroomAssessmentKind } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { pickBoardQuestions } from "../services/testGenerator.js";
 
 export const ORAL_SCOPE_KEY = "oral";
+const MARKS_PASS_PERCENT = 75;
 
 export function dateOnly(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -42,6 +44,7 @@ export async function lastClassroomByStudent(params: {
   subjectId: string;
   kind: ClassroomAssessmentKind;
   beforeDate: Date;
+  testedLevelId?: string | null;
 }): Promise<{ marks: Map<string, LastMarks>; oral: Map<string, LastOral> }> {
   const marks = new Map<string, LastMarks>();
   const oral = new Map<string, LastOral>();
@@ -56,6 +59,9 @@ export async function lastClassroomByStudent(params: {
           subjectId: params.subjectId,
           kind: params.kind,
           date: { lt: params.beforeDate },
+          ...(params.kind === "MARKS" && params.testedLevelId
+            ? { testedLevelId: params.testedLevelId }
+            : {}),
         },
       },
       include: {
@@ -95,11 +101,22 @@ export async function lastClassroomByStudent(params: {
   return { marks, oral };
 }
 
-export async function classroomHistoryForStudent(studentId: string, subjectId?: string) {
+export async function classroomHistoryForStudent(
+  studentId: string,
+  subjectId?: string,
+  testedLevelId?: string
+) {
   const entries = await prisma.classroomAssessmentEntry.findMany({
     where: {
       studentId,
-      ...(subjectId ? { session: { subjectId } } : {}),
+      ...(subjectId || testedLevelId
+        ? {
+            session: {
+              ...(subjectId ? { subjectId } : {}),
+              ...(testedLevelId ? { testedLevelId } : {}),
+            },
+          }
+        : {}),
     },
     include: {
       judgedLevel: { select: { id: true, name: true, order: true } },
@@ -142,6 +159,38 @@ function kindForSubject(subject: { name: string; code: string | null }): Classro
   const code = (subject.code ?? "").toUpperCase();
   if (code === "SPEAK" || subject.name.trim().toLowerCase() === "speaking") return "ORAL";
   return "MARKS";
+}
+
+function formatBoardNumber(n: number): string {
+  if (!Number.isFinite(n)) return "";
+  if (Number.isInteger(n)) return String(n);
+  return String(Math.round(n * 1e6) / 1e6);
+}
+
+/** Question text for the board, plus the correct answer only. Practice choices stay off this list. */
+function boardAnswer(q: {
+  type: string;
+  optionA: string;
+  optionB: string;
+  optionC: string;
+  optionD: string;
+  optionImageA: string | null;
+  optionImageB: string | null;
+  optionImageC: string | null;
+  optionImageD: string | null;
+  correctOption: number;
+  correctNumeric: number | null;
+}): { text: string; imageUrl: string | null } {
+  if (q.type === "NUMERIC") {
+    return { text: q.correctNumeric == null ? "" : formatBoardNumber(q.correctNumeric), imageUrl: null };
+  }
+  const texts = [q.optionA, q.optionB, q.optionC, q.optionD];
+  const images = [q.optionImageA, q.optionImageB, q.optionImageC, q.optionImageD];
+  const index = q.correctOption;
+  return {
+    text: (texts[index] ?? "").trim(),
+    imageUrl: images[index] || null,
+  };
 }
 
 const router = Router();
@@ -222,6 +271,7 @@ router.get("/classroom-assessments", async (req, res) => {
     subjectId,
     kind,
     beforeDate: date,
+    testedLevelId: kind === "MARKS" ? testedLevelId : null,
   });
 
   const roster = students.map((s) => {
@@ -311,7 +361,15 @@ router.get("/classroom-assessments/snapshot", async (req, res) => {
     students: [] as { studentId: string; fullName: string; studentLoginId: string | null; date: string }[],
   }));
   if (students.length === 0) {
-    res.json({ kind, total: 0, assessed: 0, notAssessed: 0, byLevel: emptyByLevel });
+    res.json({
+      kind,
+      total: 0,
+      assessed: 0,
+      notAssessed: 0,
+      passMark: kind === "MARKS" ? MARKS_PASS_PERCENT : null,
+      belowPass: { count: 0, students: [] },
+      byLevel: emptyByLevel,
+    });
     return;
   }
 
@@ -327,11 +385,16 @@ router.get("/classroom-assessments/snapshot", async (req, res) => {
       session: {
         select: {
           date: true,
+          updatedAt: true,
           testedLevel: { select: { id: true, name: true, order: true } },
         },
       },
     },
-    orderBy: { session: { date: "desc" } },
+  });
+  entries.sort((a, b) => {
+    const byDate = b.session.date.getTime() - a.session.date.getTime();
+    if (byDate !== 0) return byDate;
+    return b.session.updatedAt.getTime() - a.session.updatedAt.getTime();
   });
 
   type Current = {
@@ -342,14 +405,48 @@ router.get("/classroom-assessments/snapshot", async (req, res) => {
     levelName: string;
     levelOrder: number;
     date: string;
+    percentage: number | null;
   };
   const currentByStudent = new Map<string, Current>();
+  const seen = new Set<string>();
+  type LevelAttempt = {
+    current: Current;
+    previousPercentage: number | null;
+    previousDate: string | null;
+  };
+  const latestByStudentLevel = new Map<string, LevelAttempt>();
   for (const e of entries) {
-    if (currentByStudent.has(e.studentId)) continue;
     const level = kind === "ORAL" ? e.judgedLevel : e.session.testedLevel;
     if (!level) continue;
     const student = studentById.get(e.studentId);
     if (!student) continue;
+    if (kind === "MARKS") {
+      const levelKey = `${e.studentId}:${level.id}`;
+      const slot = latestByStudentLevel.get(levelKey);
+      if (!slot) {
+        seen.add(e.studentId);
+        latestByStudentLevel.set(levelKey, {
+          current: {
+            studentId: student.id,
+            fullName: student.fullName,
+            studentLoginId: student.user.studentLoginId,
+            levelId: level.id,
+            levelName: level.name,
+            levelOrder: level.order,
+            date: ymd(e.session.date),
+            percentage: e.percentage,
+          },
+          previousPercentage: null,
+          previousDate: null,
+        });
+      } else if (slot.previousPercentage == null && e.percentage != null) {
+        slot.previousPercentage = e.percentage;
+        slot.previousDate = ymd(e.session.date);
+      }
+      continue;
+    }
+    if (seen.has(e.studentId)) continue;
+    seen.add(e.studentId);
     currentByStudent.set(e.studentId, {
       studentId: student.id,
       fullName: student.fullName,
@@ -358,36 +455,79 @@ router.get("/classroom-assessments/snapshot", async (req, res) => {
       levelName: level.name,
       levelOrder: level.order,
       date: ymd(e.session.date),
+      percentage: e.percentage,
     });
   }
 
-  const byLevel = subject.levels.map((l) => {
-    const atLevel = [...currentByStudent.values()].filter((c) => c.levelId === l.id);
-    return {
-      levelId: l.id,
-      order: l.order,
-      name: l.name,
-      count: atLevel.length,
-      students: atLevel.map((c) => ({
-        studentId: c.studentId,
-        fullName: c.fullName,
-        studentLoginId: c.studentLoginId,
-        date: c.date,
-      })),
-    };
+  const toStudent = (
+    c: Current,
+    extra?: {
+      concern?: "weak" | "not-improving" | "both" | null;
+      previousPercentage?: number | null;
+      previousDate?: string | null;
+    }
+  ) => ({
+    studentId: c.studentId,
+    fullName: c.fullName,
+    studentLoginId: c.studentLoginId,
+    date: c.date,
+    percentage: c.percentage,
+    levelName: c.levelName,
+    concern: extra?.concern ?? null,
+    previousPercentage: extra?.previousPercentage ?? null,
+    previousDate: extra?.previousDate ?? null,
   });
-  const assessed = currentByStudent.size;
+  const byLevel =
+    kind === "MARKS"
+      ? subject.levels.map((l) => {
+          const attempts = [...latestByStudentLevel.values()].filter((a) => a.current.levelId === l.id);
+          const cleared = attempts.filter(
+            (a) => a.current.percentage != null && a.current.percentage >= MARKS_PASS_PERCENT
+          );
+          return {
+            levelId: l.id,
+            order: l.order,
+            name: l.name,
+            count: cleared.length,
+            students: attempts.map((a) =>
+              toStudent(a.current, {
+                previousPercentage: a.previousPercentage,
+                previousDate: a.previousDate,
+              })
+            ),
+          };
+        })
+      : subject.levels.map((l) => {
+          const atLevel = [...currentByStudent.values()].filter((c) => c.levelId === l.id);
+          return {
+            levelId: l.id,
+            order: l.order,
+            name: l.name,
+            count: atLevel.length,
+            students: atLevel.map((c) => toStudent(c)),
+          };
+        });
+  const assessed =
+    kind === "MARKS"
+      ? new Set(
+          [...latestByStudentLevel.values()]
+            .filter((a) => a.current.percentage != null && a.current.percentage >= MARKS_PASS_PERCENT)
+            .map((a) => a.current.studentId)
+        ).size
+      : new Set([...currentByStudent.values()].map((c) => c.studentId)).size;
 
   res.json({
     kind,
     total: students.length,
     assessed,
-    notAssessed: students.length - assessed,
+    notAssessed: students.length - seen.size,
+    passMark: kind === "MARKS" ? MARKS_PASS_PERCENT : null,
+    belowPass: { count: 0, students: [] },
     byLevel,
   });
 });
 
-router.get("/classroom-assessments/dates", async (req, res) => {
+router.get("/classroom-assessments/latest", async (req, res) => {
   const classId = typeof req.query.classId === "string" ? req.query.classId : "";
   const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
   const subjectId = typeof req.query.subjectId === "string" ? req.query.subjectId : "";
@@ -406,8 +546,71 @@ router.get("/classroom-assessments/dates", async (req, res) => {
   }
 
   const kind = kindForSubject(subject);
-  const sessions = await prisma.classroomAssessmentSession.findMany({
+  if (kind !== "MARKS") {
+    res.json({ latest: null });
+    return;
+  }
+
+  const session = await prisma.classroomAssessmentSession.findFirst({
     where: { classId, sectionId, subjectId, kind },
+    orderBy: [{ date: "desc" }, { updatedAt: "desc" }],
+    select: {
+      date: true,
+      testedLevel: { select: { id: true, name: true, order: true } },
+    },
+  });
+  if (!session?.testedLevel) {
+    res.json({ latest: null });
+    return;
+  }
+
+  res.json({
+    latest: {
+      testedLevelId: session.testedLevel.id,
+      testedLevelName: session.testedLevel.name,
+      levelOrder: session.testedLevel.order,
+      date: ymd(session.date),
+    },
+  });
+});
+
+router.get("/classroom-assessments/dates", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId : "";
+  const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
+  const subjectId = typeof req.query.subjectId === "string" ? req.query.subjectId : "";
+  if (!classId || !sectionId || !subjectId) {
+    res.status(400).json({ error: "classId, sectionId and subjectId are required" });
+    return;
+  }
+
+  const subject = await prisma.subject.findUnique({
+    where: { id: subjectId },
+    select: { name: true, code: true, levels: { select: { id: true } } },
+  });
+  if (!subject) {
+    res.status(404).json({ error: "Subject not found" });
+    return;
+  }
+
+  const kind = kindForSubject(subject);
+  const testedLevelId = typeof req.query.testedLevelId === "string" ? req.query.testedLevelId : "";
+  if (kind === "MARKS" && !testedLevelId) {
+    res.status(400).json({ error: "testedLevelId is required for marks tests" });
+    return;
+  }
+  if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) {
+    res.status(400).json({ error: "testedLevelId must belong to this subject" });
+    return;
+  }
+
+  const sessions = await prisma.classroomAssessmentSession.findMany({
+    where: {
+      classId,
+      sectionId,
+      subjectId,
+      kind,
+      ...(kind === "MARKS" ? { testedLevelId } : {}),
+    },
     select: { date: true },
     orderBy: { date: "desc" },
   });
@@ -420,6 +623,7 @@ router.get("/classroom-assessments/records", async (req, res) => {
   const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
   const subjectId = typeof req.query.subjectId === "string" ? req.query.subjectId : "";
   const dateInput = typeof req.query.date === "string" ? req.query.date : "";
+  const testedLevelId = typeof req.query.testedLevelId === "string" ? req.query.testedLevelId : "";
   if (!classId || !sectionId || !subjectId || !dateInput) {
     res.status(400).json({ error: "classId, sectionId, subjectId and date are required" });
     return;
@@ -447,23 +651,41 @@ router.get("/classroom-assessments/records", async (req, res) => {
   }
 
   const kind = kindForSubject(subject);
+  if (kind === "MARKS" && !testedLevelId) {
+    res.status(400).json({ error: "testedLevelId is required for marks tests" });
+    return;
+  }
+  if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) {
+    res.status(400).json({ error: "testedLevelId must belong to this subject" });
+    return;
+  }
+
   const students = await prisma.student.findMany({
     where: { classId, sectionId },
     include: { user: { select: { studentLoginId: true } } },
     orderBy: { fullName: "asc" },
   });
-  const sessions = await prisma.classroomAssessmentSession.findMany({
-    where: { classId, sectionId, subjectId, kind, date },
+  const scopeKey = scopeKeyFor(kind, testedLevelId || null);
+  const session = await prisma.classroomAssessmentSession.findUnique({
+    where: {
+      classId_sectionId_subjectId_kind_date_scopeKey: {
+        classId,
+        sectionId,
+        subjectId,
+        kind,
+        date,
+        scopeKey,
+      },
+    },
     include: { entries: true },
-    orderBy: { updatedAt: "desc" },
   });
-  const session = sessions[0] ?? null;
   const entryByStudent = new Map(session?.entries.map((e) => [e.studentId, e]) ?? []);
   const { marks: lastMarks, oral: lastOral } = await lastClassroomByStudent({
     studentIds: students.map((s) => s.id),
     subjectId,
     kind,
     beforeDate: date,
+    testedLevelId: kind === "MARKS" ? testedLevelId : null,
   });
 
   const rows = students.map((s) => {
@@ -517,10 +739,13 @@ router.get("/classroom-assessments/records", async (req, res) => {
     count: assessed.filter((r) => r.judgedLevelId === l.id).length,
   }));
 
+  const testedLevel = kind === "MARKS" ? subject.levels.find((l) => l.id === testedLevelId) : undefined;
   res.json({
     kind,
     date: dateInput,
     saved: Boolean(session),
+    testedLevelId: testedLevel?.id ?? null,
+    testedLevelName: testedLevel?.name ?? null,
     subjectName: subject.name,
     students: rows,
     summary: {
@@ -539,6 +764,7 @@ router.get("/classroom-assessments/records", async (req, res) => {
 router.get("/classroom-assessments/history", async (req, res) => {
   const studentId = typeof req.query.studentId === "string" ? req.query.studentId : "";
   const subjectId = typeof req.query.subjectId === "string" ? req.query.subjectId : "";
+  const testedLevelId = typeof req.query.testedLevelId === "string" ? req.query.testedLevelId : "";
   if (!studentId || !subjectId) {
     res.status(400).json({ error: "studentId and subjectId are required" });
     return;
@@ -551,7 +777,7 @@ router.get("/classroom-assessments/history", async (req, res) => {
     res.status(404).json({ error: "Student not found" });
     return;
   }
-  const items = await classroomHistoryForStudent(studentId, subjectId);
+  const items = await classroomHistoryForStudent(studentId, subjectId, testedLevelId || undefined);
   res.json({
     student: {
       id: student.id,
@@ -660,9 +886,7 @@ router.put("/classroom-assessments", async (req, res) => {
       });
     } else {
       const judgedLevelId = e.judgedLevelId?.trim() || null;
-      if (!judgedLevelId) {
-        return res.status(400).json({ error: "Tick a level for each present student" });
-      }
+      if (!judgedLevelId) continue;
       if (!levelIds.has(judgedLevelId)) {
         return res.status(400).json({ error: "Judged level must belong to this subject" });
       }
@@ -676,6 +900,10 @@ router.put("/classroom-assessments", async (req, res) => {
         remark,
       });
     }
+  }
+
+  if (kind === "ORAL" && prepared.length === 0) {
+    return res.status(400).json({ error: "Mark a level for at least one student" });
   }
 
   const scopeKey = scopeKeyFor(kind, testedLevelId);
@@ -725,6 +953,100 @@ router.put("/classroom-assessments", async (req, res) => {
   ]);
 
   res.json({ ok: true, sessionId: session.id, savedCount: prepared.length });
+});
+
+router.get("/classroom-assessments/questions", async (req, res) => {
+  const subjectId = typeof req.query.subjectId === "string" ? req.query.subjectId : "";
+  const levelId = typeof req.query.levelId === "string" ? req.query.levelId : "";
+  if (!subjectId || !levelId) {
+    res.status(400).json({ error: "subjectId and levelId are required" });
+    return;
+  }
+
+  const subject = await prisma.subject.findUnique({
+    where: { id: subjectId },
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      levels: { where: { id: levelId }, select: { id: true, name: true } },
+    },
+  });
+  if (!subject) {
+    res.status(404).json({ error: "Subject not found" });
+    return;
+  }
+  if (kindForSubject(subject) !== "MARKS") {
+    res.status(400).json({ error: "Question bank is for written class tests" });
+    return;
+  }
+  const level = subject.levels[0];
+  if (!level) {
+    res.status(400).json({ error: "Level must belong to this subject" });
+    return;
+  }
+
+  let picked: { questionIds: string[]; warnings: string[] };
+  try {
+    picked = await pickBoardQuestions(prisma, levelId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    const friendly =
+      message === "Level test config not found"
+        ? "This level has no test size set yet."
+        : message === "No topics configured for this level"
+          ? "This level has no topics set yet."
+          : "Could not build the test for this level.";
+    res.status(400).json({ error: friendly });
+    return;
+  }
+
+  const rows = picked.questionIds.length
+    ? await prisma.question.findMany({
+        where: { id: { in: picked.questionIds }, subjectId, levelId },
+        select: {
+          id: true,
+          stem: true,
+          stemImageUrl: true,
+          type: true,
+          optionA: true,
+          optionB: true,
+          optionC: true,
+          optionD: true,
+          optionImageA: true,
+          optionImageB: true,
+          optionImageC: true,
+          optionImageD: true,
+          correctOption: true,
+          correctNumeric: true,
+        },
+      })
+    : [];
+  const byId = new Map(rows.map((q) => [q.id, q]));
+  const questions = picked.questionIds.flatMap((id) => {
+    const q = byId.get(id);
+    if (!q) return [];
+    const answer = boardAnswer(q);
+    return [
+      {
+        id: q.id,
+        stem: q.stem,
+        stemImageUrl: q.stemImageUrl,
+        answer: answer.text,
+        answerImageUrl: answer.imageUrl,
+      },
+    ];
+  });
+
+  res.json({
+    subjectId,
+    subjectName: subject.name,
+    levelId: level.id,
+    levelName: level.name,
+    questionCount: questions.length,
+    warnings: picked.warnings,
+    questions,
+  });
 });
 
 export default router;

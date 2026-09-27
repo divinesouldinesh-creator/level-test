@@ -41,6 +41,7 @@ import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateCatalog } from "../li
 import {
   deleteHolidayException,
   getHolidaySettings,
+  eachIsoDatesInclusive,
   holidayNameForDate,
   parseIsoDate,
   resolveHolidays,
@@ -458,6 +459,23 @@ function attendanceDateOnly(value: string): Date | null {
   return d;
 }
 
+function utcTodayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Inclusive due range for a YYYY-MM month, clipped to today. Empty when the month is still in the future. */
+function monthDueRange(month: string): { from: string; to: string | null } | null {
+  if (!/^\d{4}-\d{2}$/.test(month)) return null;
+  const year = Number(month.slice(0, 4));
+  const mon = Number(month.slice(5, 7));
+  if (mon < 1 || mon > 12) return null;
+  const from = `${month}-01`;
+  const last = new Date(Date.UTC(year, mon, 0)).toISOString().slice(0, 10);
+  const today = utcTodayIso();
+  if (today < from) return { from, to: null };
+  return { from, to: today < last ? today : last };
+}
+
 function staffDisplayName(user: {
   email: string | null;
   teacher: { fullName: string } | null;
@@ -474,8 +492,91 @@ function staffDisplayName(user: {
   );
 }
 
-/** Which class sections have attendance marked for a calendar day. */
+/** Which class sections have attendance marked for a calendar day, or which school days are still open in a month. */
 router.get("/attendance/marking-status", async (req, res) => {
+  const monthInput = typeof req.query.month === "string" ? req.query.month : "";
+  if (monthInput) {
+    const range = monthDueRange(monthInput);
+    if (!range) {
+      res.status(400).json({ error: "month must be YYYY-MM" });
+      return;
+    }
+
+    const classesPromise = prisma.schoolClass.findMany({
+      include: { sections: { orderBy: { name: "asc" } } },
+      orderBy: { name: "asc" },
+    });
+
+    if (!range.to) {
+      const classes = await classesPromise;
+      const rows = classes.flatMap((c) =>
+        c.sections.map((sec) => ({
+          classId: c.id,
+          className: c.name,
+          sectionId: sec.id,
+          sectionName: sec.name,
+          markedDayCount: 0,
+          missingDates: [] as string[],
+        }))
+      );
+      res.json({
+        month: monthInput,
+        from: range.from,
+        to: null,
+        schoolDayCount: 0,
+        holidayCount: 0,
+        rows,
+      });
+      return;
+    }
+
+    const fromDate = attendanceDateOnly(range.from);
+    const toDate = attendanceDateOnly(range.to);
+    if (!fromDate || !toDate) {
+      res.status(400).json({ error: "month must be YYYY-MM" });
+      return;
+    }
+
+    const [classes, sessions, resolved] = await Promise.all([
+      classesPromise,
+      prisma.attendanceSession.findMany({
+        where: { date: { gte: fromDate, lte: toDate } },
+        select: { classId: true, sectionId: true, date: true },
+      }),
+      resolveHolidays(prisma, range.from, range.to),
+    ]);
+
+    const holidayDates = new Set(resolved.holidays.map((h) => h.date));
+    const schoolDays = eachIsoDatesInclusive(range.from, range.to).filter((iso) => !holidayDates.has(iso));
+    const markedKeys = new Set(
+      sessions.map((s) => `${s.classId}:${s.sectionId}:${s.date.toISOString().slice(0, 10)}`)
+    );
+
+    const rows = classes.flatMap((c) =>
+      c.sections.map((sec) => {
+        const missingDates = schoolDays.filter((iso) => !markedKeys.has(`${c.id}:${sec.id}:${iso}`));
+        return {
+          classId: c.id,
+          className: c.name,
+          sectionId: sec.id,
+          sectionName: sec.name,
+          markedDayCount: schoolDays.length - missingDates.length,
+          missingDates,
+        };
+      })
+    );
+
+    res.json({
+      month: monthInput,
+      from: range.from,
+      to: range.to,
+      schoolDayCount: schoolDays.length,
+      holidayCount: resolved.holidays.length,
+      rows,
+    });
+    return;
+  }
+
   const dateInput = typeof req.query.date === "string" ? req.query.date : "";
   const date = attendanceDateOnly(dateInput);
   if (!date) {
@@ -701,6 +802,7 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
             ? p.data.code.trim() || null
             : sourceSubject.code,
         areaId: sourceSubject.areaId,
+        teacherMarksVisible: sourceSubject.teacherMarksVisible,
       },
     });
     await tx.classSubject.create({
@@ -1277,6 +1379,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
     chapterWeightByBank: z.boolean().optional(),
     chapterNegativeMarking: z.boolean().optional(),
     chapterWrongPenalty: z.number().finite().min(0).max(1).optional(),
+    teacherMarksVisible: z.boolean().optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -1313,6 +1416,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
         ? { chapterNegativeMarking: p.data.chapterNegativeMarking }
         : {}),
       ...(p.data.chapterWrongPenalty !== undefined ? { chapterWrongPenalty: p.data.chapterWrongPenalty } : {}),
+      ...(p.data.teacherMarksVisible !== undefined ? { teacherMarksVisible: p.data.teacherMarksVisible } : {}),
     },
   });
   res.json(s);
@@ -1470,15 +1574,28 @@ router.post("/question-images", (req, res, next) => {
   res.json({ url: `/uploads/questions/${req.file.filename}` });
 });
 
-function questionListWhere(query: { topicId?: string; levelId?: string; subjectId?: string; chapterTopicId?: string }) {
+async function questionListWhere(query: { topicId?: string; levelId?: string; subjectId?: string; chapterTopicId?: string }) {
   const levelRaw = query.levelId;
   const noLevel = levelRaw === "none" || levelRaw === "null";
   const levelId = parseOptionalLevelId(levelRaw);
   const folder = query.chapterTopicId?.trim();
   const untagged = folder === "none" || folder === "null";
+  if (!noLevel && levelId) {
+    const level = await prisma.level.findUnique({
+      where: { id: levelId },
+      select: { order: true, levelTopicParticipations: { select: { topicId: true } } },
+    });
+    if (!level) return { id: "__missing_level__" };
+    const topicIds = level.levelTopicParticipations.map((part) => part.topicId);
+    if (!query.topicId && topicIds.length === 0) return { id: "__no_topics__" };
+    return {
+      topicId: query.topicId ? query.topicId : { in: topicIds },
+      level: { order: level.order },
+    };
+  }
   return {
     ...(query.topicId ? { topicId: query.topicId } : {}),
-    ...(noLevel ? { levelId: null } : levelId ? { levelId } : {}),
+    ...(noLevel ? { levelId: null } : {}),
     ...(query.subjectId ? { subjectId: query.subjectId } : {}),
     ...(untagged ? { chapterTopicId: null } : folder ? { chapterTopicId: folder } : {}),
   };
@@ -1490,7 +1607,7 @@ router.get("/questions/counts", async (req, res) => {
   if (!subjectId) return res.status(400).json({ error: "subjectId required" });
   const grouped = await prisma.question.groupBy({
     by: ["topicId", "chapterTopicId"],
-    where: questionListWhere({ subjectId, levelId: levelRaw }),
+    where: await questionListWhere({ subjectId, levelId: levelRaw }),
     _count: { _all: true },
   });
   res.json(
@@ -1507,7 +1624,7 @@ router.get("/questions", async (req, res) => {
   const levelRaw = typeof req.query.levelId === "string" ? req.query.levelId : undefined;
   const subjectId = req.query.subjectId as string | undefined;
   const chapterTopicId = typeof req.query.chapterTopicId === "string" ? req.query.chapterTopicId : undefined;
-  const where = questionListWhere({ topicId, levelId: levelRaw, subjectId, chapterTopicId });
+  const where = await questionListWhere({ topicId, levelId: levelRaw, subjectId, chapterTopicId });
   const list = await prisma.question.findMany({
     where,
     take: 5000,
@@ -2192,6 +2309,7 @@ router.post("/teachers", async (req, res) => {
     data: {
       email: p.data.email.toLowerCase(),
       passwordHash,
+      passwordPlain: p.data.password,
       role: "TEACHER",
     },
   });
@@ -2204,7 +2322,7 @@ router.post("/teachers", async (req, res) => {
 router.get("/teachers", async (_req, res) => {
   const teachers = await prisma.teacher.findMany({
     include: {
-      user: { select: { email: true } },
+      user: { select: { email: true, passwordPlain: true } },
     },
     orderBy: { fullName: "asc" },
   });
@@ -2214,6 +2332,7 @@ router.get("/teachers", async (_req, res) => {
       userId: t.userId,
       fullName: t.fullName,
       email: t.user.email ?? "",
+      password: t.user.passwordPlain ?? "",
     })),
   });
 });
@@ -2230,7 +2349,7 @@ router.patch("/teachers/:teacherId/reset-password", async (req, res) => {
   const passwordHash = await bcrypt.hash(p.data.password, 10);
   await prisma.user.update({
     where: { id: teacher.userId },
-    data: { passwordHash },
+    data: { passwordHash, passwordPlain: p.data.password },
   });
   res.json({
     password: p.data.password,
@@ -2269,6 +2388,7 @@ router.post("/office-users", async (req, res) => {
       data: {
         email,
         passwordHash,
+        passwordPlain: p.data.password,
         role: "OFFICE",
         office: { create: { fullName: p.data.fullName.trim() } },
       },
@@ -2286,7 +2406,7 @@ router.post("/office-users", async (req, res) => {
 router.get("/office-users", async (_req, res) => {
   try {
     const rows = await prisma.office.findMany({
-      include: { user: { select: { email: true } } },
+      include: { user: { select: { email: true, passwordPlain: true } } },
       orderBy: { fullName: "asc" },
     });
     res.json({
@@ -2295,6 +2415,7 @@ router.get("/office-users", async (_req, res) => {
         userId: o.userId,
         fullName: o.fullName,
         email: o.user.email ?? "",
+        password: o.user.passwordPlain ?? "",
       })),
     });
   } catch (err) {
@@ -2317,7 +2438,7 @@ router.patch("/office-users/:officeId/reset-password", async (req, res) => {
   const passwordHash = await bcrypt.hash(p.data.password, 10);
   await prisma.user.update({
     where: { id: office.userId },
-    data: { passwordHash },
+    data: { passwordHash, passwordPlain: p.data.password },
   });
   res.json({
     password: p.data.password,

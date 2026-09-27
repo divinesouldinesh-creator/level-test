@@ -47,6 +47,7 @@ type CurriculumSubject = {
   chapterWeightByBank?: boolean;
   chapterNegativeMarking?: boolean;
   chapterWrongPenalty?: number;
+  teacherMarksVisible?: boolean;
   area: { id: string; name: string; code: string | null } | null;
   levels: CurriculumLevel[];
   chapters?: CurriculumChapter[];
@@ -737,6 +738,18 @@ function SubjectCard({
     }
   }
 
+  async function setTeacherMarksVisible(next: boolean) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/subjects/${subject.id}`, {
+      method: "PATCH",
+      json: { teacherMarksVisible: next },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not update marks setting");
+    else await onChanged();
+  }
+
   async function renameSubject() {
     const nextName = editingSubjectName.trim();
     if (!nextName) return;
@@ -777,6 +790,11 @@ function SubjectCard({
               levels
             </span>
           )}
+          {subject.teacherMarksVisible === false ? (
+            <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+              marks hidden
+            </span>
+          ) : null}
           {subject.area ? (
             <span className="ml-2 text-xs font-normal text-slate-500">· {subject.area.name}</span>
           ) : (
@@ -910,6 +928,23 @@ function SubjectCard({
             </button>
           </div>
         ) : null}
+
+        <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={subject.teacherMarksVisible !== false}
+            disabled={busy}
+            onChange={(e) => void setTeacherMarksVisible(e.target.checked)}
+          />
+          <span>
+            <span className="font-medium">Show app marks to teachers</span>
+            <span className="block text-xs text-slate-500">
+              Students always see their own score. They are not told about this setting. Classroom marks that
+              teachers enter stay visible.
+            </span>
+          </span>
+        </label>
 
         {subject.testMode === "CHAPTER" ? (
           <BranchChapterPanel
@@ -1701,7 +1736,7 @@ function LevelDetail({
         <form onSubmit={addTopic} className="mt-2 flex flex-wrap gap-2">
           <input
             className="rounded border border-slate-300 px-2 py-1.5 text-sm flex-1 min-w-[160px]"
-            placeholder="New chapter name"
+            placeholder="Chapter name. Same name shares the question bank."
             value={topicName}
             onChange={(e) => setTopicName(e.target.value)}
             disabled={busy}
@@ -1744,7 +1779,7 @@ function LevelDetail({
       <div>
         <p className="text-sm font-medium text-slate-700">Which chapters supply questions</p>
         <p className="text-xs text-slate-500 mt-0.5">
-          Leave quota blank to split questions evenly across selected chapters. Questions in the bank must match this level and chapter.
+          Leave quota blank to split questions evenly across selected chapters. A chapter with the same name on the same level number shares one question bank across branches. Level 0 and Level 1 stay separate.
         </p>
         <ul className="mt-2 space-y-2">
           {partRows.map((row) => {

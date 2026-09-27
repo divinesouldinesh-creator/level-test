@@ -3,6 +3,7 @@ import { DailyChallengeStatus } from "@prisma/client";
 import { istDayKey, previousIstDayKey } from "./engagementCalendar.js";
 import { awardDailyChallengeXp } from "./studentEngagement.js";
 import { masteryPriorityTopicIds } from "./topicMastery.js";
+import { levelIdsAtOrder, levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
 import { scoreSubmittedAnswer, type SubmittedAnswer } from "./questionAnswer.js";
 
 const DAILY_QUESTION_COUNT = 5;
@@ -104,10 +105,13 @@ async function pickQuestionsForDaily(
     assigned += 1;
   }
 
+  const order = await levelOrder(prisma, levelId);
+  if (order == null) return { questionIds: [], focusTopicNames };
+
   const picked: string[] = [];
   for (const [topicId, need] of needByTopic) {
     const pool = await prisma.question.findMany({
-      where: { levelId, topicId },
+      where: sharedLevelQuestionWhere(order, topicId),
       select: { id: true },
     });
     const take = shuffle(pool.map((p) => p.id)).slice(0, need);
@@ -117,8 +121,7 @@ async function pickQuestionsForDaily(
   if (picked.length < count) {
     const extra = await prisma.question.findMany({
       where: {
-        levelId,
-        topicId: { in: usable.map((t) => t.topicId) },
+        ...sharedLevelQuestionWhere(order, usable.map((t) => t.topicId)),
         id: { notIn: picked },
       },
       select: { id: true },
@@ -197,9 +200,10 @@ async function chooseSubjectAndLevel(
     });
     const perfByTopic = new Map(perfs.map((p) => [p.topicId, p]));
 
+    const sharedLevelIds = await levelIdsAtOrder(prisma, level.order);
     const counts = await prisma.question.groupBy({
       by: ["topicId"],
-      where: { levelId: level.id, topicId: { in: topicIds } },
+      where: { levelId: { in: sharedLevelIds }, topicId: { in: topicIds } },
       _count: { _all: true },
     });
     const countByTopic = new Map(counts.map((c) => [c.topicId, c._count._all]));

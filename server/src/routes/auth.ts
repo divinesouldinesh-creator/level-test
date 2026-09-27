@@ -110,6 +110,15 @@ router.post("/login", async (req, res) => {
       return;
     }
 
+    if (
+      (user.role === "STUDENT" || user.role === "TEACHER" || user.role === "OFFICE") &&
+      user.passwordPlain !== password
+    ) {
+      prisma.user
+        .update({ where: { id: user.id }, data: { passwordPlain: password } })
+        .catch((saveErr) => console.error("save login password failed", saveErr));
+    }
+
     const office = user.role === "OFFICE" ? await loadOfficeProfile(user.id) : null;
 
     if (user.student?.id) {
@@ -203,7 +212,12 @@ router.patch("/change-password", authMiddleware, async (req, res) => {
   const passwordHash = await bcrypt.hash(p.data.newPassword, 10);
   await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash },
+    data: {
+      passwordHash,
+      ...(user.role === "STUDENT" || user.role === "TEACHER" || user.role === "OFFICE"
+        ? { passwordPlain: p.data.newPassword }
+        : {}),
+    },
   });
   res.json({ ok: true });
 });

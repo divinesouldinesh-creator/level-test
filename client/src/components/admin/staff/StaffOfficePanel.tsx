@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api";
 import { useConfirmDialog } from "../../ConfirmDialog";
+import { ViewPasswordDialog } from "../ViewPasswordDialog";
 
 type OfficeRow = {
   id: string;
   userId: string;
   fullName: string;
   email: string;
+  password: string;
 };
 
 type ResetDialog = { officeId: string; fullName: string; password: string };
@@ -23,6 +25,7 @@ export function StaffOfficePanel() {
   const confirmDialog = useConfirmDialog();
   const [toast, setToast] = useState<Toast | null>(null);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
+  const [viewUser, setViewUser] = useState<OfficeRow | null>(null);
 
   const showToast = useCallback((t: Toast) => {
     setToast(t);
@@ -112,6 +115,7 @@ export function StaffOfficePanel() {
       message: `Password updated: ${r.data?.password ?? nextPassword}`,
     });
     setResetDialog(null);
+    await load();
   }
 
   return (
@@ -161,6 +165,7 @@ export function StaffOfficePanel() {
             <tr>
               <th className="text-left p-3">Name</th>
               <th className="text-left p-3">Email</th>
+              <th className="text-left p-3">Password</th>
               <th className="text-right p-3">Actions</th>
             </tr>
           </thead>
@@ -169,8 +174,16 @@ export function StaffOfficePanel() {
               <tr key={o.id} className="border-t border-slate-100">
                 <td className="p-3">{o.fullName}</td>
                 <td className="p-3">{o.email}</td>
+                <td className="p-3 font-mono text-xs">{o.password || "—"}</td>
                 <td className="p-3">
                   <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-slate-300 px-2 py-1 text-xs"
+                      onClick={() => setViewUser(o)}
+                    >
+                      View password
+                    </button>
                     <button
                       type="button"
                       className="rounded border border-slate-300 px-2 py-1 text-xs"
@@ -199,7 +212,7 @@ export function StaffOfficePanel() {
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td className="p-3 text-slate-500" colSpan={3}>
+                <td className="p-3 text-slate-500" colSpan={4}>
                   No office users yet.
                 </td>
               </tr>
@@ -258,6 +271,15 @@ export function StaffOfficePanel() {
           </div>
         </div>
       )}
+      {viewUser ? (
+        <ViewPasswordDialog
+          name={viewUser.fullName}
+          loginLabel="email"
+          login={viewUser.email}
+          password={viewUser.password}
+          onClose={() => setViewUser(null)}
+        />
+      ) : null}
       {confirmDialog.element}
     </div>
   );

@@ -271,6 +271,8 @@ model Subject {
   chapterNegativeMarking   Boolean         @default(false) @map("chapter_negative_marking")
   /// Marks subtracted per wrong answer when chapterNegativeMarking is on (e.g. 0.25).
   chapterWrongPenalty      Float           @default(0.25) @map("chapter_wrong_penalty")
+  /// When false, teacher APIs omit individual app marks for this subject. Students still see their own scores.
+  teacherMarksVisible      Boolean         @default(true) @map("teacher_marks_visible")
   levels                   Level[]
   chapters                 SubjectChapter[]
   questions                Question[]
