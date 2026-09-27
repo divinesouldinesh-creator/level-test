@@ -1,5 +1,5 @@
 import type { Difficulty, PrismaClient, QuestionType } from "@prisma/client";
-import { levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
+import { levelOrder, questionHomeLevel, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
 import { questionContentHash } from "../utils/questionHash.js";
 import { questionAnswerKey } from "./questionAnswer.js";
 import type { ParsedQuestion } from "./wordImport.js";
@@ -137,8 +137,11 @@ export async function persistParsedQuestions(
   }
 ) {
   const chapterTopicId = opts.chapterTopicId ?? null;
-  const ids = { subjectId: opts.subjectId, levelId: opts.levelId, topicId: opts.topicId, chapterTopicId };
-  const order = opts.levelId ? await levelOrder(prisma, opts.levelId) : null;
+  const home = opts.levelId ? await questionHomeLevel(prisma, opts.levelId, opts.topicId) : null;
+  const writeLevelId = home?.levelId ?? opts.levelId;
+  const writeSubjectId = home?.subjectId ?? opts.subjectId;
+  const ids = { subjectId: writeSubjectId, levelId: writeLevelId, topicId: opts.topicId, chapterTopicId };
+  const order = home?.order ?? (opts.levelId ? await levelOrder(prisma, opts.levelId) : null);
   if (opts.mode === "replace") {
     await prisma.question.deleteMany({
       where:

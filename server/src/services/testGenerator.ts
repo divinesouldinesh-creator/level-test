@@ -1,6 +1,14 @@
-import { Prisma, type PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { allocateByWeights, allocateQuestionCounts } from "./allocateQuotas.js";
-import { levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
+import {
+  countBookUnits,
+  fillLevelTopics,
+  sampleBookUnits,
+  sampleQuestionIdsAny,
+  sampleLevelTopics,
+  type QuestionSampleFilter,
+} from "./questionSample.js";
+import { bankOrder } from "./sharedQuestionBank.js";
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -18,22 +26,43 @@ export async function pickQuestionsForTest(
   levelId: string
 ): Promise<{ questionIds: string[]; warnings: string[] }> {
   const warnings: string[] = [];
-  const config = await prisma.levelTestConfig.findUnique({ where: { levelId } });
-  if (!config) {
+  const parts = await prisma.$queryRaw<
+    {
+      level_order: number;
+      question_count: number | null;
+      topic_id: string | null;
+      quota: number | null;
+      question_level_order: number | null;
+      topic_name: string | null;
+    }[]
+  >`
+    SELECT l."order" AS level_order,
+           c.question_count AS question_count,
+           p.topic_id AS topic_id,
+           p.quota AS quota,
+           p.question_level_order AS question_level_order,
+           t.name AS topic_name
+    FROM "Level" l
+    LEFT JOIN "LevelTestConfig" c ON c.level_id = l.id
+    LEFT JOIN "LevelTopicParticipation" p ON p.level_id = l.id
+    LEFT JOIN "Topic" t ON t.id = p.topic_id
+    WHERE l.id = ${levelId}
+    ORDER BY p.sort_order ASC
+  `;
+  if (parts.length === 0) {
+    throw new Error("Level not found");
+  }
+  if (parts[0]?.question_count == null) {
     throw new Error("Level test config not found");
   }
-  const total = config.questionCount;
-  const parts = await prisma.levelTopicParticipation.findMany({
-    where: { levelId },
-    orderBy: { sortOrder: "asc" },
-    include: { topic: true },
-  });
-  if (parts.length === 0) {
+  const chapters = parts.filter((row) => row.topic_id && row.topic_name);
+  if (chapters.length === 0) {
     throw new Error("No topics configured for this level");
   }
-  const topicIds = parts.map((p) => p.topicId);
+  const total = Number(parts[0].question_count);
+  const topicIds = chapters.map((row) => row.topic_id as string);
   const quotas = new Map<string, number | null>();
-  for (const p of parts) quotas.set(p.topicId, p.quota);
+  for (const row of chapters) quotas.set(row.topic_id as string, row.quota);
 
   const counts = allocateQuestionCounts(total, topicIds, quotas);
   let sum = 0;
@@ -43,38 +72,29 @@ export async function pickQuestionsForTest(
     counts.set(first, (counts.get(first) ?? 0) + (total - sum));
   }
 
-  const order = await levelOrder(prisma, levelId);
-  if (order == null) {
-    throw new Error("Level not found");
-  }
-
+  const levelOrder = Number(parts[0].level_order);
+  const needs = chapters.map((row) => ({
+    order: bankOrder(levelOrder, row.question_level_order),
+    topicId: row.topic_id as string,
+    need: counts.get(row.topic_id as string) ?? 0,
+  }));
+  const sampled = await sampleLevelTopics(prisma, needs);
   const picked: string[] = [];
-  for (const [topicId, need] of counts) {
-    if (need <= 0) continue;
-    const pool = await prisma.question.findMany({
-      where: sharedLevelQuestionWhere(order, topicId),
-      select: { id: true },
-    });
-    const shuffled = shuffle(pool.map((p) => p.id));
-    const take = Math.min(need, shuffled.length);
-    if (take < need) {
-      warnings.push(`Topic "${parts.find((p) => p.topicId === topicId)?.topic.name ?? topicId}": need ${need}, only ${shuffled.length} in bank`);
+  for (const row of chapters) {
+    const topicId = row.topic_id as string;
+    const need = counts.get(topicId) ?? 0;
+    const sample = sampled.get(topicId) ?? { ids: [], available: 0 };
+    if (need > 0 && sample.ids.length < need) {
+      warnings.push(`Topic "${row.topic_name}": need ${need}, only ${sample.available} in bank`);
     }
-    picked.push(...shuffled.slice(0, take));
+    picked.push(...sample.ids);
   }
 
   const missing = total - picked.length;
   if (missing > 0) {
-    const extraPool = await prisma.question.findMany({
-      where: {
-        ...sharedLevelQuestionWhere(order, topicIds),
-        id: { notIn: picked },
-      },
-      select: { id: true },
-    });
-    const more = shuffle(extraPool.map((p) => p.id)).slice(0, missing);
+    const more = await fillLevelTopics(prisma, needs, missing, picked);
     picked.push(...more);
-    if (more.length < missing) {
+    if (picked.length < total) {
       warnings.push(`Could only fill ${picked.length} of ${total} questions`);
     }
   }
@@ -82,124 +102,12 @@ export async function pickQuestionsForTest(
   return { questionIds: shuffle(picked.slice(0, total)), warnings };
 }
 
-type BoardSampleRow = {
-  id: string;
-  topic_id: string;
-  rn: number | bigint;
-  topic_count: number | bigint | string;
-};
-
-/**
- * Same paper rules as pickQuestionsForTest: the level's question count, split across its topics.
- * Asks the database for only those rows instead of loading every id in the bank.
- * Used by the teacher board so student tests keep the original picker.
- */
+/** Teacher board uses the same paper rules and the same short draw as a student level test. */
 export async function pickBoardQuestions(
   prisma: PrismaClient,
   levelId: string
 ): Promise<{ questionIds: string[]; warnings: string[] }> {
-  const warnings: string[] = [];
-  const config = await prisma.levelTestConfig.findUnique({ where: { levelId } });
-  if (!config) {
-    throw new Error("Level test config not found");
-  }
-  const total = config.questionCount;
-  const parts = await prisma.levelTopicParticipation.findMany({
-    where: { levelId },
-    orderBy: { sortOrder: "asc" },
-    include: { topic: true },
-  });
-  if (parts.length === 0) {
-    throw new Error("No topics configured for this level");
-  }
-  const topicIds = parts.map((p) => p.topicId);
-  const quotas = new Map<string, number | null>();
-  for (const p of parts) quotas.set(p.topicId, p.quota);
-
-  const counts = allocateQuestionCounts(total, topicIds, quotas);
-  let sum = 0;
-  for (const n of counts.values()) sum += n;
-  if (sum !== total) {
-    const first = topicIds[0];
-    counts.set(first, (counts.get(first) ?? 0) + (total - sum));
-  }
-
-  const order = await levelOrder(prisma, levelId);
-  if (order == null) {
-    throw new Error("Level not found");
-  }
-
-  const maxNeed = Math.max(0, ...counts.values());
-  const rows =
-    maxNeed > 0
-      ? await prisma.$queryRaw<BoardSampleRow[]>`
-          SELECT id, topic_id, rn, topic_count FROM (
-            SELECT q.id AS id,
-                   q.topic_id AS topic_id,
-                   row_number() OVER (PARTITION BY q.topic_id ORDER BY random()) AS rn,
-                   count(*) OVER (PARTITION BY q.topic_id) AS topic_count
-            FROM "Question" q
-            INNER JOIN "Level" l ON l.id = q.level_id
-            WHERE l."order" = ${order}
-              AND q.topic_id IN (${Prisma.join(topicIds)})
-          ) sampled
-          WHERE rn <= ${maxNeed}
-        `
-      : [];
-
-  const byTopic = new Map<string, BoardSampleRow[]>();
-  const countByTopic = new Map<string, number>();
-  for (const row of rows) {
-    const list = byTopic.get(row.topic_id) ?? [];
-    list.push(row);
-    byTopic.set(row.topic_id, list);
-    countByTopic.set(row.topic_id, Number(row.topic_count));
-  }
-
-  const picked: string[] = [];
-  for (const [topicId, need] of counts) {
-    if (need <= 0) continue;
-    const have = countByTopic.get(topicId) ?? 0;
-    const pool = (byTopic.get(topicId) ?? []).slice().sort((a, b) => Number(a.rn) - Number(b.rn));
-    const take = Math.min(need, pool.length);
-    if (take < need) {
-      warnings.push(
-        `Topic "${parts.find((p) => p.topicId === topicId)?.topic.name ?? topicId}": need ${need}, only ${have} in bank`
-      );
-    }
-    picked.push(...pool.slice(0, take).map((row) => row.id));
-  }
-
-  const missing = total - picked.length;
-  if (missing > 0) {
-    const more =
-      picked.length === 0
-        ? await prisma.$queryRaw<{ id: string }[]>`
-            SELECT q.id AS id
-            FROM "Question" q
-            INNER JOIN "Level" l ON l.id = q.level_id
-            WHERE l."order" = ${order}
-              AND q.topic_id IN (${Prisma.join(topicIds)})
-            ORDER BY random()
-            LIMIT ${missing}
-          `
-        : await prisma.$queryRaw<{ id: string }[]>`
-            SELECT q.id AS id
-            FROM "Question" q
-            INNER JOIN "Level" l ON l.id = q.level_id
-            WHERE l."order" = ${order}
-              AND q.topic_id IN (${Prisma.join(topicIds)})
-              AND q.id NOT IN (${Prisma.join(picked)})
-            ORDER BY random()
-            LIMIT ${missing}
-          `;
-    picked.push(...more.map((row) => row.id));
-    if (more.length < missing) {
-      warnings.push(`Could only fill ${picked.length} of ${total} questions`);
-    }
-  }
-
-  return { questionIds: shuffle(picked.slice(0, total)), warnings };
+  return pickQuestionsForTest(prisma, levelId);
 }
 
 type ChapterPickUnit = {
@@ -262,12 +170,15 @@ export async function pickQuestionsForChapterTest(
   for (const row of chapterTopics) nameByKey.set(`tp:${row.id}`, row.name);
 
   const unitKeys = units.map((u) => u.key);
+  const bookUnits = units.map((unit) => ({
+    key: unit.key,
+    topicId: unit.where.topicId,
+    chapterTopicId: unit.where.chapterTopicId,
+  }));
   let counts: Map<string, number>;
   if (weightByBank) {
-    const weights = new Map<string, number>();
-    for (const unit of units) {
-      weights.set(unit.key, await prisma.question.count({ where: unit.where }));
-    }
+    const weights = await countBookUnits(prisma, subjectId, bookUnits);
+    for (const key of unitKeys) if (!weights.has(key)) weights.set(key, 0);
     counts = allocateByWeights(total, weights);
   } else {
     const quotas = new Map<string, number | null>();
@@ -281,41 +192,35 @@ export async function pickQuestionsForChapterTest(
     counts.set(first, (counts.get(first) ?? 0) + (total - sum));
   }
 
+  const sampled = await sampleBookUnits(
+    prisma,
+    subjectId,
+    bookUnits.map((unit) => ({ ...unit, need: counts.get(unit.key) ?? 0 }))
+  );
   const picked: string[] = [];
-  const pickedSet = new Set<string>();
+  const filters: QuestionSampleFilter[] = bookUnits.map((unit) => ({
+    subjectId,
+    levelIdNull: true,
+    topicId: unit.topicId,
+    chapterTopicId: unit.chapterTopicId,
+  }));
   for (const unit of units) {
     const need = counts.get(unit.key) ?? 0;
-    if (need <= 0) continue;
-    const pool = await prisma.question.findMany({
-      where: unit.where,
-      select: { id: true },
-    });
-    const shuffled = shuffle(pool.map((p) => p.id));
-    const take = Math.min(need, shuffled.length);
-    if (take < need) {
+    const sample = sampled.get(unit.key) ?? { ids: [], available: 0 };
+    if (need > 0 && sample.ids.length < need) {
       const label = nameByKey.get(unit.key) ?? unit.label;
-      warnings.push(`${unit.key.startsWith("tp:") ? "Topic" : "Chapter"} "${label}": need ${need}, only ${shuffled.length} in bank`);
+      warnings.push(
+        `${unit.key.startsWith("tp:") ? "Topic" : "Chapter"} "${label}": need ${need}, only ${sample.available} in bank`
+      );
     }
-    for (const id of shuffled.slice(0, take)) {
-      picked.push(id);
-      pickedSet.add(id);
-    }
+    picked.push(...sample.ids);
   }
 
   const missing = total - picked.length;
   if (missing > 0) {
-    const extraPool = await prisma.question.findMany({
-      where: {
-        subjectId,
-        levelId: null,
-        OR: units.map((u) => u.where),
-        id: { notIn: [...pickedSet] },
-      },
-      select: { id: true },
-    });
-    const more = shuffle(extraPool.map((p) => p.id)).slice(0, missing);
-    picked.push(...more);
-    if (more.length < missing) {
+    const more = await sampleQuestionIdsAny(prisma, filters, missing, picked);
+    picked.push(...more.ids);
+    if (picked.length < total) {
       warnings.push(`Could only fill ${picked.length} of ${total} questions`);
     }
   }

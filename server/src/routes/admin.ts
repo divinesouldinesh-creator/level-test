@@ -23,6 +23,7 @@ import {
 } from "../services/wordImport.js";
 import { questionAnswerKey } from "../services/questionAnswer.js";
 import { persistParsedQuestions, normalizeQuestionFields } from "../services/questionPersist.js";
+import { bankOrder, questionHomeLevel } from "../services/sharedQuestionBank.js";
 import { parseQuestionSheetWithImages } from "../services/sheetQuestionImport.js";
 import {
   buildRowsFromUpload,
@@ -802,6 +803,7 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
             ? p.data.code.trim() || null
             : sourceSubject.code,
         areaId: sourceSubject.areaId,
+        branchGroup: sourceSubject.branchGroup,
         teacherMarksVisible: sourceSubject.teacherMarksVisible,
       },
     });
@@ -857,6 +859,7 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
             topicId: newTopicId,
             quota: part.quota,
             sortOrder: part.sortOrder,
+            questionLevelOrder: part.questionLevelOrder,
           },
         });
       }
@@ -888,7 +891,7 @@ router.get("/subject-areas", async (_req, res) => {
       include: {
         subjects: {
           orderBy: { name: "asc" },
-          select: { id: true, name: true, code: true, testMode: true },
+          select: { id: true, name: true, code: true, testMode: true, branchGroup: true },
         },
         _count: { select: { subjects: true } },
       },
@@ -983,6 +986,7 @@ router.post("/subject-areas/:areaId/branches", async (req, res) => {
     code: z.string().optional(),
     classId: z.string().optional(),
     testMode: subjectTestModeSchema.optional(),
+    branchGroup: z.string().optional(),
     chapterTestQuestionCount: z.number().int().positive().optional(),
     chapterNegativeMarking: z.boolean().optional(),
     chapterWrongPenalty: z.number().finite().min(0).max(1).optional(),
@@ -998,6 +1002,7 @@ router.post("/subject-areas/:areaId/branches", async (req, res) => {
         name: p.data.name.trim(),
         code: p.data.code?.trim() || undefined,
         areaId,
+        branchGroup: p.data.branchGroup?.trim() || null,
         testMode: p.data.testMode ?? "LEVEL",
         chapterTestQuestionCount: p.data.chapterTestQuestionCount ?? 10,
         chapterNegativeMarking: p.data.chapterNegativeMarking ?? false,
@@ -1220,7 +1225,11 @@ router.post("/subjects/:subjectId/levels", async (req, res) => {
 
 router.post("/subjects/:subjectId/topics", async (req, res) => {
   const subjectId = req.params.subjectId;
-  const schema = z.object({ name: z.string(), levelId: z.string().optional() });
+  const schema = z.object({
+    name: z.string(),
+    levelId: z.string().optional(),
+    questionLevelOrder: z.number().int().min(0).nullable().optional(),
+  });
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
   const normalizedName = p.data.name.trim();
@@ -1245,12 +1254,15 @@ router.post("/subjects/:subjectId/topics", async (req, res) => {
   if (p.data.levelId) {
     await prisma.levelTopicParticipation.upsert({
       where: { levelId_topicId: { levelId: p.data.levelId, topicId: t.id } },
-      update: {},
       create: {
         levelId: p.data.levelId,
         topicId: t.id,
         quota: null,
         sortOrder: 999,
+        questionLevelOrder: p.data.questionLevelOrder ?? null,
+      },
+      update: {
+        ...(p.data.questionLevelOrder !== undefined ? { questionLevelOrder: p.data.questionLevelOrder } : {}),
       },
     });
   } else {
@@ -1374,6 +1386,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
     name: z.string().optional(),
     code: z.string().nullable().optional(),
     areaId: z.string().nullable().optional(),
+    branchGroup: z.string().nullable().optional(),
     testMode: subjectTestModeSchema.optional(),
     chapterTestQuestionCount: z.number().int().positive().max(100).optional(),
     chapterWeightByBank: z.boolean().optional(),
@@ -1407,6 +1420,7 @@ router.patch("/subjects/:subjectId", async (req, res) => {
       ...(p.data.name !== undefined ? { name: nextName } : {}),
       ...(p.data.code !== undefined ? { code: nextCode } : {}),
       ...(p.data.areaId !== undefined ? { areaId: p.data.areaId } : {}),
+      ...(p.data.branchGroup !== undefined ? { branchGroup: p.data.branchGroup?.trim() || null } : {}),
       ...(p.data.testMode !== undefined ? { testMode: p.data.testMode } : {}),
       ...(p.data.chapterTestQuestionCount !== undefined
         ? { chapterTestQuestionCount: p.data.chapterTestQuestionCount }
@@ -1538,7 +1552,12 @@ router.put("/levels/:levelId/test-config", async (req, res) => {
 
 router.put("/levels/:levelId/topics", async (req, res) => {
   const schema = z.array(
-    z.object({ topicId: z.string(), quota: z.number().int().positive().nullable().optional(), sortOrder: z.number().optional() })
+    z.object({
+      topicId: z.string(),
+      quota: z.number().int().positive().nullable().optional(),
+      sortOrder: z.number().optional(),
+      questionLevelOrder: z.number().int().min(0).nullable().optional(),
+    })
   );
   const p = schema.safeParse(req.body);
   if (!p.success) return res.status(400).json(p.error.flatten());
@@ -1551,6 +1570,7 @@ router.put("/levels/:levelId/topics", async (req, res) => {
         topicId: row.topicId,
         quota: row.quota ?? null,
         sortOrder: row.sortOrder ?? i,
+        questionLevelOrder: row.questionLevelOrder ?? null,
       },
     });
   }
@@ -1583,14 +1603,26 @@ async function questionListWhere(query: { topicId?: string; levelId?: string; su
   if (!noLevel && levelId) {
     const level = await prisma.level.findUnique({
       where: { id: levelId },
-      select: { order: true, levelTopicParticipations: { select: { topicId: true } } },
+      select: {
+        order: true,
+        levelTopicParticipations: { select: { topicId: true, questionLevelOrder: true } },
+      },
     });
     if (!level) return { id: "__missing_level__" };
-    const topicIds = level.levelTopicParticipations.map((part) => part.topicId);
-    if (!query.topicId && topicIds.length === 0) return { id: "__no_topics__" };
+    const parts = level.levelTopicParticipations;
+    if (!query.topicId && parts.length === 0) return { id: "__no_topics__" };
+    if (query.topicId) {
+      const part = parts.find((row) => row.topicId === query.topicId);
+      return {
+        topicId: query.topicId,
+        level: { order: part ? bankOrder(level.order, part.questionLevelOrder) : level.order },
+      };
+    }
     return {
-      topicId: query.topicId ? query.topicId : { in: topicIds },
-      level: { order: level.order },
+      OR: parts.map((part) => ({
+        topicId: part.topicId,
+        level: { order: bankOrder(level.order, part.questionLevelOrder) },
+      })),
     };
   }
   return {
@@ -1665,6 +1697,11 @@ router.post("/questions", async (req, res) => {
     p.data.chapterTopicId
   );
   if (!placement.ok) return res.status(placement.status).json({ error: placement.error });
+  const home = placement.levelId ? await questionHomeLevel(prisma, placement.levelId, placement.topicId) : null;
+  if (home) {
+    placement.levelId = home.levelId;
+    placement.subjectId = home.subjectId;
+  }
   const normalized = normalizeQuestionFields(p.data);
   if (!normalized.ok) return res.status(400).json({ error: normalized.error });
   const hash = questionContentHash(p.data.topicId, normalized.fields.stem, questionAnswerKey(normalized.fields));

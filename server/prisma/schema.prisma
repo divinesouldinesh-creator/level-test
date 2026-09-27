@@ -263,6 +263,8 @@ model Subject {
   code                     String?
   areaId                   String?         @map("area_id")
   area                     SubjectArea?    @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  /// Folds branches on the curriculum screen, e.g. Basic mathematics, Algebra, NCERT, JEE.
+  branchGroup              String?         @map("branch_group")
   /// LEVEL = existing skill tests. CHAPTER = book chapters, no unlock ladder.
   testMode                 SubjectTestMode @default(LEVEL) @map("test_mode")
   chapterTestQuestionCount Int             @default(10) @map("chapter_test_question_count")
@@ -341,6 +343,8 @@ model Level {
   topicMasteries           TopicMastery[]
   classroomTestedIn        ClassroomAssessmentSession[] @relation("ClassroomTestedLevel")
   classroomJudgedIn        ClassroomAssessmentEntry[]   @relation("ClassroomJudgedLevel")
+
+  @@index([order])
 }
 
 model Topic {
@@ -372,6 +376,8 @@ model LevelTopicParticipation {
   topicId   String @map("topic_id")
   quota     Int?
   sortOrder Int    @default(0) @map("sort_order")
+  /// When set, this level uses the question bank from that level number instead of its own.
+  questionLevelOrder Int? @map("question_level_order")
   level     Level  @relation(fields: [levelId], references: [id], onDelete: Cascade)
   topic     Topic  @relation(fields: [topicId], references: [id], onDelete: Cascade)
 
@@ -424,6 +430,7 @@ model Question {
 
   @@unique([contentHash])
   @@index([topicId])
+  @@index([topicId, levelId])
   @@index([chapterTopicId])
   @@index([subjectId, levelId])
 }
@@ -495,6 +502,7 @@ model StudentAnswer {
   question    Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   @@unique([testAttemptId, questionId])
+  @@index([questionId])
 }
 
 model StudentProgress {

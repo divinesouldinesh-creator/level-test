@@ -11,7 +11,8 @@ import {
   XP_TOPIC_MASTERY,
   XP_TOPIC_PRACTICE,
 } from "./studentEngagement.js";
-import { levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
+import { sampleQuestionIds } from "./questionSample.js";
+import { bankOrder, levelIdsAtOrder, levelOrder } from "./sharedQuestionBank.js";
 
 const PRACTICE_COUNT = 5;
 const RECHECK_COUNT = 3;
@@ -149,7 +150,14 @@ export async function listMasteryQueue(
   if (parts.length === 0) return [];
 
   const topicIds = [...new Set(parts.map((p) => p.topicId))];
-  const orders = [...new Set(currentLevels.map((level) => level.order))];
+  const orders = [
+    ...new Set(
+      parts.map((part) => {
+        const level = currentLevels.find((row) => row.id === part.levelId);
+        return level ? bankOrder(level.order, part.questionLevelOrder) : null;
+      }).filter((order): order is number => order != null)
+    ),
+  ];
   const sharedLevels = await prisma.level.findMany({
     where: { order: { in: orders } },
     select: { id: true, order: true },
@@ -208,7 +216,7 @@ export async function listMasteryQueue(
     if (!level) continue;
     for (const part of parts) {
       if (part.levelId !== level.id) continue;
-      const qCount = countByOrderTopic.get(`${level.order}:${part.topicId}`) ?? 0;
+      const qCount = countByOrderTopic.get(`${bankOrder(level.order, part.questionLevelOrder)}:${part.topicId}`) ?? 0;
       if (qCount < MIN_QUESTIONS_FOR_PATH) continue;
 
       const perf = perfByTopic.get(part.topicId);
@@ -390,25 +398,30 @@ async function pickTopicQuestions(
   topicId: string,
   count: number
 ): Promise<string[]> {
-  const order = await levelOrder(prisma, levelId);
+  const [levelRow, part] = await Promise.all([
+    prisma.level.findUnique({ where: { id: levelId }, select: { order: true } }),
+    prisma.levelTopicParticipation.findUnique({
+      where: { levelId_topicId: { levelId, topicId } },
+      select: { questionLevelOrder: true },
+    }),
+  ]);
+  const order = levelRow ? bankOrder(levelRow.order, part?.questionLevelOrder) : await levelOrder(prisma, levelId);
   if (order == null) return [];
-  const pool = await prisma.question.findMany({
-    where: sharedLevelQuestionWhere(order, topicId),
-    select: { id: true },
-  });
-  if (pool.length === 0) return [];
+  const levelIds = await levelIdsAtOrder(prisma, order);
+  const sample = await sampleQuestionIds(prisma, { topicId, levelIds }, 800);
+  if (sample.ids.length === 0) return [];
 
   const seen = await prisma.studentAnswer.findMany({
     where: {
-      questionId: { in: pool.map((p) => p.id) },
+      questionId: { in: sample.ids },
       testAttempt: { test: { studentId } },
     },
     select: { questionId: true },
     distinct: ["questionId"],
   });
   const seenSet = new Set(seen.map((s) => s.questionId));
-  const unseen = shuffle(pool.filter((p) => !seenSet.has(p.id)).map((p) => p.id));
-  const seenIds = shuffle(pool.filter((p) => seenSet.has(p.id)).map((p) => p.id));
+  const unseen = shuffle(sample.ids.filter((id) => !seenSet.has(id)));
+  const seenIds = shuffle(sample.ids.filter((id) => seenSet.has(id)));
   return [...unseen, ...seenIds].slice(0, count);
 }
 

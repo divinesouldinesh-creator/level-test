@@ -3,7 +3,8 @@ import { DailyChallengeStatus } from "@prisma/client";
 import { istDayKey, previousIstDayKey } from "./engagementCalendar.js";
 import { awardDailyChallengeXp } from "./studentEngagement.js";
 import { masteryPriorityTopicIds } from "./topicMastery.js";
-import { levelIdsAtOrder, levelOrder, sharedLevelQuestionWhere } from "./sharedQuestionBank.js";
+import { fillLevelTopics, sampleLevelTopics } from "./questionSample.js";
+import { bankOrder, levelIdsAtOrder } from "./sharedQuestionBank.js";
 import { scoreSubmittedAnswer, type SubmittedAnswer } from "./questionAnswer.js";
 
 const DAILY_QUESTION_COUNT = 5;
@@ -60,11 +61,11 @@ type TopicCand = {
   attempted: number;
   poolSize: number;
   masteryBoost: number; // higher = prefer in Daily 5
+  bankOrder: number;
 };
 
 async function pickQuestionsForDaily(
   prisma: PrismaClient,
-  levelId: string,
   topicCands: TopicCand[],
   count: number
 ): Promise<{ questionIds: string[]; focusTopicNames: string[] }> {
@@ -105,28 +106,24 @@ async function pickQuestionsForDaily(
     assigned += 1;
   }
 
-  const order = await levelOrder(prisma, levelId);
-  if (order == null) return { questionIds: [], focusTopicNames };
-
+  const orderFor = new Map(topicCands.map((topic) => [topic.topicId, topic.bankOrder]));
+  const needs = [...needByTopic.entries()].map(([topicId, need]) => ({
+    order: orderFor.get(topicId) ?? 0,
+    topicId,
+    need,
+  }));
+  const sampled = await sampleLevelTopics(prisma, needs);
   const picked: string[] = [];
-  for (const [topicId, need] of needByTopic) {
-    const pool = await prisma.question.findMany({
-      where: sharedLevelQuestionWhere(order, topicId),
-      select: { id: true },
-    });
-    const take = shuffle(pool.map((p) => p.id)).slice(0, need);
-    picked.push(...take);
-  }
+  for (const row of needs) picked.push(...(sampled.get(row.topicId)?.ids ?? []));
 
   if (picked.length < count) {
-    const extra = await prisma.question.findMany({
-      where: {
-        ...sharedLevelQuestionWhere(order, usable.map((t) => t.topicId)),
-        id: { notIn: picked },
-      },
-      select: { id: true },
-    });
-    picked.push(...shuffle(extra.map((e) => e.id)).slice(0, count - picked.length));
+    const more = await fillLevelTopics(
+      prisma,
+      usable.map((topic) => ({ order: topic.bankOrder, topicId: topic.topicId })),
+      count - picked.length,
+      picked
+    );
+    picked.push(...more);
   }
 
   return { questionIds: shuffle(picked.slice(0, count)), focusTopicNames };
@@ -200,13 +197,18 @@ async function chooseSubjectAndLevel(
     });
     const perfByTopic = new Map(perfs.map((p) => [p.topicId, p]));
 
-    const sharedLevelIds = await levelIdsAtOrder(prisma, level.order);
-    const counts = await prisma.question.groupBy({
-      by: ["topicId"],
-      where: { levelId: { in: sharedLevelIds }, topicId: { in: topicIds } },
-      _count: { _all: true },
-    });
-    const countByTopic = new Map(counts.map((c) => [c.topicId, c._count._all]));
+    const countByOrderTopic = new Map<string, number>();
+    const orders = [...new Set(parts.map((part) => bankOrder(level.order, part.questionLevelOrder)))];
+    for (const order of orders) {
+      const sharedLevelIds = await levelIdsAtOrder(prisma, order);
+      if (sharedLevelIds.length === 0) continue;
+      const counts = await prisma.question.groupBy({
+        by: ["topicId"],
+        where: { levelId: { in: sharedLevelIds }, topicId: { in: topicIds } },
+        _count: { _all: true },
+      });
+      for (const row of counts) countByOrderTopic.set(`${order}:${row.topicId}`, row._count._all);
+    }
 
     const topicCands: TopicCand[] = parts.map((p) => {
       const perf = perfByTopic.get(p.topicId);
@@ -218,8 +220,9 @@ async function chooseSubjectAndLevel(
         topicName: p.topic.name,
         accuracy,
         attempted,
-        poolSize: countByTopic.get(p.topicId) ?? 0,
+        poolSize: countByOrderTopic.get(`${bankOrder(level.order, p.questionLevelOrder)}:${p.topicId}`) ?? 0,
         masteryBoost: priorityTopics.has(p.topicId) ? 1 : 0,
+        bankOrder: bankOrder(level.order, p.questionLevelOrder),
       };
     });
 
@@ -300,7 +303,6 @@ export async function getOrCreateTodayChallenge(
 
   const { questionIds, focusTopicNames } = await pickQuestionsForDaily(
     prisma,
-    pick.levelId,
     pick.topicCands,
     DAILY_QUESTION_COUNT
   );

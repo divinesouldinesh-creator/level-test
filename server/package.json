@@ -27,6 +27,9 @@
     "db:ensure-chapter-weight": "tsx scripts/ensure-chapter-weight-by-bank.ts",
     "db:ensure-teacher-marks": "tsx scripts/ensure-teacher-marks-visible.ts",
     "db:ensure-holidays": "tsx scripts/ensure-school-holidays.ts",
+    "db:ensure-question-level-order": "tsx scripts/ensure-question-level-order.ts",
+    "db:ensure-branch-group": "tsx scripts/ensure-branch-group.ts",
+    "db:ensure-question-pick-index": "tsx scripts/ensure-question-pick-index.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

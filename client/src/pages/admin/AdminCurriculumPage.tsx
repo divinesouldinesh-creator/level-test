@@ -19,6 +19,7 @@ type LevelTopicPart = {
   topicId: string;
   quota: number | null;
   sortOrder: number;
+  questionLevelOrder: number | null;
   topic: { id: string; name: string };
 };
 type CurriculumLevel = {
@@ -42,6 +43,7 @@ type CurriculumSubject = {
   name: string;
   code: string | null;
   areaId: string | null;
+  branchGroup?: string | null;
   testMode?: "LEVEL" | "CHAPTER";
   chapterTestQuestionCount?: number;
   chapterWeightByBank?: boolean;
@@ -61,7 +63,13 @@ type SubjectAreaRow = {
   code: string | null;
   sortOrder: number;
   branchCount: number;
-  branches: { id: string; name: string; code: string | null; testMode?: "LEVEL" | "CHAPTER" }[];
+  branches: {
+    id: string;
+    name: string;
+    code: string | null;
+    testMode?: "LEVEL" | "CHAPTER";
+    branchGroup?: string | null;
+  }[];
 };
 
 export function AdminCurriculumPage() {
@@ -156,8 +164,11 @@ function ClassesPanel({
 }) {
   const [newName, setNewName] = useState("");
   const [newGrade, setNewGrade] = useState("");
+  const [addingClass, setAddingClass] = useState(false);
   const [sectionInputs, setSectionInputs] = useState<Record<string, string>>({});
+  const [sectionOpenFor, setSectionOpenFor] = useState<string | null>(null);
   const [linkPick, setLinkPick] = useState<Record<string, string>>({});
+  const [linkOpenFor, setLinkOpenFor] = useState<string | null>(null);
 
   async function addClass(e: React.FormEvent) {
     e.preventDefault();
@@ -173,6 +184,7 @@ function ClassesPanel({
     else {
       setNewName("");
       setNewGrade("");
+      setAddingClass(false);
       await onChanged();
     }
   }
@@ -190,6 +202,7 @@ function ClassesPanel({
     if (!r.ok) setErr(r.error ?? "Could not add section");
     else {
       setSectionInputs((m) => ({ ...m, [classId]: "" }));
+      setSectionOpenFor(null);
       await onChanged();
     }
   }
@@ -206,6 +219,7 @@ function ClassesPanel({
     if (!r.ok) setErr(r.error ?? "Could not link subject");
     else {
       setLinkPick((m) => ({ ...m, [classId]: "" }));
+      setLinkOpenFor(null);
       await onChanged();
     }
   }
@@ -230,133 +244,195 @@ function ClassesPanel({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="font-semibold text-lg text-slate-900">School classes</h2>
-      <form onSubmit={addClass} className="mt-4 flex flex-wrap gap-2 items-end">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Class name</span>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-semibold text-lg text-slate-900">School classes</h2>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setAddingClass((open) => !open)}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 disabled:opacity-50"
+        >
+          {addingClass ? "Close" : "Add class"}
+        </button>
+      </div>
+      {addingClass && (
+        <form onSubmit={addClass} className="mt-3 flex flex-wrap gap-2 items-end">
           <input
             className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[180px]"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="e.g. Class 8"
+            placeholder="Class name, such as Class 8"
             disabled={busy}
+            autoFocus
           />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Grade (optional)</span>
           <input
             className="rounded-lg border border-slate-300 px-3 py-2 w-24 text-base"
             value={newGrade}
             onChange={(e) => setNewGrade(e.target.value)}
-            placeholder="8"
+            placeholder="Grade"
             disabled={busy}
           />
-        </label>
-        <button
-          type="submit"
-          disabled={busy || !newName.trim()}
-          className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          Add class
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={busy || !newName.trim()}
+            className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            Add
+          </button>
+        </form>
+      )}
 
-      <ul className="mt-6 divide-y divide-slate-100">
-        {classes.map((c) => {
-          const linkedIds = new Set(c.subjects.map((s) => s.subject.id));
-          const addOptions = subjectOptions.filter((o) => !linkedIds.has(o.id));
-          return (
-            <li key={c.id} className="py-4 first:pt-0">
-              <div className="flex flex-wrap items-baseline gap-2 justify-between">
-                <div>
+      <div className="mt-4 space-y-2">
+        {classes.length === 0 ? (
+          <p className="text-sm text-slate-500">No classes yet.</p>
+        ) : (
+          classes.map((c) => {
+            const linkedIds = new Set(c.subjects.map((s) => s.subject.id));
+            const addOptions = subjectOptions.filter((o) => !linkedIds.has(o.id));
+            return (
+              <details key={c.id} className="rounded-lg border border-slate-200 bg-slate-50 open:bg-white">
+                <summary className="cursor-pointer list-none px-3 py-2">
                   <span className="font-medium text-slate-900">{c.name}</span>
                   {c.grade ? <span className="text-slate-500 text-sm ml-2">Grade {c.grade}</span> : null}
-                </div>
-              </div>
-              <div className="mt-2 text-sm text-slate-600">
-                Sections:{" "}
-                {c.sections.length ? (
-                  c.sections.map((s) => (
-                    <span key={s.id} className="inline-block mr-2 rounded bg-slate-100 px-2 py-0.5">
-                      {s.name}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-amber-700">None yet — add at least one section for students.</span>
-                )}
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2 items-center">
-                <input
-                  className="rounded border border-slate-300 px-2 py-1 text-sm w-28"
-                  placeholder="Section"
-                  value={sectionInputs[c.id] ?? ""}
-                  onChange={(e) => setSectionInputs((m) => ({ ...m, [c.id]: e.target.value }))}
-                  disabled={busy}
-                />
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void addSection(c.id)}
-                  className="text-sm font-medium text-slate-700 underline disabled:opacity-50"
-                >
-                  Add section
-                </button>
-              </div>
-              <div className="mt-3">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Subjects for this class</p>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {c.subjects.map((cs) => (
-                    <span
-                      key={cs.subject.id}
-                      className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-900 pl-3 pr-1 py-1 text-sm"
-                    >
-                      {cs.subject.name}
+                  <span className="ml-2 text-xs text-slate-500">
+                    {c.sections.length} section{c.sections.length === 1 ? "" : "s"}
+                  </span>
+                </summary>
+                <div className="border-t border-slate-100 px-3 py-3 space-y-3">
+                  <div>
+                    <div className="flex flex-wrap gap-2">
+                      {c.sections.map((s) => (
+                        <span key={s.id} className="rounded bg-slate-100 px-2 py-0.5 text-sm text-slate-700">
+                          {s.name}
+                        </span>
+                      ))}
+                      {c.sections.length === 0 && <span className="text-sm text-slate-500">No sections yet.</span>}
+                    </div>
+                    {sectionOpenFor === c.id ? (
+                      <div className="mt-2 flex flex-wrap gap-2 items-center">
+                        <input
+                          className="rounded border border-slate-300 px-2 py-1 text-sm w-28"
+                          placeholder="Section"
+                          value={sectionInputs[c.id] ?? ""}
+                          onChange={(e) => setSectionInputs((m) => ({ ...m, [c.id]: e.target.value }))}
+                          disabled={busy}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          disabled={busy || !(sectionInputs[c.id] ?? "").trim()}
+                          onClick={() => void addSection(c.id)}
+                          className="rounded-lg bg-slate-900 text-white px-3 py-1 text-sm disabled:opacity-50"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    ) : (
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={() => unlinkSubject(c.id, cs.subject.id, cs.subject.name, c.name)}
-                        className="rounded-full p-1 hover:bg-indigo-100 text-indigo-700"
-                        aria-label={`Remove ${cs.subject.name}`}
+                        onClick={() => setSectionOpenFor(c.id)}
+                        className="mt-2 text-sm font-medium text-slate-700 underline disabled:opacity-50"
                       >
-                        ×
+                        Add section
                       </button>
-                    </span>
-                  ))}
-                </div>
-                {addOptions.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2 items-center">
-                    <select
-                      className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm min-w-[160px]"
-                      value={linkPick[c.id] ?? ""}
-                      onChange={(e) => setLinkPick((m) => ({ ...m, [c.id]: e.target.value }))}
-                      disabled={busy}
-                    >
-                      <option value="">Add subject…</option>
-                      {addOptions.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={busy || !(linkPick[c.id] ?? "").trim()}
-                      onClick={() => void linkSubject(c.id, linkPick[c.id] ?? "")}
-                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50"
-                    >
-                      Link
-                    </button>
+                    )}
                   </div>
-                ) : (
-                  <p className="mt-2 text-xs text-slate-500">All subjects are already linked (or create a new subject).</p>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                  <div>
+                    <div className="flex flex-wrap gap-2">
+                      {c.subjects.map((cs) => (
+                        <span
+                          key={cs.subject.id}
+                          className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-900 pl-3 pr-1 py-1 text-sm"
+                        >
+                          {cs.subject.name}
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => unlinkSubject(c.id, cs.subject.id, cs.subject.name, c.name)}
+                            className="rounded-full p-1 hover:bg-indigo-100 text-indigo-700"
+                            aria-label={`Remove ${cs.subject.name}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    {linkOpenFor === c.id ? (
+                      <div className="mt-2 flex flex-wrap gap-2 items-center">
+                        <select
+                          className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm min-w-[160px]"
+                          value={linkPick[c.id] ?? ""}
+                          onChange={(e) => setLinkPick((m) => ({ ...m, [c.id]: e.target.value }))}
+                          disabled={busy}
+                        >
+                          <option value="">Choose a branch</option>
+                          {addOptions.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={busy || !(linkPick[c.id] ?? "").trim()}
+                          onClick={() => void linkSubject(c.id, linkPick[c.id] ?? "")}
+                          className="rounded-lg bg-slate-900 text-white px-3 py-1.5 text-sm disabled:opacity-50"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    ) : (
+                      addOptions.length > 0 && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setLinkOpenFor(c.id)}
+                          className="mt-2 text-sm font-medium text-slate-700 underline disabled:opacity-50"
+                        >
+                          Add subject
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              </details>
+            );
+          })
+        )}
+      </div>
     </div>
   );
+}
+
+const GROUP_ORDER = ["Basic mathematics", "Algebra", "NCERT", "JEE", "Book tests"];
+
+function branchGroupLabel(branch: { name: string; testMode?: string; branchGroup?: string | null }): string {
+  const set = branch.branchGroup?.trim();
+  if (set) return set;
+  const name = branch.name.toLowerCase();
+  if (name.includes("jee")) return "JEE";
+  if (name.includes("ncert")) return "NCERT";
+  if (branch.testMode === "CHAPTER") return "Book tests";
+  return branch.name.replace(/\s*[-–:]?\s*(class\s*)?\d+\s*$/i, "").trim() || branch.name;
+}
+
+function groupedBranches<T extends { name: string; testMode?: string; branchGroup?: string | null }>(
+  branches: T[]
+): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const branch of branches) {
+    const label = branchGroupLabel(branch);
+    const list = groups.get(label) ?? [];
+    list.push(branch);
+    groups.set(label, list);
+  }
+  return [...groups.entries()].sort((a, b) => {
+    const ai = GROUP_ORDER.findIndex((name) => name.toLowerCase() === a[0].toLowerCase());
+    const bi = GROUP_ORDER.findIndex((name) => name.toLowerCase() === b[0].toLowerCase());
+    if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    return a[0].localeCompare(b[0]);
+  });
 }
 
 function AreasPanel({
@@ -379,12 +455,13 @@ function AreasPanel({
   requestConfirm: RequestConfirm;
 }) {
   const [areaName, setAreaName] = useState("");
-  const [areaCode, setAreaCode] = useState("");
+  const [addingSubject, setAddingSubject] = useState(false);
+  const [addingBranchFor, setAddingBranchFor] = useState<string | null>(null);
   const [branchName, setBranchName] = useState("");
   const [branchCode, setBranchCode] = useState("");
-  const [branchAreaId, setBranchAreaId] = useState("");
   const [branchClassId, setBranchClassId] = useState("");
   const [branchTestMode, setBranchTestMode] = useState<"LEVEL" | "CHAPTER">("LEVEL");
+  const [branchGroup, setBranchGroup] = useState("");
 
   const subjectsById = useMemo(() => {
     const m = new Map<string, CurriculumSubject>();
@@ -399,29 +476,30 @@ function AreasPanel({
     setErr(null);
     const r = await api("/api/v1/admin/subject-areas", {
       method: "POST",
-      json: { name: areaName.trim(), code: areaCode.trim() || undefined },
+      json: { name: areaName.trim() },
     });
     setBusy(false);
     if (!r.ok) setErr(r.error ?? "Could not create subject");
     else {
       setAreaName("");
-      setAreaCode("");
+      setAddingSubject(false);
       await onChanged();
     }
   }
 
   async function addBranch(e: React.FormEvent) {
     e.preventDefault();
-    if (!branchName.trim() || !branchAreaId) return;
+    if (!branchName.trim() || !addingBranchFor) return;
     setBusy(true);
     setErr(null);
-    const r = await api(`/api/v1/admin/subject-areas/${branchAreaId}/branches`, {
+    const r = await api(`/api/v1/admin/subject-areas/${addingBranchFor}/branches`, {
       method: "POST",
       json: {
         name: branchName.trim(),
         code: branchCode.trim() || undefined,
         classId: branchClassId || undefined,
         testMode: branchTestMode,
+        branchGroup: branchGroup.trim() || undefined,
       },
     });
     setBusy(false);
@@ -429,7 +507,10 @@ function AreasPanel({
     else {
       setBranchName("");
       setBranchCode("");
+      setBranchClassId("");
       setBranchTestMode("LEVEL");
+      setBranchGroup("");
+      setAddingBranchFor(null);
       await onChanged();
     }
   }
@@ -445,122 +526,43 @@ function AreasPanel({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="font-semibold text-lg text-slate-900">Subjects → Branches → Learn / Test</h2>
-      <p className="mt-1 text-sm text-slate-600">
-        Add a subject (Maths, English), then branches under it. Choose Levels or Chapters for each branch.
-      </p>
-
-      <form onSubmit={addArea} className="mt-4 flex flex-wrap gap-2 items-end">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">New subject</span>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-semibold text-lg text-slate-900">Subjects</h2>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setAddingSubject((open) => !open)}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 disabled:opacity-50"
+        >
+          {addingSubject ? "Close" : "Add subject"}
+        </button>
+      </div>
+      {addingSubject && (
+        <form onSubmit={addArea} className="mt-3 flex flex-wrap gap-2 items-center">
           <input
             className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[160px]"
             value={areaName}
             onChange={(e) => setAreaName(e.target.value)}
-            placeholder="e.g. Maths"
+            placeholder="Subject name, such as Maths"
             disabled={busy}
+            autoFocus
           />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Code</span>
-          <input
-            className="rounded-lg border border-slate-300 px-3 py-2 w-24 text-base"
-            value={areaCode}
-            onChange={(e) => setAreaCode(e.target.value)}
-            placeholder="MATHS"
-            disabled={busy}
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy || !areaName.trim()}
-          className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          Add subject
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={busy || !areaName.trim()}
+            className="rounded-lg bg-slate-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            Add
+          </button>
+        </form>
+      )}
 
-      <form onSubmit={addBranch} className="mt-3 flex flex-wrap gap-2 items-end border-t border-slate-100 pt-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Under subject</span>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[150px]"
-            value={branchAreaId}
-            onChange={(e) => setBranchAreaId(e.target.value)}
-            disabled={busy}
-          >
-            <option value="">Select subject</option>
-            {areas.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Branch name</span>
-          <input
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[180px]"
-            value={branchName}
-            onChange={(e) => setBranchName(e.target.value)}
-            placeholder="e.g. Basic Mathematics"
-            disabled={busy}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Code</span>
-          <input
-            className="rounded-lg border border-slate-300 px-3 py-2 w-24 text-base"
-            value={branchCode}
-            onChange={(e) => setBranchCode(e.target.value)}
-            placeholder="MATH"
-            disabled={busy}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Test type</span>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[150px]"
-            value={branchTestMode}
-            onChange={(e) => setBranchTestMode(e.target.value as "LEVEL" | "CHAPTER")}
-            disabled={busy}
-          >
-            <option value="LEVEL">Levels</option>
-            <option value="CHAPTER">Chapters (book)</option>
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-600">Link to class (optional)</span>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[150px]"
-            value={branchClassId}
-            onChange={(e) => setBranchClassId(e.target.value)}
-            disabled={busy}
-          >
-            <option value="">None yet</option>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.grade ? ` (Grade ${c.grade})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="submit"
-          disabled={busy || !branchAreaId || !branchName.trim()}
-          className="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          Add branch
-        </button>
-      </form>
-
-      <div className="mt-6 space-y-4">
+      <div className="mt-4 space-y-4">
         {areas.length === 0 ? (
-          <p className="text-sm text-slate-500">No subjects yet. Add Maths or English above.</p>
+          <p className="text-sm text-slate-500">No subjects yet.</p>
         ) : (
           areas.map((area) => (
-            <details key={area.id} className="rounded-lg border border-slate-200 bg-slate-50 open:bg-white" open>
+            <details key={area.id} className="rounded-lg border border-slate-200 bg-slate-50 open:bg-white">
               <summary className="cursor-pointer list-none px-3 py-3 flex flex-wrap items-center justify-between gap-2">
                 <span>
                   <span className="font-semibold text-slate-900">{area.name}</span>
@@ -588,31 +590,129 @@ function AreasPanel({
                 </button>
               </summary>
               <div className="border-t border-slate-100 px-3 pb-3 space-y-3">
-                {area.branches.length === 0 ? (
-                  <p className="text-sm text-slate-500 pt-2">No branches yet. Add one above.</p>
-                ) : (
-                  area.branches.map((b) => {
-                    const full = subjectsById.get(b.id);
-                    if (!full) {
-                      return (
-                        <p key={b.id} className="text-sm text-slate-500 pt-2">
-                          {b.name}
-                        </p>
-                      );
-                    }
-                    return (
-                      <SubjectCard
-                        key={full.id}
-                        subject={full}
-                        areas={areas}
-                        busy={busy}
-                        setBusy={setBusy}
-                        setErr={setErr}
-                        onChanged={onChanged}
-                        requestConfirm={requestConfirm}
+                {addingBranchFor === area.id ? (
+                  <form onSubmit={addBranch} className="pt-3 flex flex-wrap gap-2 items-end">
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Group</span>
+                      <input
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[160px]"
+                        value={branchGroup}
+                        onChange={(e) => setBranchGroup(e.target.value)}
+                        placeholder="Basic mathematics"
+                        list="branch-group-names"
+                        disabled={busy}
                       />
-                    );
-                  })
+                      <datalist id="branch-group-names">
+                        {["Basic mathematics", "Algebra", "NCERT", "JEE"].map((name) => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Branch name</span>
+                      <input
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[160px]"
+                        value={branchName}
+                        onChange={(e) => setBranchName(e.target.value)}
+                        placeholder="Basic Mathematics"
+                        disabled={busy}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Code</span>
+                      <input
+                        className="rounded-lg border border-slate-300 px-3 py-2 w-24 text-base"
+                        value={branchCode}
+                        onChange={(e) => setBranchCode(e.target.value)}
+                        placeholder="MATH"
+                        disabled={busy}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Test type</span>
+                      <select
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[140px]"
+                        value={branchTestMode}
+                        onChange={(e) => setBranchTestMode(e.target.value as "LEVEL" | "CHAPTER")}
+                        disabled={busy}
+                      >
+                        <option value="LEVEL">Levels</option>
+                        <option value="CHAPTER">Chapters (book)</option>
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      <span className="text-slate-600">Class</span>
+                      <select
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-base min-w-[140px]"
+                        value={branchClassId}
+                        onChange={(e) => setBranchClassId(e.target.value)}
+                        disabled={busy}
+                      >
+                        <option value="">None yet</option>
+                        {classes.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                            {c.grade ? ` (Grade ${c.grade})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={busy || !branchName.trim()}
+                      className="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-medium disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setAddingBranchFor(area.id)}
+                    className="pt-2 text-sm font-medium text-slate-700 underline disabled:opacity-50"
+                  >
+                    Add branch
+                  </button>
+                )}
+                {area.branches.length === 0 ? (
+                  <p className="text-sm text-slate-500">No branches yet.</p>
+                ) : (
+                  groupedBranches(area.branches).map(([label, branches]) => (
+                    <details key={label} className="rounded-lg border border-slate-200 bg-white">
+                      <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-slate-800">
+                        {label}
+                        <span className="ml-2 text-xs font-normal text-slate-500">
+                          {branches.length} branch{branches.length === 1 ? "" : "es"}
+                        </span>
+                      </summary>
+                      <div className="space-y-3 border-t border-slate-100 px-3 py-3">
+                        {branches.map((b) => {
+                          const full = subjectsById.get(b.id);
+                          if (!full) {
+                            return (
+                              <p key={b.id} className="text-sm text-slate-500">
+                                {b.name}
+                              </p>
+                            );
+                          }
+                          return (
+                            <SubjectCard
+                              key={full.id}
+                              subject={full}
+                              subjects={subjects}
+                              areas={areas}
+                              busy={busy}
+                              setBusy={setBusy}
+                              setErr={setErr}
+                              onChanged={onChanged}
+                              requestConfirm={requestConfirm}
+                            />
+                          );
+                        })}
+                      </div>
+                    </details>
+                  ))
                 )}
               </div>
             </details>
@@ -632,6 +732,7 @@ function AreasPanel({
                   <SubjectCard
                     key={full.id}
                     subject={full}
+                    subjects={subjects}
                     areas={areas}
                     busy={busy}
                     setBusy={setBusy}
@@ -650,6 +751,7 @@ function AreasPanel({
 
 function SubjectCard({
   subject,
+  subjects = [],
   areas = [],
   busy,
   setBusy,
@@ -658,6 +760,7 @@ function SubjectCard({
   requestConfirm,
 }: {
   subject: CurriculumSubject;
+  subjects?: CurriculumSubject[];
   areas?: SubjectAreaRow[];
   busy: boolean;
   setBusy: (v: boolean) => void;
@@ -672,6 +775,7 @@ function SubjectCard({
   const [editingSubjectCode, setEditingSubjectCode] = useState(subject.code ?? "");
   const [editingAreaId, setEditingAreaId] = useState(subject.areaId ?? "");
   const [editingTestMode, setEditingTestMode] = useState<"LEVEL" | "CHAPTER">(subject.testMode ?? "LEVEL");
+  const [editingBranchGroup, setEditingBranchGroup] = useState(subject.branchGroup ?? "");
   const [editingQuestionCount, setEditingQuestionCount] = useState(String(subject.chapterTestQuestionCount ?? 10));
   const [editingLevelId, setEditingLevelId] = useState<string | null>(null);
   const [editingLevelName, setEditingLevelName] = useState("");
@@ -761,6 +865,7 @@ function SubjectCard({
         name: nextName,
         code: editingSubjectCode.trim() || null,
         areaId: editingAreaId || null,
+        branchGroup: editingBranchGroup.trim() || null,
         testMode: editingTestMode,
         ...(editingTestMode === "CHAPTER"
           ? { chapterTestQuestionCount: Math.max(1, parseInt(editingQuestionCount, 10) || 10) }
@@ -812,6 +917,7 @@ function SubjectCard({
               setEditingSubjectName(subject.name);
               setEditingSubjectCode(subject.code ?? "");
               setEditingAreaId(subject.areaId ?? "");
+              setEditingBranchGroup(subject.branchGroup?.trim() || branchGroupLabel(subject));
               setEditingTestMode(subject.testMode ?? "LEVEL");
               setEditingQuestionCount(String(subject.chapterTestQuestionCount ?? 10));
             }}
@@ -880,6 +986,16 @@ function SubjectCard({
                 </select>
               </label>
             )}
+            <label className="text-sm">
+              <span className="block text-slate-600 mb-1">Group</span>
+              <input
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm min-w-[180px]"
+                value={editingBranchGroup}
+                onChange={(e) => setEditingBranchGroup(e.target.value)}
+                list="branch-group-names"
+                disabled={busy}
+              />
+            </label>
             <label className="text-sm">
               <span className="block text-slate-600 mb-1">Test type</span>
               <select
@@ -1084,6 +1200,7 @@ function SubjectCard({
                 {openLevelId === lvl.id ? (
                   <LevelDetail
                     subjectId={subject.id}
+                    subjects={subjects}
                     level={lvl}
                     topicsInLevel={topicsInLevel}
                     busy={busy}
@@ -1518,6 +1635,7 @@ function BranchLearnPanel({
 
 function LevelDetail({
   subjectId,
+  subjects,
   level,
   topicsInLevel,
   busy,
@@ -1527,6 +1645,7 @@ function LevelDetail({
   requestConfirm,
 }: {
   subjectId: string;
+  subjects: CurriculumSubject[];
   level: CurriculumLevel;
   topicsInLevel: CurriculumTopic[];
   busy: boolean;
@@ -1541,7 +1660,9 @@ function LevelDetail({
   const [qCount, setQCount] = useState(String(level.testConfig?.questionCount ?? 8));
   const [partRows, setPartRows] = useState(() => buildPartRows(level, topicsInLevel));
 
-  const partSig = level.levelTopicParticipations.map((p) => `${p.topicId}:${p.quota ?? ""}`).join("|");
+  const partSig = level.levelTopicParticipations
+    .map((p) => `${p.topicId}:${p.quota ?? ""}:${p.questionLevelOrder ?? ""}`)
+    .join("|");
   const topicIdsSig = topicsInLevel.map((t) => t.id).join(",");
 
   useEffect(() => {
@@ -1549,14 +1670,19 @@ function LevelDetail({
     setPartRows(buildPartRows(level, topicsInLevel));
   }, [level, partSig, topicIdsSig, topicsInLevel]);
 
-  async function addTopic(e: React.FormEvent) {
-    e.preventDefault();
-    if (!topicName.trim()) return;
+  async function addTopic(e?: React.FormEvent, bank?: { name: string; questionLevelOrder: number }) {
+    e?.preventDefault();
+    const name = bank?.name ?? topicName.trim();
+    if (!name) return;
     setBusy(true);
     setErr(null);
     const r = await api(`/api/v1/admin/subjects/${subjectId}/topics`, {
       method: "POST",
-      json: { name: topicName.trim(), levelId: level.id },
+      json: {
+        name,
+        levelId: level.id,
+        ...(bank ? { questionLevelOrder: bank.questionLevelOrder } : {}),
+      },
     });
     setBusy(false);
     if (!r.ok) setErr(r.error ?? "Could not add chapter");
@@ -1597,7 +1723,7 @@ function LevelDetail({
           : typeof raw === "number"
             ? raw
             : parseInt(String(raw), 10);
-      return { topicId: r.topicId, quota: q, sortOrder: i };
+      return { topicId: r.topicId, quota: q, sortOrder: i, questionLevelOrder: r.questionLevelOrder };
     });
     for (const row of body) {
       if (row.quota !== null && (!Number.isFinite(row.quota) || row.quota < 1)) {
@@ -1695,7 +1821,13 @@ function LevelDetail({
                     </>
                   ) : (
                     <>
-                      <span>{t.name}</span>
+                      <span>
+                        {t.name}
+                        {level.levelTopicParticipations.find((part) => part.topicId === t.id)?.questionLevelOrder != null &&
+                        level.levelTopicParticipations.find((part) => part.topicId === t.id)?.questionLevelOrder !== level.order
+                          ? ` · uses Level ${level.levelTopicParticipations.find((part) => part.topicId === t.id)?.questionLevelOrder} bank`
+                          : ""}
+                      </span>
                       <button
                         type="button"
                         className="text-xs rounded border border-slate-300 text-slate-700 px-2 py-0.5"
@@ -1733,7 +1865,13 @@ function LevelDetail({
             <li className="list-none text-amber-800">No chapters yet — add one below.</li>
           )}
         </ul>
-        <form onSubmit={addTopic} className="mt-2 flex flex-wrap gap-2">
+        <ChapterBankPicker
+          subjects={subjects}
+          level={level}
+          busy={busy}
+          onUse={(bank) => void addTopic(undefined, bank)}
+        />
+        <form onSubmit={(e) => void addTopic(e)} className="mt-2 flex flex-wrap gap-2">
           <input
             className="rounded border border-slate-300 px-2 py-1.5 text-sm flex-1 min-w-[160px]"
             placeholder="Chapter name. Same name shares the question bank."
@@ -1837,7 +1975,101 @@ function LevelDetail({
   );
 }
 
-type PartRow = { topicId: string; included: boolean; quota: number | "" | null };
+type PartRow = { topicId: string; included: boolean; quota: number | "" | null; questionLevelOrder: number | null };
+
+type ChapterBank = { topicId: string; name: string; order: number; places: string[] };
+
+function chapterBanks(subjects: CurriculumSubject[], levelId: string): ChapterBank[] {
+  const map = new Map<string, ChapterBank>();
+  for (const subject of subjects) {
+    if (subject.testMode === "CHAPTER") continue;
+    for (const lvl of subject.levels) {
+      for (const part of lvl.levelTopicParticipations) {
+        const order = part.questionLevelOrder ?? lvl.order;
+        const key = `${part.topicId}:${order}`;
+        const place = `${subject.name} · ${lvl.name}`;
+        const existing = map.get(key);
+        if (existing) {
+          if (!existing.places.includes(place)) existing.places.push(place);
+        } else {
+          map.set(key, { topicId: part.topicId, name: part.topic.name, order, places: [place] });
+        }
+      }
+    }
+  }
+  const onThisLevel = new Set(
+    subjects.flatMap((subject) =>
+      subject.levels.filter((lvl) => lvl.id === levelId).flatMap((lvl) => lvl.levelTopicParticipations.map((part) => part.topicId))
+    )
+  );
+  return [...map.values()]
+    .filter((bank) => !onThisLevel.has(bank.topicId))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.order - b.order);
+}
+
+function ChapterBankPicker({
+  subjects,
+  level,
+  busy,
+  onUse,
+}: {
+  subjects: CurriculumSubject[];
+  level: CurriculumLevel;
+  busy: boolean;
+  onUse: (bank: { name: string; questionLevelOrder: number }) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const banks = useMemo(() => chapterBanks(subjects, level.id), [subjects, level.id]);
+  const needle = query.trim().toLowerCase();
+  const matches =
+    needle.length < 2
+      ? []
+      : banks.filter((bank) => `${bank.name} level ${bank.order}`.toLowerCase().includes(needle));
+  const shown = matches.slice(0, 8);
+  if (banks.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <label className="block text-sm font-medium text-slate-700">
+        Use an existing chapter
+        <input
+          className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm font-normal"
+          placeholder="Type a chapter name, such as frac"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          disabled={busy}
+        />
+      </label>
+      {needle.length >= 2 && shown.length === 0 ? (
+        <p className="mt-1 text-sm text-slate-500">No chapter matches.</p>
+      ) : null}
+      {shown.length > 0 ? (
+        <ul className="mt-1 space-y-1">
+          {shown.map((bank) => (
+            <li key={`${bank.topicId}:${bank.order}`}>
+              <button
+                type="button"
+                className="w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-left text-sm disabled:opacity-50"
+                disabled={busy}
+                onClick={() => {
+                  onUse({ name: bank.name, questionLevelOrder: bank.order });
+                  setQuery("");
+                }}
+              >
+                <span className="text-slate-900">
+                  {bank.name} · Level {bank.order}
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500">{bank.places.slice(0, 2).join(", ")}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {matches.length > shown.length ? (
+        <p className="mt-1 text-xs text-slate-500">Type more to narrow the list.</p>
+      ) : null}
+    </div>
+  );
+}
 
 function buildPartRows(level: CurriculumLevel, topicsInLevel: CurriculumTopic[]): PartRow[] {
   const existing = level.levelTopicParticipations;
@@ -1847,11 +2079,12 @@ function buildPartRows(level: CurriculumLevel, topicsInLevel: CurriculumTopic[])
       topicId: e.topicId,
       included: true,
       quota: e.quota ?? "",
+      questionLevelOrder: e.questionLevelOrder ?? null,
     }));
     for (const t of topicsInLevel) {
-      if (!ids.has(t.id)) rows.push({ topicId: t.id, included: false, quota: "" });
+      if (!ids.has(t.id)) rows.push({ topicId: t.id, included: false, quota: "", questionLevelOrder: null });
     }
     return rows;
   }
-  return topicsInLevel.map((t) => ({ topicId: t.id, included: false, quota: "" as const }));
+  return topicsInLevel.map((t) => ({ topicId: t.id, included: false, quota: "" as const, questionLevelOrder: null }));
 }
