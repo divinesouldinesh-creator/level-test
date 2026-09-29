@@ -6,6 +6,7 @@ import {
   parseRupees,
   printFeeReceipt,
   type FeeAccountSnapshot,
+  type FeeBillingMode,
   type FeePaymentMode,
 } from "../../fees";
 
@@ -39,7 +40,17 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
   const [siblingId, setSiblingId] = useState("");
   const [parentName, setParentName] = useState("");
   const [phone, setPhone] = useState("");
-  const [extraKind, setExtraKind] = useState<"OPENING" | "OTHER" | "ANNUAL" | "ADMISSION" | "EXAM">("OTHER");
+  const [extraKind, setExtraKind] = useState<"OPENING" | "OTHER">("OTHER");
+  const [billingMode, setBillingMode] = useState<FeeBillingMode>("MONTHLY");
+  const [discountInput, setDiscountInput] = useState("0");
+  const [annualDiscount, setAnnualDiscount] = useState("0");
+  const [registrationDiscount, setRegistrationDiscount] = useState("0");
+  const [admissionDiscount, setAdmissionDiscount] = useState("0");
+  const [examDiscount, setExamDiscount] = useState("0");
+  const [waiveAnnual, setWaiveAnnual] = useState(false);
+  const [waiveRegistration, setWaiveRegistration] = useState(false);
+  const [waiveAdmission, setWaiveAdmission] = useState(false);
+  const [waiveExam, setWaiveExam] = useState(false);
   const [extraAmount, setExtraAmount] = useState("");
   const [extraNote, setExtraNote] = useState("");
 
@@ -98,10 +109,24 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
       return;
     }
     setAccount(r.data);
+    applyBillingForm(r.data);
     setParentName(r.data.parentName ?? "");
     setPhone(r.data.phone ?? "");
     setAmount(String(Math.max(0, r.data.balance) || r.data.familyMonthlyFee));
     setPaidOn(istToday());
+  }
+
+  function applyBillingForm(data: FeeAccountSnapshot) {
+    setBillingMode(data.billingMode);
+    setDiscountInput(String(data.monthlyDiscount));
+    setAnnualDiscount(String(data.concessions.annual.discount));
+    setRegistrationDiscount(String(data.concessions.registration.discount));
+    setAdmissionDiscount(String(data.concessions.admission.discount));
+    setExamDiscount(String(data.concessions.exam.discount));
+    setWaiveAnnual(data.concessions.annual.waived);
+    setWaiveRegistration(data.concessions.registration.waived);
+    setWaiveAdmission(data.concessions.admission.waived);
+    setWaiveExam(data.concessions.exam.waived);
   }
 
   async function selectStudent(id: string, name?: string) {
@@ -125,7 +150,51 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
     }
     setAccount(r.data);
     setAmount(String(Math.max(0, r.data.balance)));
-    showToast({ type: "ok", message: `${account.monthLabel} fee added to this family account.` });
+    showToast({ type: "ok", message: `${account.monthLabel} fee added at ${formatInr(r.data.netMonthly)}.` });
+  }
+
+  async function saveBilling() {
+    if (!studentId || !account) return;
+    const monthlyDiscount = parseRupees(discountInput);
+    const annual = parseRupees(annualDiscount);
+    const registration = parseRupees(registrationDiscount);
+    const admission = parseRupees(admissionDiscount);
+    const exam = parseRupees(examDiscount);
+    if (monthlyDiscount == null || annual == null || registration == null || admission == null || exam == null) {
+      showToast({ type: "err", message: "Enter discount amounts as rupees." });
+      return;
+    }
+    setBusy(true);
+    const r = await api<FeeAccountSnapshot>(`/api/v1/admin/fees/students/${studentId}/billing`, {
+      method: "PUT",
+      json: {
+        billingMode,
+        monthlyDiscount,
+        annualDiscount: annual,
+        registrationDiscount: registration,
+        admissionDiscount: admission,
+        examDiscount: exam,
+        waiveAnnual,
+        waiveRegistration,
+        waiveAdmission,
+        waiveExam,
+      },
+    });
+    setBusy(false);
+    if (!r.ok || !r.data) {
+      showToast({ type: "err", message: r.error ?? "Could not save family billing" });
+      return;
+    }
+    setAccount(r.data);
+    applyBillingForm(r.data);
+    setAmount(String(Math.max(0, r.data.balance)));
+    showToast({
+      type: "ok",
+      message:
+        r.data.billingMode === "YEARLY"
+          ? `Yearly fee set to ${formatInr(r.data.yearlyPayable)} for ${r.data.academicYear}.`
+          : `${formatInr(r.data.netMonthly)} will repeat from April to March.`,
+    });
   }
 
   async function collect() {
@@ -192,11 +261,18 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
     showToast({ type: "ok", message: "Student removed from the family fee account." });
   }
 
-  async function toggleTransport(id: string, usesTransport: boolean) {
+  async function saveTransportKm(id: string, raw: string) {
+    const km = Number(raw.replace(/[^\d]/g, ""));
+    if (!Number.isFinite(km) || km < 0 || km > 500) {
+      showToast({ type: "err", message: "Enter kilometres from 0 to 500." });
+      return;
+    }
+    const current = account?.members.find((m) => m.studentId === id)?.transportKm;
+    if (current === km) return;
     setBusy(true);
     const r = await api<FeeAccountSnapshot>(`/api/v1/admin/fees/students/${id}/transport`, {
       method: "PATCH",
-      json: { usesTransport },
+      json: { transportKm: km },
     });
     setBusy(false);
     if (!r.ok || !r.data) {
@@ -304,7 +380,9 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
                     : "Single student account"}
                 </p>
               </div>
-              {!account.monthCharged ? (
+              {account.billingMode === "YEARLY" ? (
+                <p className="text-sm text-slate-600">Yearly account · one session charge</p>
+              ) : !account.monthCharged ? (
                 <button
                   type="button"
                   className="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-medium min-h-[44px] disabled:opacity-50"
@@ -325,8 +403,13 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
 
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Family monthly</p>
-                <p className="text-2xl font-bold text-slate-900">{formatInr(account.familyMonthlyFee)}</p>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Payable / month</p>
+                <p className="text-2xl font-bold text-slate-900">{formatInr(account.netMonthly)}</p>
+                {account.monthlyDiscount > 0 ? (
+                  <p className="text-xs text-slate-500 mt-1">
+                    {formatInr(account.grossMonthly)} − {formatInr(account.monthlyDiscount)} discount
+                  </p>
+                ) : null}
               </div>
               <div className="rounded-lg bg-slate-50 p-3">
                 <p className="text-xs uppercase tracking-wide text-slate-500">Paid</p>
@@ -346,7 +429,7 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
                   <tr>
                     <th className="py-2 pr-3">Student</th>
                     <th className="py-2 pr-3">Class fee</th>
-                    <th className="py-2 pr-3">Transport</th>
+                    <th className="py-2 pr-3">Transport (km)</th>
                     <th className="py-2">This child’s share</th>
                   </tr>
                 </thead>
@@ -364,12 +447,17 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
                       <td className="py-2 pr-3">
                         <label className="inline-flex items-center gap-2 min-h-[44px]">
                           <input
-                            type="checkbox"
-                            checked={m.usesTransport}
+                            className="w-20 rounded-lg border px-2 py-2 min-h-[44px]"
+                            inputMode="numeric"
+                            defaultValue={m.transportKm}
+                            key={`${m.studentId}-${m.transportKm}`}
                             disabled={busy}
-                            onChange={(e) => void toggleTransport(m.studentId, e.target.checked)}
+                            aria-label={`Kilometres for ${m.fullName}`}
+                            onBlur={(e) => void saveTransportKm(m.studentId, e.target.value)}
                           />
-                          {m.usesTransport ? formatInr(m.classTransport) : "No"}
+                          <span className="text-slate-600">
+                            {m.transportKm > 0 ? formatInr(m.transportAmount) : "No"}
+                          </span>
                         </label>
                       </td>
                       <td className="py-2 font-medium">{formatInr(m.monthlyFee)}</td>
@@ -378,12 +466,112 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
                 </tbody>
               </table>
             </div>
+            <p className="mt-2 text-sm text-slate-600">
+              {account.transportRatePerKm > 0
+                ? `Transport is ${formatInr(account.transportRatePerKm)} per km each month.`
+                : "Set the rupees-per-km rate on the Fee structure tab. Kilometres stay at ₹0 until that rate is saved."}
+            </p>
             {account.members.length > 1 ? (
               <p className="mt-2 text-sm text-slate-600">
-                Shown on every sibling: family monthly {formatInr(account.familyMonthlyFee)} (not counted twice in school
-                totals).
+                Shown on every sibling: family monthly {formatInr(account.grossMonthly)} before discount (not counted
+                twice in school totals).
               </p>
             ) : null}
+
+            <div className="mt-4 rounded-lg border border-slate-200 p-3 space-y-3">
+              <h3 className="font-medium text-slate-900">Discount for {account.academicYear}</h3>
+              <p className="text-sm text-slate-600">
+                Structure {formatInr(account.grossMonthly)} minus this discount is the amount repeated each month from
+                April to March.
+              </p>
+              <div className="flex flex-wrap gap-3 items-end">
+                <label className="text-sm">
+                  <span className="block text-slate-600 mb-1">Account</span>
+                  <select
+                    className="rounded-lg border px-3 py-2 min-h-[44px]"
+                    value={billingMode}
+                    onChange={(e) => setBillingMode(e.target.value as FeeBillingMode)}
+                  >
+                    <option value="MONTHLY">Monthly</option>
+                    <option value="YEARLY">Yearly</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <span className="block text-slate-600 mb-1">Monthly discount</span>
+                  <input
+                    className="w-32 rounded-lg border px-3 py-2 min-h-[44px]"
+                    inputMode="numeric"
+                    value={discountInput}
+                    onChange={(e) => setDiscountInput(e.target.value)}
+                  />
+                </label>
+                <p className="text-sm text-slate-800 pb-2">
+                  Payable {formatInr(Math.max(0, account.grossMonthly - (parseRupees(discountInput) ?? 0)))}
+                  {billingMode === "YEARLY"
+                    ? ` · year ${formatInr(Math.max(0, account.grossMonthly - (parseRupees(discountInput) ?? 0)) * 12)}`
+                    : " each month"}
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-left text-slate-500">
+                    <tr>
+                      <th className="py-2 pr-3">Once in the session</th>
+                      <th className="py-2 pr-3">Structure</th>
+                      <th className="py-2 pr-3">Discount</th>
+                      <th className="py-2 pr-3">Nil</th>
+                      <th className="py-2">Payable</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(
+                      [
+                        ["Annual", account.concessions.annual, annualDiscount, setAnnualDiscount, waiveAnnual, setWaiveAnnual],
+                        ["Registration", account.concessions.registration, registrationDiscount, setRegistrationDiscount, waiveRegistration, setWaiveRegistration],
+                        ["Activity", account.concessions.admission, admissionDiscount, setAdmissionDiscount, waiveAdmission, setWaiveAdmission],
+                        ["Exam", account.concessions.exam, examDiscount, setExamDiscount, waiveExam, setWaiveExam],
+                      ] as const
+                    ).map(([label, line, value, setValue, waived, setWaived]) => {
+                      const discount = parseRupees(value) ?? 0;
+                      const payable = waived ? 0 : Math.max(0, line.gross - discount);
+                      return (
+                        <tr key={label} className="border-t border-slate-100">
+                          <td className="py-2 pr-3">{label}</td>
+                          <td className="py-2 pr-3">{formatInr(line.gross)}</td>
+                          <td className="py-2 pr-3">
+                            <input
+                              className="w-28 rounded-lg border px-2 py-2 min-h-[44px]"
+                              inputMode="numeric"
+                              value={value}
+                              disabled={waived}
+                              onChange={(e) => setValue(e.target.value)}
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              type="checkbox"
+                              className="h-5 w-5"
+                              checked={waived}
+                              onChange={(e) => setWaived(e.target.checked)}
+                              aria-label={`Nil ${label}`}
+                            />
+                          </td>
+                          <td className="py-2 font-medium">{formatInr(payable)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-semibold min-h-[44px] disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void saveBilling()}
+              >
+                {billingMode === "YEARLY" ? "Save yearly fee" : account.sessionReady ? "Update April–March fees" : "Repeat for April–March"}
+              </button>
+            </div>
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
@@ -534,9 +722,6 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
               >
                 <option value="OTHER">Other</option>
                 <option value="OPENING">Opening / previous due</option>
-                <option value="ANNUAL">Annual</option>
-                <option value="ADMISSION">Admission</option>
-                <option value="EXAM">Exam</option>
               </select>
               <input
                 className="rounded-lg border px-3 py-2 min-h-[44px]"

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS "FeeStructure" (
     "transport_amount" INTEGER NOT NULL DEFAULT 0,
     "annual_amount" INTEGER NOT NULL DEFAULT 0,
     "admission_amount" INTEGER NOT NULL DEFAULT 0,
+    "registration_amount" INTEGER NOT NULL DEFAULT 0,
     "exam_amount" INTEGER NOT NULL DEFAULT 0,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "FeeStructure_pkey" PRIMARY KEY ("id")
@@ -137,7 +138,57 @@ CREATE TABLE IF NOT EXISTS "FeeReceiptSeq" (
     await prisma.$executeRawUnsafe(`DO $$ BEGIN ${sql}; EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
   }
 
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "FeeStructure" ADD COLUMN IF NOT EXISTS "registration_amount" INTEGER NOT NULL DEFAULT 0`
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "FeeAccountMember" ADD COLUMN IF NOT EXISTS "transport_km" INTEGER NOT NULL DEFAULT 0`
+  );
+  await prisma.$executeRawUnsafe(`
+CREATE TABLE IF NOT EXISTS "FeeYearSetting" (
+    "academic_year" TEXT NOT NULL,
+    "transport_rate_per_km" INTEGER NOT NULL DEFAULT 0,
+    "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "FeeYearSetting_pkey" PRIMARY KEY ("academic_year")
+)`);
+
+  await prisma.$executeRawUnsafe(`
+DO $$ BEGIN
+  CREATE TYPE "FeeBillingMode" AS ENUM ('MONTHLY', 'YEARLY');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`);
+  await prisma.$executeRawUnsafe(`ALTER TYPE "FeeChargeKind" ADD VALUE IF NOT EXISTS 'YEARLY'`);
+  await prisma.$executeRawUnsafe(`ALTER TYPE "FeeChargeKind" ADD VALUE IF NOT EXISTS 'REGISTRATION'`);
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "billing_mode" "FeeBillingMode" NOT NULL DEFAULT 'MONTHLY'`
+  );
+  for (const column of [
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "monthly_discount" INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "annual_discount" INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "registration_discount" INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "admission_discount" INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "exam_discount" INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "waive_annual" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "waive_registration" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "waive_admission" BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "waive_exam" BOOLEAN NOT NULL DEFAULT false`,
+  ]) {
+    await prisma.$executeRawUnsafe(column);
+  }
+
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "FeeAccount" ADD COLUMN IF NOT EXISTS "discount_effective_from" TEXT`
+  );
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "FeeAccountMember" ADD COLUMN IF NOT EXISTS "transport_rupees" INTEGER NOT NULL DEFAULT 0`
+  );
+
   await recordMigration(MIGRATION_NAME);
+  await recordMigration("20260929120000_fee_registration");
+  await recordMigration("20260929123000_transport_per_km");
+  await recordMigration("20260929140000_family_billing");
+  await recordMigration("20260929150000_discount_effective_from");
+  await recordMigration("20260929160000_transport_rupees");
 }
 
 async function main() {

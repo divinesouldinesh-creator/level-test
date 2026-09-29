@@ -80,14 +80,26 @@ const AdminTopicLessonsPage = lazy(() =>
 const AdminAttendancePage = lazy(() =>
   import("./pages/admin/AdminAttendancePage").then((m) => ({ default: m.AdminAttendancePage }))
 );
-const OfficeFeesPage = lazy(() =>
-  import("./pages/office/OfficeFeesPage").then((m) => ({ default: m.OfficeFeesPage }))
+const OfficeFeeStructurePage = lazy(() =>
+  import("./pages/office/OfficeFeeStructurePage").then((m) => ({ default: m.OfficeFeeStructurePage }))
+);
+const OfficeAccountPage = lazy(() =>
+  import("./pages/office/OfficeAccountPage").then((m) => ({ default: m.OfficeAccountPage }))
+);
+const OfficeCollectPage = lazy(() =>
+  import("./pages/office/OfficeCollectPage").then((m) => ({ default: m.OfficeCollectPage }))
+);
+const OfficeSchoolTotalsPage = lazy(() =>
+  import("./pages/office/OfficeSchoolTotalsPage").then((m) => ({ default: m.OfficeSchoolTotalsPage }))
 );
 const TeacherOverviewPage = lazy(() =>
   import("./pages/teacher/TeacherOverviewPage").then((m) => ({ default: m.TeacherOverviewPage }))
 );
 const TeacherAttendancePage = lazy(() =>
   import("./pages/teacher/TeacherAttendancePage").then((m) => ({ default: m.TeacherAttendancePage }))
+);
+const TeacherFeeStatusPage = lazy(() =>
+  import("./pages/teacher/TeacherFeeStatusPage").then((m) => ({ default: m.TeacherFeeStatusPage }))
 );
 const TeacherAnalyticsPage = lazy(() =>
   import("./pages/teacher/TeacherAnalyticsPage").then((m) => ({ default: m.TeacherAnalyticsPage }))
@@ -245,6 +257,14 @@ function AppRoutes() {
           }
         />
         <Route
+          path="/teacher/fees"
+          element={
+            <Guard role="TEACHER">
+              <TeacherFeeStatusPage />
+            </Guard>
+          }
+        />
+        <Route
           path="/teacher/attendance"
           element={
             <Guard role="TEACHER">
@@ -300,7 +320,6 @@ function AppRoutes() {
           <Route path="question-bank" element={<AdminQuestionBankPage />} />
           <Route path="topic-lessons" element={<AdminTopicLessonsPage />} />
           <Route path="students" element={<AdminStudentsPage />} />
-          <Route path="fees" element={<OfficeFeesPage />} />
           <Route path="attendance" element={<AdminAttendancePage />} />
           <Route path="staff" element={<AdminStaffPage />} />
           <Route path="teachers" element={<Navigate to="/admin/staff" replace />} />
@@ -317,7 +336,11 @@ function AppRoutes() {
         >
           <Route index element={<Navigate to="students" replace />} />
           <Route path="students" element={<AdminStudentsPage />} />
-          <Route path="fees" element={<OfficeFeesPage />} />
+          <Route path="fees" element={<Navigate to="/office/account" replace />} />
+          <Route path="fee-structure" element={<OfficeFeeStructurePage />} />
+          <Route path="account" element={<OfficeAccountPage />} />
+          <Route path="collect" element={<OfficeCollectPage />} />
+          <Route path="school-totals" element={<OfficeSchoolTotalsPage />} />
           <Route path="attendance" element={<AdminAttendancePage />} />
           <Route path="teachers" element={<AdminTeachersPage />} />
         </Route>

@@ -13,6 +13,7 @@ type Toast = { type: "ok" | "err"; message: string };
 
 export function FeeStructurePanel() {
   const [academicYear, setAcademicYear] = useState("");
+  const [transportRatePerKm, setTransportRatePerKm] = useState(0);
   const [rows, setRows] = useState<FeeStructureRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,7 +29,9 @@ export function FeeStructurePanel() {
   const load = useCallback(async (year?: string) => {
     const qs = year ? `?academicYear=${encodeURIComponent(year)}` : "";
     const [structure, meta] = await Promise.all([
-      api<{ academicYear: string; structures: FeeStructureRow[] }>(`/api/v1/admin/fees/structures${qs}`),
+      api<{ academicYear: string; transportRatePerKm: number; structures: FeeStructureRow[] }>(
+        `/api/v1/admin/fees/structures${qs}`
+      ),
       api<{ academicYear: string }>("/api/v1/admin/fees/meta"),
     ]);
     if (!structure.ok || !structure.data) {
@@ -38,6 +41,7 @@ export function FeeStructurePanel() {
     }
     setErr(null);
     setAcademicYear(structure.data.academicYear || meta.data?.academicYear || "");
+    setTransportRatePerKm(structure.data.transportRatePerKm ?? 0);
     setRows(structure.data.structures);
   }, []);
 
@@ -52,7 +56,7 @@ export function FeeStructurePanel() {
     );
   }
 
-  async function persist(nextRows: FeeStructureRow[], year: string) {
+  async function persist(nextRows: FeeStructureRow[], year: string, rate = transportRatePerKm) {
     if (!year) {
       showToast({ type: "err", message: "Academic year is missing. Refresh the page and try again." });
       return false;
@@ -61,26 +65,31 @@ export function FeeStructurePanel() {
       showToast({ type: "err", message: "No classes to save. Add classes under Students first." });
       return false;
     }
-    const r = await api<{ academicYear: string; structures: FeeStructureRow[] }>("/api/v1/admin/fees/structures", {
-      method: "PUT",
-      json: {
-        academicYear: year,
-        structures: nextRows.map((row) => ({
-          classId: row.classId,
-          tuitionAmount: row.tuitionAmount,
-          transportAmount: row.transportAmount,
-          annualAmount: row.annualAmount,
-          admissionAmount: row.admissionAmount,
-          examAmount: row.examAmount,
-        })),
-      },
-    });
+    const r = await api<{ academicYear: string; transportRatePerKm: number; structures: FeeStructureRow[] }>(
+      "/api/v1/admin/fees/structures",
+      {
+        method: "PUT",
+        json: {
+          academicYear: year,
+          transportRatePerKm: rate,
+          structures: nextRows.map((row) => ({
+            classId: row.classId,
+            tuitionAmount: row.tuitionAmount,
+            annualAmount: row.annualAmount,
+            admissionAmount: row.admissionAmount,
+            registrationAmount: row.registrationAmount,
+            examAmount: row.examAmount,
+          })),
+        },
+      }
+    );
     if (!r.ok) {
       showToast({ type: "err", message: r.error ?? "Save failed" });
       return false;
     }
     if (r.data?.structures) setRows(r.data.structures);
     if (r.data?.academicYear) setAcademicYear(r.data.academicYear);
+    if (r.data?.transportRatePerKm != null) setTransportRatePerKm(r.data.transportRatePerKm);
     return true;
   }
 
@@ -152,7 +161,7 @@ export function FeeStructurePanel() {
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
         <h2 className="font-semibold text-slate-900">Upload fee structure</h2>
         <p className="text-sm text-slate-600">
-          Excel or CSV with columns <strong>Class, Tuition, Transport, Annual, Admission, Exam</strong>. Class should
+          Excel or CSV with columns <strong>Class, Tuition, Annual, Activity, Registration, Exam</strong>. Class should
           match the school class name or grade (for example 1, 2, 5A). Upload saves immediately.
         </p>
         <div className="flex flex-wrap gap-2">
@@ -185,9 +194,21 @@ export function FeeStructurePanel() {
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="font-semibold text-slate-900">Class fees · {academicYear || "…"}</h2>
         <p className="text-sm text-slate-600 mt-1">
-          Or type amounts here and save. Sibling families add the children’s class fees (e.g. 3000 + 1000 = 4000) and
-          show 4000 on both accounts.
+          Tuition and the other class amounts are per class. Transport is rupees per kilometre for the whole school.
+          Each child’s kilometres are entered on their fee account.
         </p>
+        <label className="mt-3 block text-sm max-w-xs">
+          <span className="block text-slate-600 mb-1">Transport rate (₹ per km / month)</span>
+          <input
+            className="w-full rounded-lg border px-3 py-2 min-h-[44px]"
+            inputMode="numeric"
+            value={transportRatePerKm}
+            onChange={(e) => {
+              const n = Number(e.target.value.replace(/[^\d]/g, ""));
+              setTransportRatePerKm(Number.isFinite(n) ? n : 0);
+            }}
+          />
+        </label>
         {rows.length === 0 && !err ? (
           <p className="mt-4 text-sm text-slate-500">No classes loaded yet.</p>
         ) : null}
@@ -197,9 +218,9 @@ export function FeeStructurePanel() {
               <tr>
                 <th className="p-2">Class</th>
                 <th className="p-2">Tuition / month</th>
-                <th className="p-2">Transport / month</th>
                 <th className="p-2">Annual</th>
-                <th className="p-2">Admission</th>
+                <th className="p-2">Activity</th>
+                <th className="p-2">Registration</th>
                 <th className="p-2">Exam</th>
               </tr>
             </thead>
@@ -213,9 +234,9 @@ export function FeeStructurePanel() {
                   {(
                     [
                       ["tuitionAmount", row.tuitionAmount],
-                      ["transportAmount", row.transportAmount],
                       ["annualAmount", row.annualAmount],
                       ["admissionAmount", row.admissionAmount],
+                      ["registrationAmount", row.registrationAmount],
                       ["examAmount", row.examAmount],
                     ] as const
                   ).map(([field, value]) => (

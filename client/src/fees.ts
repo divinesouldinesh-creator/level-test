@@ -1,5 +1,13 @@
 export type FeePaymentMode = "CASH" | "UPI" | "BANK";
-export type FeeChargeKind = "MONTHLY" | "ANNUAL" | "ADMISSION" | "EXAM" | "OTHER" | "OPENING";
+export type FeeChargeKind = "MONTHLY" | "YEARLY" | "ANNUAL" | "ADMISSION" | "EXAM" | "REGISTRATION" | "OTHER" | "OPENING";
+export type FeeBillingMode = "MONTHLY" | "YEARLY";
+
+export type FeeOneTimeLine = {
+  gross: number;
+  discount: number;
+  waived: boolean;
+  net: number;
+};
 
 export type FeeMember = {
   studentId: string;
@@ -10,8 +18,9 @@ export type FeeMember = {
   classLabel: string;
   sectionName: string;
   usesTransport: boolean;
+  transportKm: number;
+  transportAmount: number;
   classTuition: number;
-  classTransport: number;
   monthlyFee: number;
 };
 
@@ -35,6 +44,20 @@ export type FeeAccountSnapshot = {
   monthLabel: string;
   members: FeeMember[];
   familyMonthlyFee: number;
+  grossMonthly: number;
+  monthlyDiscount: number;
+  netMonthly: number;
+  yearlyPayable: number;
+  billingMode: FeeBillingMode;
+  discountEffectiveFrom: string | null;
+  concessions: {
+    annual: FeeOneTimeLine;
+    registration: FeeOneTimeLine;
+    admission: FeeOneTimeLine;
+    exam: FeeOneTimeLine;
+  };
+  sessionReady: boolean;
+  transportRatePerKm: number;
   missingStructure: boolean;
   monthCharged: boolean;
   charged: number;
@@ -65,10 +88,30 @@ export type FeeStructureRow = {
   className: string;
   classLabel: string;
   tuitionAmount: number;
-  transportAmount: number;
   annualAmount: number;
   admissionAmount: number;
+  registrationAmount: number;
   examAmount: number;
+};
+
+export type SchoolAccountsReport = {
+  academicYear: string;
+  monthlyPayerPendingCount: number;
+  monthlyPayerPendingAmount: number;
+  schoolTotal: number;
+  monthLabel: string;
+  lastYearOpening: number;
+  currentYearBalance: number;
+  lastYearBalance: number;
+  classes: {
+    classId: string;
+    className: string;
+    studentsPending: number;
+    currentYearBalance: number;
+    lastYearBalance: number;
+    studentCount: number;
+    paidThisMonth: number;
+  }[];
 };
 
 export type FeeSchoolTotals = {
@@ -135,9 +178,9 @@ function normFeeKey(s: string): string {
 export type ParsedFeeStructureLine = {
   className: string;
   tuitionAmount: number;
-  transportAmount: number;
   annualAmount: number;
   admissionAmount: number;
+  registrationAmount: number;
   examAmount: number;
 };
 
@@ -151,7 +194,7 @@ function cellRupees(mapped: Map<string, string>, keys: string[]): number {
   return 0;
 }
 
-/** Parse Excel/CSV rows: Class, Tuition, Transport, Annual, Admission, Exam. */
+/** Parse Excel/CSV rows: Class, Tuition, Annual, Activity, Registration, Exam. */
 export function parseFeeStructureSheet(rows: Record<string, unknown>[]): ParsedFeeStructureLine[] {
   const out: ParsedFeeStructureLine[] = [];
   for (const raw of rows) {
@@ -170,14 +213,14 @@ export function parseFeeStructureSheet(rows: Record<string, unknown>[]): ParsedF
     out.push({
       className,
       tuitionAmount: cellRupees(mapped, ["tuition", "tuitionamount", "monthly", "monthlyfee", "fee"]),
-      transportAmount: cellRupees(mapped, ["transport", "transportamount", "van", "bus"]),
       annualAmount: cellRupees(mapped, ["annual", "annualamount", "development"]),
-      admissionAmount: cellRupees(mapped, ["admission", "admissionamount"]),
+      admissionAmount: cellRupees(mapped, ["activity", "activityamount", "admission", "admissionamount"]),
+      registrationAmount: cellRupees(mapped, ["registration", "registrationamount", "registrationfee"]),
       examAmount: cellRupees(mapped, ["exam", "examamount", "examination"]),
     });
   }
   if (!out.length) {
-    throw new Error("No class rows found. Use columns: Class, Tuition, Transport, Annual, Admission, Exam.");
+    throw new Error("No class rows found. Use columns: Class, Tuition, Annual, Activity, Registration, Exam.");
   }
   return out;
 }
@@ -209,23 +252,23 @@ export function applyFeeStructureUpload(
     }
     matched += 1;
     hit.tuitionAmount = line.tuitionAmount;
-    hit.transportAmount = line.transportAmount;
     hit.annualAmount = line.annualAmount;
     hit.admissionAmount = line.admissionAmount;
+    hit.registrationAmount = line.registrationAmount;
     hit.examAmount = line.examAmount;
   }
   return { rows: next, matched, unmatched };
 }
 
 export function feeStructureTemplateCsv(rows: FeeStructureRow[]): string {
-  const header = "Class,Tuition,Transport,Annual,Admission,Exam";
+  const header = "Class,Tuition,Annual,Activity,Registration,Exam";
   const body = rows
     .map(
       (r) =>
-        `${r.classLabel || r.className},${r.tuitionAmount},${r.transportAmount},${r.annualAmount},${r.admissionAmount},${r.examAmount}`
+        `${r.classLabel || r.className},${r.tuitionAmount},${r.annualAmount},${r.admissionAmount},${r.registrationAmount},${r.examAmount}`
     )
     .join("\n");
-  return `${header}\n${body || "1,3000,800,0,0,0"}`;
+  return `${header}\n${body || "1,3000,0,0,0,0"}`;
 }
 
 export function printFeeReceipt(params: {

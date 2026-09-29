@@ -78,6 +78,12 @@ function officeMayAccessAdminRoute(method: string, path: string): boolean {
 }
 
 router.use((req, res, next) => {
+  const pathOnly = req.path.split("?")[0] || "/";
+  const isFeeRoute = pathOnly === "/fees" || pathOnly.startsWith("/fees/");
+  if (isFeeRoute && req.user?.role !== "OFFICE") {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
   if (req.user?.role === "ADMIN") {
     next();
     return;

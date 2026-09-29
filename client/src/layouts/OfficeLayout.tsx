@@ -11,7 +11,10 @@ export function OfficeLayout() {
       sidebarKicker="Office"
       nav={[
         { to: "/office/students", label: "Students" },
-        { to: "/office/fees", label: "Fees" },
+        { to: "/office/fee-structure", label: "Fee structure" },
+        { to: "/office/account", label: "Account" },
+        { to: "/office/collect", label: "Collect" },
+        { to: "/office/school-totals", label: "School totals" },
         { to: "/office/attendance", label: "Attendance" },
         { to: "/office/teachers", label: "Teachers" },
       ]}

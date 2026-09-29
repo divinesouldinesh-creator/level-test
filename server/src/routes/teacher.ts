@@ -19,6 +19,7 @@ import classroomAssessmentRoutes, { classroomHistoryForStudent } from "./teacher
 import careCallRoutes from "./teacherCareCalls.js";
 import { subjectIdsHidingTeacherMarks, topicIdsWithHiddenTeacherMarks } from "../services/teacherMarksVisibility.js";
 import { holidayNameForDate } from "../services/schoolHolidays.js";
+import { classFeeStatus } from "../services/fees.js";
 
 const router = Router();
 router.use(authMiddleware, requireRole("TEACHER"));
@@ -75,6 +76,21 @@ router.get("/classes", async (_req, res) => {
     }));
   });
   res.json(payload);
+});
+
+router.get("/fees/status", async (req, res) => {
+  const classId = typeof req.query.classId === "string" ? req.query.classId : "";
+  const sectionId = typeof req.query.sectionId === "string" ? req.query.sectionId : "";
+  if (!classId || !sectionId) {
+    res.status(400).json({ error: "classId and sectionId are required" });
+    return;
+  }
+  const status = await classFeeStatus(prisma, classId, sectionId);
+  if (!status) {
+    res.status(404).json({ error: "Class section not found" });
+    return;
+  }
+  res.json(status);
 });
 
 router.get("/sections/:sectionId/students", async (req, res) => {

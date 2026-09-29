@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
-import { formatInr, type FeeCollections, type FeeSchoolTotals } from "../../fees";
+import { formatInr, type FeeCollections, type FeeSchoolTotals, type SchoolAccountsReport } from "../../fees";
 
 type ClassRow = { id: string; name: string };
 type Toast = { type: "ok" | "err"; message: string };
 
 export function FeeSchoolPanel({ onOpenStudent }: { onOpenStudent?: (studentId: string) => void }) {
+  const [report, setReport] = useState<SchoolAccountsReport | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [totals, setTotals] = useState<FeeSchoolTotals | null>(null);
   const [collections, setCollections] = useState<FeeCollections | null>(null);
   const [classes, setClasses] = useState<ClassRow[]>([]);
@@ -48,6 +50,23 @@ export function FeeSchoolPanel({ onOpenStudent }: { onOpenStudent?: (studentId: 
     void load();
   }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const r = await api<SchoolAccountsReport>("/api/v1/admin/fees/school-report");
+      if (cancelled) return;
+      if (!r.ok || !r.data) {
+        setReportError(r.error ?? "Could not load the school report");
+        return;
+      }
+      setReportError(null);
+      setReport(r.data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function generate() {
     if (!periodKey) return;
     setBusy(true);
@@ -76,7 +95,114 @@ export function FeeSchoolPanel({ onOpenStudent }: { onOpenStudent?: (studentId: 
       {toast ? (
         <p className={`text-sm ${toast.type === "ok" ? "text-emerald-700" : "text-red-600"}`}>{toast.message}</p>
       ) : null}
+      {reportError ? <p className="text-sm text-red-600">{reportError}</p> : null}
       {err ? <p className="text-sm text-red-600">{err}</p> : null}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="font-semibold text-slate-900">School report{report ? ` · ${report.academicYear}` : ""}</h2>
+        <p className="text-sm text-slate-600 mt-1">
+          The school total is everything still owed, with each family counted once. Under it, that total is compared with
+          the last year balances entered on the accounts.
+        </p>
+        {report ? (
+          <>
+            <div className="mt-4 rounded-lg bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">School total</p>
+              <p
+                className={`text-3xl font-bold mt-1 ${report.schoolTotal > 0 ? "text-rose-700" : "text-emerald-700"}`}
+              >
+                {formatInr(report.schoolTotal)}
+              </p>
+              <p className="text-sm text-slate-700 mt-1">{schoolYearCompare(report.schoolTotal, report.lastYearOpening)}</p>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <Stat
+                label="Monthly payers pending"
+                value={String(report.monthlyPayerPendingCount)}
+                hint={`Still to pay ${formatInr(report.monthlyPayerPendingAmount)}`}
+                tone={report.monthlyPayerPendingCount > 0 ? "warn" : "ok"}
+              />
+              <Stat
+                label="Current year balance"
+                value={formatInr(report.currentYearBalance)}
+                tone={report.currentYearBalance > 0 ? "warn" : "ok"}
+              />
+              <Stat
+                label="Last year balance"
+                value={formatInr(report.lastYearBalance)}
+                tone={report.lastYearBalance > 0 ? "warn" : "ok"}
+              />
+            </div>
+            <h3 className="mt-6 font-semibold text-slate-900">Paid in {report.monthLabel}</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Children who paid this month, out of the class. The higher share is first. A family payment counts for each child in that child’s class.
+            </p>
+            <div className="mt-2 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-slate-600">
+                  <tr>
+                    <th className="p-2">Class</th>
+                    <th className="p-2 text-right">Paid this month</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...report.classes]
+                    .sort((a, b) => {
+                      const aShare = a.studentCount > 0 ? a.paidThisMonth / a.studentCount : 0;
+                      const bShare = b.studentCount > 0 ? b.paidThisMonth / b.studentCount : 0;
+                      if (bShare !== aShare) return bShare - aShare;
+                      return a.className.localeCompare(b.className, undefined, { numeric: true });
+                    })
+                    .map((row) => (
+                      <tr key={row.classId} className="border-t border-slate-100">
+                        <td className="p-2 font-medium text-slate-900">{row.className}</td>
+                        <td className="p-2 text-right">
+                          {row.paidThisMonth} of {row.studentCount} ·{" "}
+                          {row.studentCount > 0 ? Math.round((row.paidThisMonth / row.studentCount) * 100) : 0}%
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-4 text-sm text-slate-600">
+              By class, this year’s balance is what is still owed, on the senior child’s class. Last year is the amount entered on the account, and a payment does not remove it. Each child who still owes is counted in their own class.
+            </p>
+            <div className="mt-2 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-slate-600">
+                  <tr>
+                    <th className="p-2">Class</th>
+                    <th className="p-2 text-right">Students pending</th>
+                    <th className="p-2 text-right">Current year</th>
+                    <th className="p-2 text-right">Last year</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.classes.length === 0 ? (
+                    <tr>
+                      <td className="p-3 text-slate-500" colSpan={4}>
+                        No classes yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    report.classes.map((row) => (
+                      <tr key={row.classId} className="border-t border-slate-100">
+                        <td className="p-2 font-medium text-slate-900">{row.className}</td>
+                        <td className="p-2 text-right">{row.studentsPending}</td>
+                        <td className="p-2 text-right">{formatInr(row.currentYearBalance)}</td>
+                        <td className="p-2 text-right">{formatInr(row.lastYearBalance)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : reportError ? null : (
+          <p className="mt-3 text-sm text-slate-500">Loading school report…</p>
+        )}
+      </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="font-semibold text-slate-900">Generate monthly dues</h2>
@@ -235,6 +361,14 @@ export function FeeSchoolPanel({ onOpenStudent }: { onOpenStudent?: (studentId: 
       </section>
     </div>
   );
+}
+
+function schoolYearCompare(total: number, lastYear: number): string {
+  if (lastYear <= 0) return "No last year balance";
+  const gap = Math.abs(total - lastYear);
+  if (total > lastYear) return `Up by ${formatInr(gap)} from last year ${formatInr(lastYear)}`;
+  if (total < lastYear) return `Down by ${formatInr(gap)} from last year ${formatInr(lastYear)}`;
+  return `Same as last year ${formatInr(lastYear)}`;
 }
 
 function Stat({

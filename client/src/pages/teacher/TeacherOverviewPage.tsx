@@ -53,6 +53,15 @@ export function TeacherOverviewPage() {
 
       <section className="mt-5 grid gap-3 sm:grid-cols-2">
         <Link
+          to="/teacher/fees"
+          className="rounded-xl border border-rose-200 bg-rose-50 p-4 shadow-sm block"
+        >
+          <p className="font-semibold text-rose-900">Fee status</p>
+          <p className="text-sm text-rose-800 mt-1">
+            See who pays monthly or yearly, the balance, and the last payment.
+          </p>
+        </Link>
+        <Link
           to="/teacher/attendance"
           className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-sm block"
         >

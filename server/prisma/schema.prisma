@@ -822,11 +822,18 @@ model SchoolHolidayException {
 
 enum FeeChargeKind {
   MONTHLY
+  YEARLY
   ANNUAL
   ADMISSION
   EXAM
+  REGISTRATION
   OTHER
   OPENING
+}
+
+enum FeeBillingMode {
+  MONTHLY
+  YEARLY
 }
 
 enum FeePaymentMode {
@@ -838,10 +845,23 @@ enum FeePaymentMode {
 /// One ledger for a child, or for a sibling group. School totals count each row once.
 model FeeAccount {
   id         String   @id @default(cuid())
-  parentName String?  @map("parent_name")
-  phone      String?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  parentName            String?         @map("parent_name")
+  phone                 String?
+  billingMode           FeeBillingMode  @default(MONTHLY) @map("billing_mode")
+  /// Rupees taken off the family monthly total (tuition + transport) for every month of the session.
+  monthlyDiscount       Int             @default(0) @map("monthly_discount")
+  /// First session month (YYYY-MM) that uses the current monthly discount. Earlier charges stay as posted.
+  discountEffectiveFrom String?         @map("discount_effective_from")
+  annualDiscount        Int             @default(0) @map("annual_discount")
+  registrationDiscount  Int             @default(0) @map("registration_discount")
+  admissionDiscount     Int             @default(0) @map("admission_discount")
+  examDiscount          Int             @default(0) @map("exam_discount")
+  waiveAnnual           Boolean         @default(false) @map("waive_annual")
+  waiveRegistration     Boolean         @default(false) @map("waive_registration")
+  waiveAdmission        Boolean         @default(false) @map("waive_admission")
+  waiveExam             Boolean         @default(false) @map("waive_exam")
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
 
   members  FeeAccountMember[]
   charges  FeeCharge[]
@@ -853,6 +873,10 @@ model FeeAccountMember {
   feeAccountId  String   @map("fee_account_id")
   studentId     String   @unique @map("student_id")
   usesTransport Boolean  @default(false) @map("uses_transport")
+  /// One-way distance used for the monthly transport charge. 0 means no transport.
+  transportKm   Int      @default(0) @map("transport_km")
+  /// Monthly transport in rupees, typed for this child. Used instead of kilometres.
+  transportRupees Int    @default(0) @map("transport_rupees")
   createdAt     DateTime @default(now()) @map("created_at")
 
   feeAccount FeeAccount @relation(fields: [feeAccountId], references: [id], onDelete: Cascade)
@@ -868,9 +892,10 @@ model FeeStructure {
   classId         String @map("class_id")
   tuitionAmount   Int    @default(0) @map("tuition_amount")
   transportAmount Int    @default(0) @map("transport_amount")
-  annualAmount    Int    @default(0) @map("annual_amount")
-  admissionAmount Int    @default(0) @map("admission_amount")
-  examAmount      Int    @default(0) @map("exam_amount")
+  annualAmount       Int @default(0) @map("annual_amount")
+  admissionAmount    Int @default(0) @map("admission_amount")
+  registrationAmount Int @default(0) @map("registration_amount")
+  examAmount         Int @default(0) @map("exam_amount")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
@@ -879,11 +904,18 @@ model FeeStructure {
   @@index([academicYear])
 }
 
+/// School-wide fee settings for one academic year. Transport is rupees per km per month.
+model FeeYearSetting {
+  academicYear       String   @id @map("academic_year")
+  transportRatePerKm Int      @default(0) @map("transport_rate_per_km")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+}
+
 model FeeCharge {
   id           String        @id @default(cuid())
   feeAccountId String        @map("fee_account_id")
   kind         FeeChargeKind
-  /// MONTHLY: YYYY-MM. ANNUAL/ADMISSION/EXAM: academic year. OTHER/OPENING: unique key.
+  /// MONTHLY: YYYY-MM. YEARLY and one-time charges: academic year. OTHER/OPENING: unique key.
   periodKey    String        @map("period_key")
   amount       Int
   note         String?
