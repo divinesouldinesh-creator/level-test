@@ -8,6 +8,7 @@ import adminRoutes from "./routes/admin.js";
 import teacherRoutes from "./routes/teacher.js";
 import studentRoutes from "./routes/student.js";
 import settingsRoutes from "./routes/settings.js";
+import { readStoredUpload, syncUploadDirToStore } from "./services/storedUploads.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -44,6 +45,51 @@ app.use(
   })
 );
 app.use(express.json({ limit: "2mb" }));
+app.use("/uploads", async (req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    next();
+    return;
+  }
+  let rel = "";
+  try {
+    rel = decodeURIComponent(req.path).replace(/^\/+/, "");
+  } catch {
+    next();
+    return;
+  }
+  if (!rel || rel.includes("..") || rel.includes("\\")) {
+    next();
+    return;
+  }
+  const diskPath = path.resolve(uploadDir, rel);
+  const root = path.resolve(uploadDir);
+  if (diskPath !== root && !diskPath.startsWith(root + path.sep)) {
+    next();
+    return;
+  }
+  if (fs.existsSync(diskPath) && fs.statSync(diskPath).isFile()) {
+    next();
+    return;
+  }
+  try {
+    const stored = await readStoredUpload(`/uploads/${rel}`);
+    if (!stored) {
+      next();
+      return;
+    }
+    const body = Buffer.from(stored.data);
+    res.setHeader("Content-Type", stored.mimeType);
+    res.setHeader("Content-Length", body.length);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+    res.send(body);
+  } catch (err) {
+    next(err);
+  }
+});
 app.use("/uploads", express.static(uploadDir));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -58,6 +104,14 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   console.error(err);
   res.status(500).json({ error: "Server error" });
 });
+
+void syncUploadDirToStore(uploadDir)
+  .then((saved) => {
+    if (saved > 0) console.log(`Stored ${saved} upload(s) in the database`);
+  })
+  .catch((err) => {
+    console.error("upload sync failed", err);
+  });
 
 app.listen(PORT, HOST, () => {
   console.log(`API listening on http://${HOST}:${PORT}`);

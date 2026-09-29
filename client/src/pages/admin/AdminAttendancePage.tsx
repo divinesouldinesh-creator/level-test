@@ -33,7 +33,7 @@ type AttendanceReport = {
 
 type AttendanceTab = "school" | "marking" | "holidays" | "individual" | "class";
 
-export function AdminAttendancePage() {
+export function AdminAttendancePage({ simple = false }: { simple?: boolean } = {}) {
   const [tab, setTab] = useState<AttendanceTab>("school");
   const [classDrillRange, setClassDrillRange] = useState<AttendanceRange>("last_7_days");
   const [classDrillDate, setClassDrillDate] = useState(() => todayIso());
@@ -157,13 +157,18 @@ export function AdminAttendancePage() {
     })();
   }, [tab, studentId, range, date, customFrom, customTo]);
 
+  const view: AttendanceTab = simple && tab !== "class" ? "school" : tab;
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-slate-900">Attendance</h1>
       <p className="text-slate-600 mt-1">
-        See school-wide attendance, holidays, who has marked today, or a class summary.
+        {simple
+          ? "School attendance. Open a class to see student names."
+          : "See school-wide attendance, holidays, who has marked today, or a class summary."}
       </p>
 
+      {simple ? null : (
       <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
         {(
           [
@@ -188,8 +193,9 @@ export function AdminAttendancePage() {
           </button>
         ))}
       </div>
+      )}
 
-      {tab === "school" ? (
+      {view === "school" ? (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">School overview</h2>
@@ -210,7 +216,7 @@ export function AdminAttendancePage() {
             }}
           />
         </section>
-      ) : tab === "holidays" ? (
+      ) : view === "holidays" ? (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Holidays</h2>
@@ -222,9 +228,9 @@ export function AdminAttendancePage() {
           </div>
           <HolidaySettingsPanel />
         </section>
-      ) : tab === "marking" ? (
+      ) : view === "marking" ? (
         <AttendanceMarkingStatusPanel />
-      ) : tab === "individual" ? (
+      ) : view === "individual" ? (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Individual student</h2>
@@ -369,6 +375,15 @@ export function AdminAttendancePage() {
         </section>
       ) : (
         <section className="mt-4 rounded-xl border bg-white p-4 shadow-sm space-y-3">
+          {simple ? (
+            <button
+              type="button"
+              onClick={() => setTab("school")}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium min-h-[44px]"
+            >
+              Back to school
+            </button>
+          ) : null}
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Class summary</h2>
             <p className="mt-1 text-sm text-slate-600">

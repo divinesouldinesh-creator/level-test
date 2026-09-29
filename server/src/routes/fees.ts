@@ -12,7 +12,6 @@ import {
   updateFamilyOneTimeCharge,
   updateFeePayment,
   generateMonthForStudent,
-  generateMonthlyFees,
   linkFeeSiblings,
   listFeeCollections,
   listFeeStructures,
@@ -21,8 +20,6 @@ import {
   setLastYearBalance,
   saveFamilyBilling,
   saveFeeStructures,
-  schoolFeeTotals,
-  schoolAccountsReport,
   setFeeAccountContact,
   setStudentTransport,
   unlinkFeeSibling,
@@ -58,6 +55,42 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<unknown>) {
     });
   };
 }
+
+const dayKey = /^\d{4}-\d{2}-\d{2}$/;
+
+function monthBounds(day = istDayKey()): { from: string; to: string } {
+  const [year, month] = day.split("-").map(Number);
+  const last = new Date(Date.UTC(year!, month!, 0)).getUTCDate();
+  const mm = String(month).padStart(2, "0");
+  return { from: `${year}-${mm}-01`, to: `${year}-${mm}-${String(last).padStart(2, "0")}` };
+}
+
+function inclusiveDayCount(from: string, to: string): number {
+  if (to < from) return 0;
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.round((end - start) / 86400000) + 1;
+}
+
+router.get(
+  "/fees/collections",
+  asyncHandler(async (req, res) => {
+    const bounds = monthBounds();
+    const from = typeof req.query.from === "string" && dayKey.test(req.query.from) ? req.query.from : bounds.from;
+    const to = typeof req.query.to === "string" && dayKey.test(req.query.to) ? req.query.to : bounds.to;
+    const days = inclusiveDayCount(from, to);
+    if (days === 0) {
+      res.status(400).json({ error: "Choose a start date on or before the end date" });
+      return;
+    }
+    if (days > 400) {
+      res.status(400).json({ error: "Choose a range of 400 days or less" });
+      return;
+    }
+    res.json(await listFeeCollections(prisma, from, to));
+  })
+);
 
 router.get("/fees/meta", (_req, res) => {
   const today = istDayKey();
@@ -98,7 +131,7 @@ router.put(
 router.get(
   "/fees/students/:studentId",
   asyncHandler(async (req, res) => {
-    const snapshot = await feeAccountSnapshot(prisma, req.params.studentId);
+    const snapshot = await feeAccountSnapshot(prisma, req.params.studentId, { skipPost: true });
     if (!snapshot) return res.status(404).json({ error: "Student not found" });
     res.json(snapshot);
   })
@@ -287,22 +320,6 @@ router.patch(
 );
 
 router.post(
-  "/fees/generate-month",
-  asyncHandler(async (req, res) => {
-    const parsed = generateMonthSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json(parsed.error.flatten());
-    const academicYear = parsed.data.academicYear ?? academicYearKey();
-    const result = await generateMonthlyFees(prisma, {
-      academicYear,
-      periodKey: parsed.data.periodKey,
-      classId: parsed.data.classId,
-      createdById: req.user?.sub,
-    });
-    res.json(result);
-  })
-);
-
-router.post(
   "/fees/students/:studentId/generate-month",
   asyncHandler(async (req, res) => {
     const parsed = generateMonthSchema.pick({ periodKey: true, academicYear: true }).safeParse({
@@ -318,32 +335,6 @@ router.post(
     if ("error" in result) return res.status(404).json({ error: result.error });
     const snapshot = await feeAccountSnapshot(prisma, req.params.studentId);
     res.json(snapshot);
-  })
-);
-
-router.get(
-  "/fees/school-report",
-  asyncHandler(async (_req, res) => {
-    const data = await schoolAccountsReport(prisma);
-    res.json(data);
-  })
-);
-
-router.get(
-  "/fees/school",
-  asyncHandler(async (req, res) => {
-    const paidOn = typeof req.query.paidOn === "string" ? req.query.paidOn : undefined;
-    const data = await schoolFeeTotals(prisma, paidOn ? { paidOn } : undefined);
-    res.json(data);
-  })
-);
-
-router.get(
-  "/fees/collections",
-  asyncHandler(async (req, res) => {
-    const paidOn = typeof req.query.paidOn === "string" && req.query.paidOn ? req.query.paidOn : istDayKey();
-    const data = await listFeeCollections(prisma, paidOn);
-    res.json(data);
   })
 );
 

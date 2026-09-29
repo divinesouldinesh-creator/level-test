@@ -1,0 +1,6 @@
+CREATE TYPE "TransportUnitKind" AS ENUM ('BUS', 'GENERATOR');
+
+ALTER TABLE "Bus" ADD COLUMN "kind" "TransportUnitKind" NOT NULL DEFAULT 'BUS';
+
+ALTER TABLE "DieselFill" ALTER COLUMN "odometer_km" DROP NOT NULL;
+ALTER TABLE "DieselFill" ALTER COLUMN "odometer_km" DROP DEFAULT;

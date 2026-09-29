@@ -34,7 +34,6 @@ export const saveFeeStructuresSchema = z.object({
 export const generateMonthSchema = z.object({
   academicYear: academicYearSchema.optional(),
   periodKey: monthPeriodSchema,
-  classId: z.string().min(1).optional(),
 });
 
 export const collectFeeSchema = z

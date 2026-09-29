@@ -73,7 +73,7 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
     const t = window.setTimeout(() => {
       void (async () => {
         const r = await api<{ students: StudentHit[] }>(
-          `/api/v1/admin/students?q=${encodeURIComponent(term)}&pageSize=20`
+          `/api/v1/admin/students?q=${encodeURIComponent(term)}&pageSize=20&brief=1`
         );
         setHits(r.data?.students ?? []);
       })();
@@ -90,7 +90,7 @@ export function FeeCollectPanel({ openStudentId }: { openStudentId?: string | nu
     const t = window.setTimeout(() => {
       void (async () => {
         const r = await api<{ students: StudentHit[] }>(
-          `/api/v1/admin/students?q=${encodeURIComponent(term)}&pageSize=20`
+          `/api/v1/admin/students?q=${encodeURIComponent(term)}&pageSize=20&brief=1`
         );
         setSiblingHits(r.data?.students ?? []);
       })();

@@ -30,6 +30,7 @@
     "db:ensure-question-level-order": "tsx scripts/ensure-question-level-order.ts",
     "db:ensure-branch-group": "tsx scripts/ensure-branch-group.ts",
     "db:ensure-question-pick-index": "tsx scripts/ensure-question-pick-index.ts",
+    "db:ensure-stored-uploads": "tsx scripts/ensure-stored-uploads.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

@@ -40,12 +40,14 @@ export function ExcelUpload({
 }) {
   const [err, setErr] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   async function handleFile(f: File | null) {
     setErr(null);
     setFileName(null);
     if (!f) return;
     setFileName(f.name);
+    setUploading(true);
     const lower = f.name.toLowerCase();
 
     try {
@@ -89,6 +91,8 @@ export function ExcelUpload({
       setErr("Use a .csv, .xlsx, or .xls file.");
     } catch (e) {
       setErr(String(e));
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -104,11 +108,20 @@ export function ExcelUpload({
         <input
           type="file"
           accept=".csv,.xlsx,.xls"
-          disabled={busy}
+          disabled={busy || uploading}
           className="text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-brand-50 file:px-4 file:py-2 file:font-medium file:text-brand-900"
           onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
         />
       </label>
+      {uploading ? (
+        <p className="flex items-center gap-2 text-sm text-slate-600">
+          <span
+            className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700"
+            aria-hidden
+          />
+          Uploading…
+        </p>
+      ) : null}
       {fileName && <p className="text-xs text-slate-500">Selected: {fileName}</p>}
       {err && <p className="text-sm text-red-600">{err}</p>}
     </div>

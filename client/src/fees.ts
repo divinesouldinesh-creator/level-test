@@ -94,61 +94,6 @@ export type FeeStructureRow = {
   examAmount: number;
 };
 
-export type SchoolAccountsReport = {
-  academicYear: string;
-  monthlyPayerPendingCount: number;
-  monthlyPayerPendingAmount: number;
-  schoolTotal: number;
-  monthLabel: string;
-  lastYearOpening: number;
-  currentYearBalance: number;
-  lastYearBalance: number;
-  classes: {
-    classId: string;
-    className: string;
-    studentsPending: number;
-    currentYearBalance: number;
-    lastYearBalance: number;
-    studentCount: number;
-    paidThisMonth: number;
-  }[];
-};
-
-export type FeeSchoolTotals = {
-  academicYear: string;
-  today: string;
-  accountCount: number;
-  studentCount: number;
-  siblingFamilyCount: number;
-  charged: number;
-  paid: number;
-  balance: number;
-  todayPaid: number;
-  todayReceipts: number;
-  pending: {
-    accountId: string;
-    balance: number;
-    charged: number;
-    paid: number;
-    members: { studentId: string; fullName: string; classLabel: string; sectionName: string }[];
-  }[];
-};
-
-export type FeeCollections = {
-  paidOn: string;
-  total: number;
-  count: number;
-  payments: {
-    id: string;
-    receiptNo: string;
-    amount: number;
-    mode: FeePaymentMode;
-    paidOn: string;
-    recordedAgainst: string | null;
-    members: string[];
-  }[];
-};
-
 export function formatInr(n: number): string {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
 }

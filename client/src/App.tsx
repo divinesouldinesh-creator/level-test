@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { LoginPage } from "./pages/LoginPage";
 
@@ -80,17 +80,14 @@ const AdminTopicLessonsPage = lazy(() =>
 const AdminAttendancePage = lazy(() =>
   import("./pages/admin/AdminAttendancePage").then((m) => ({ default: m.AdminAttendancePage }))
 );
-const OfficeFeeStructurePage = lazy(() =>
-  import("./pages/office/OfficeFeeStructurePage").then((m) => ({ default: m.OfficeFeeStructurePage }))
+const OfficeOverviewPage = lazy(() =>
+  import("./pages/office/OfficeOverviewPage").then((m) => ({ default: m.OfficeOverviewPage }))
 );
-const OfficeAccountPage = lazy(() =>
-  import("./pages/office/OfficeAccountPage").then((m) => ({ default: m.OfficeAccountPage }))
+const OfficeFeesPage = lazy(() =>
+  import("./pages/office/OfficeFeesPage").then((m) => ({ default: m.OfficeFeesPage }))
 );
-const OfficeCollectPage = lazy(() =>
-  import("./pages/office/OfficeCollectPage").then((m) => ({ default: m.OfficeCollectPage }))
-);
-const OfficeSchoolTotalsPage = lazy(() =>
-  import("./pages/office/OfficeSchoolTotalsPage").then((m) => ({ default: m.OfficeSchoolTotalsPage }))
+const OfficeTransportPage = lazy(() =>
+  import("./pages/office/OfficeTransportPage").then((m) => ({ default: m.OfficeTransportPage }))
 );
 const TeacherOverviewPage = lazy(() =>
   import("./pages/teacher/TeacherOverviewPage").then((m) => ({ default: m.TeacherOverviewPage }))
@@ -135,6 +132,13 @@ function Guard({
     return <Navigate to="/login" replace />;
   }
   return <>{children}</>;
+}
+
+function OfficeFeeRedirect({ tab }: { tab: string }) {
+  const [params] = useSearchParams();
+  const next = new URLSearchParams(params);
+  next.set("tab", tab);
+  return <Navigate to={`/office/fees?${next.toString()}`} replace />;
 }
 
 function AppRoutes() {
@@ -334,14 +338,15 @@ function AppRoutes() {
             </Guard>
           }
         >
-          <Route index element={<Navigate to="students" replace />} />
-          <Route path="students" element={<AdminStudentsPage />} />
-          <Route path="fees" element={<Navigate to="/office/account" replace />} />
-          <Route path="fee-structure" element={<OfficeFeeStructurePage />} />
-          <Route path="account" element={<OfficeAccountPage />} />
-          <Route path="collect" element={<OfficeCollectPage />} />
-          <Route path="school-totals" element={<OfficeSchoolTotalsPage />} />
-          <Route path="attendance" element={<AdminAttendancePage />} />
+          <Route index element={<OfficeOverviewPage />} />
+          <Route path="fees" element={<OfficeFeesPage />} />
+          <Route path="fee-structure" element={<OfficeFeeRedirect tab="structure" />} />
+          <Route path="account" element={<OfficeFeeRedirect tab="account" />} />
+          <Route path="collect" element={<OfficeFeeRedirect tab="collect" />} />
+          <Route path="school-totals" element={<OfficeFeeRedirect tab="totals" />} />
+          <Route path="students" element={<AdminStudentsPage mode="list" />} />
+          <Route path="transport" element={<OfficeTransportPage />} />
+          <Route path="attendance" element={<AdminAttendancePage simple />} />
           <Route path="teachers" element={<AdminTeachersPage />} />
         </Route>
         <Route path="/" element={<Navigate to="/login" replace />} />

@@ -17,6 +17,7 @@ export function FeeStructurePanel() {
   const [rows, setRows] = useState<FeeStructureRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -109,6 +110,7 @@ export function FeeStructurePanel() {
       return;
     }
     setBusy(true);
+    setUploading(true);
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
@@ -136,6 +138,7 @@ export function FeeStructurePanel() {
       showToast({ type: "err", message: e instanceof Error ? e.message : "Could not read that file" });
     } finally {
       setBusy(false);
+      setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
   }
@@ -174,11 +177,21 @@ export function FeeStructurePanel() {
           />
           <button
             type="button"
-            className="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-semibold min-h-[44px] disabled:opacity-50"
-            disabled={busy}
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-semibold min-h-[44px] disabled:opacity-50"
+            disabled={uploading}
             onClick={() => fileRef.current?.click()}
           >
-            {busy ? "Working…" : "Upload Excel / CSV"}
+            {uploading ? (
+              <>
+                <span
+                  className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                  aria-hidden
+                />
+                Uploading…
+              </>
+            ) : (
+              "Upload Excel / CSV"
+            )}
           </button>
           <button
             type="button"
@@ -260,7 +273,7 @@ export function FeeStructurePanel() {
           disabled={busy || rows.length === 0}
           onClick={() => void save()}
         >
-          Save structure
+          {busy && !uploading ? "Saving…" : "Save structure"}
         </button>
         {rows[0] ? (
           <p className="mt-3 text-sm text-slate-500">

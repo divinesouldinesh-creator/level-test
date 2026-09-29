@@ -19,8 +19,8 @@ type Toast = { type: "ok" | "err"; message: string };
 type ResetDialog = { studentId: string; studentName: string; password: string };
 type RenameDialog = { studentId: string; fullName: string };
 
-export function AdminStudentsPage() {
-  const [tab, setTab] = useState<AdminStudentTabId>("generate");
+export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list" } = {}) {
+  const [tab, setTab] = useState<AdminStudentTabId>(mode === "list" ? "list" : "generate");
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -352,14 +352,17 @@ export function AdminStudentsPage() {
   return (
     <div className="space-y-6 max-w-6xl">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Student account management</h1>
+        <h1 className="text-2xl font-bold text-slate-900">
+          {mode === "list" ? "Students" : "Student account management"}
+        </h1>
         <p className="text-slate-600 mt-1 text-sm md:text-base">
-          Generate or import accounts, edit names in the preview if needed, then save. Print and CSV use the latest
-          names.
+          {mode === "list"
+            ? "Search the list, print cards, and update names or passwords."
+            : "Generate or import accounts, edit names in the preview if needed, then save. Print and CSV use the latest names."}
         </p>
       </div>
 
-      <AdminStudentTabs active={tab} onChange={setTab} />
+      {mode === "list" ? null : <AdminStudentTabs active={tab} onChange={setTab} />}
 
       {tab === "generate" && (
         <div className="space-y-4">

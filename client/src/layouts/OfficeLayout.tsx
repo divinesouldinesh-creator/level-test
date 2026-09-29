@@ -10,12 +10,11 @@ export function OfficeLayout() {
       onLogout={logout}
       sidebarKicker="Office"
       nav={[
+        { to: "/office", label: "Overview", end: true },
+        { to: "/office/fees", label: "Fees" },
         { to: "/office/students", label: "Students" },
-        { to: "/office/fee-structure", label: "Fee structure" },
-        { to: "/office/account", label: "Account" },
-        { to: "/office/collect", label: "Collect" },
-        { to: "/office/school-totals", label: "School totals" },
         { to: "/office/attendance", label: "Attendance" },
+        { to: "/office/transport", label: "Transport" },
         { to: "/office/teachers", label: "Teachers" },
       ]}
     >

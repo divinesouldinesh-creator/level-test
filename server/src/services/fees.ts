@@ -151,19 +151,6 @@ export async function ensureStudentFeeAccount(
   return account.id;
 }
 
-export async function ensureAccountsForAllStudents(db: PrismaClient): Promise<number> {
-  const [students, members] = await Promise.all([
-    db.student.findMany({ select: { id: true } }),
-    db.feeAccountMember.findMany({ select: { studentId: true } }),
-  ]);
-  const have = new Set(members.map((m) => m.studentId));
-  const missing = students.filter((s) => !have.has(s.id));
-  for (const s of missing) {
-    await ensureStudentFeeAccount(db, s.id);
-  }
-  return missing.length;
-}
-
 type MemberWithStudent = Prisma.FeeAccountMemberGetPayload<{ include: typeof memberInclude }>;
 
 function memberView(member: MemberWithStudent, structure: StructureRow | undefined, ratePerKm: number) {
@@ -1040,34 +1027,6 @@ export async function generateMonthForStudent(
   return { ok: true as const };
 }
 
-export async function generateMonthlyFees(
-  db: PrismaClient,
-  params: { academicYear: string; periodKey: string; classId?: string; createdById?: string }
-) {
-  await ensureAccountsForAllStudents(db);
-  const members = await db.feeAccountMember.findMany({
-    where: params.classId ? { student: { classId: params.classId } } : {},
-    select: { feeAccountId: true },
-  });
-  const accountIds = [...new Set(members.map((m) => m.feeAccountId))];
-  let updated = 0;
-  let totalAmount = 0;
-  for (const feeAccountId of accountIds) {
-    const result = await upsertMonthlyCharge(
-      db,
-      feeAccountId,
-      params.academicYear,
-      params.periodKey,
-      params.createdById
-    );
-    if (!result.skipped) {
-      updated += 1;
-      totalAmount += result.amount;
-    }
-  }
-  return { accounts: updated, totalAmount, periodKey: params.periodKey, academicYear: params.academicYear };
-}
-
 export async function addManualCharge(
   db: PrismaClient,
   params: {
@@ -1425,109 +1384,6 @@ export async function postStandardOneTimeCharges(db: PrismaClient, feeAccountId:
   }
 }
 
-/** Read stored charges and payments. Does not create accounts or post months. */
-export async function schoolFeeTotals(db: PrismaClient, opts?: { paidOn?: string }) {
-  const today = opts?.paidOn ?? istDayKey();
-  const throughPeriod = monthPeriodKey(today);
-  const accounts = await db.feeAccount.findMany({
-    where: { members: { some: {} } },
-    include: {
-      members: { include: memberInclude, orderBy: { createdAt: "asc" } },
-      charges: { select: { amount: true, kind: true, periodKey: true } },
-      payments: { select: { amount: true, paidOn: true } },
-    },
-  });
-
-  let charged = 0;
-  let paid = 0;
-  let todayPaid = 0;
-  let todayReceipts = 0;
-  let siblingFamilyCount = 0;
-  const pending: Array<{
-    accountId: string;
-    balance: number;
-    charged: number;
-    paid: number;
-    members: { studentId: string; fullName: string; classLabel: string; sectionName: string }[];
-  }> = [];
-
-  for (const account of accounts) {
-    if (account.members.length > 1) siblingFamilyCount += 1;
-    const accountCharged = account.charges.reduce((sum, c) => {
-      if (c.kind === "MONTHLY" && c.periodKey > throughPeriod) return sum;
-      return sum + c.amount;
-    }, 0);
-    const accountPaid = account.payments.reduce((sum, p) => sum + p.amount, 0);
-    charged += accountCharged;
-    paid += accountPaid;
-    for (const p of account.payments) {
-      if (p.paidOn === today) {
-        todayPaid += p.amount;
-        todayReceipts += 1;
-      }
-    }
-    const balance = accountCharged - accountPaid;
-    if (balance !== 0) {
-      pending.push({
-        accountId: account.id,
-        balance,
-        charged: accountCharged,
-        paid: accountPaid,
-        members: account.members.map((m) => ({
-          studentId: m.student.id,
-          fullName: m.student.fullName,
-          classLabel: classLabelForDisplay(m.student.schoolClass),
-          sectionName: m.student.section.name,
-        })),
-      });
-    }
-  }
-
-  pending.sort((a, b) => b.balance - a.balance);
-
-  return {
-    academicYear: academicYearKey(),
-    today,
-    accountCount: accounts.length,
-    studentCount: accounts.reduce((sum, a) => sum + a.members.length, 0),
-    siblingFamilyCount,
-    charged,
-    paid,
-    balance: charged - paid,
-    todayPaid,
-    todayReceipts,
-    pending,
-  };
-}
-
-export async function listFeeCollections(db: PrismaClient, paidOn: string) {
-  const payments = await db.feePayment.findMany({
-    where: { paidOn },
-    include: {
-      feeAccount: {
-        include: { members: { include: memberInclude } },
-      },
-      recordedAgainstStudent: { select: { fullName: true } },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-  const total = payments.reduce((sum, p) => sum + p.amount, 0);
-  return {
-    paidOn,
-    total,
-    count: payments.length,
-    payments: payments.map((p) => ({
-      id: p.id,
-      receiptNo: p.receiptNo,
-      amount: p.amount,
-      mode: p.mode,
-      paidOn: p.paidOn,
-      recordedAgainst: p.recordedAgainstStudent?.fullName ?? null,
-      members: p.feeAccount.members.map((m) => m.student.fullName),
-    })),
-  };
-}
-
 function countedCharge(kind: string, periodKey: string, throughPeriod: string): boolean {
   return kind !== "MONTHLY" || periodKey <= throughPeriod;
 }
@@ -1611,150 +1467,54 @@ export async function classFeeStatus(db: PrismaClient, classId: string, sectionI
   };
 }
 
-function splitFamilyDues(
-  charges: { kind: string; periodKey: string; amount: number }[],
-  payments: { amount: number }[],
-  throughPeriod: string
-) {
-  let lastYear = 0;
-  let currentYear = 0;
-  for (const charge of charges) {
-    if (!countedCharge(charge.kind, charge.periodKey, throughPeriod)) continue;
-    if (charge.kind === "OPENING") lastYear += charge.amount;
-    else currentYear += charge.amount;
-  }
-  const paid = payments.reduce((sum, payment) => sum + payment.amount, 0);
-  const lastYearBase = Math.max(0, lastYear);
-  const lastYearDue = Math.max(0, lastYearBase - paid);
-  const remainingPaid = Math.max(0, paid - lastYearBase);
-  const currentYearDue = Math.max(0, currentYear - remainingPaid);
-  return { lastYearDue, currentYearDue };
-}
-
-/** Office read of the whole school. Does not post charges or change accounts. */
-export async function schoolAccountsReport(db: PrismaClient) {
-  const academicYear = academicYearKey();
-  const throughPeriod = monthPeriodKey();
-  const [classes, accounts, students] = await Promise.all([
-    db.schoolClass.findMany({
-      select: { id: true, name: true, grade: true },
-      orderBy: { name: "asc" },
-    }),
-    db.feeAccount.findMany({
-      where: { members: { some: {} } },
-      select: {
-        billingMode: true,
-        charges: { select: { kind: true, periodKey: true, amount: true } },
-        payments: { select: { amount: true } },
-        members: {
-          select: {
-            studentId: true,
-            student: {
-              select: {
-                classId: true,
-                schoolClass: { select: { name: true, grade: true } },
-              },
-            },
-          },
-        },
-      },
-    }),
-    db.student.findMany({
-      select: {
-        classId: true,
-        feeMembership: {
-          select: {
-            feeAccount: {
-              select: {
-                payments: {
-                  where: { paidOn: { startsWith: throughPeriod } },
-                  select: { id: true },
-                  take: 1,
+/** Receipts whose payment date falls in the inclusive range. Does not post charges. */
+export async function listFeeCollections(db: PrismaClient, from: string, to: string) {
+  const payments = await db.feePayment.findMany({
+    where: { paidOn: { gte: from, lte: to } },
+    orderBy: [{ paidOn: "desc" }, { receiptNo: "desc" }],
+    select: {
+      id: true,
+      amount: true,
+      mode: true,
+      receiptNo: true,
+      paidOn: true,
+      feeAccount: {
+        select: {
+          members: {
+            select: {
+              student: {
+                select: {
+                  fullName: true,
+                  schoolClass: { select: { name: true, grade: true } },
+                  section: { select: { name: true } },
                 },
               },
             },
           },
         },
       },
-    }),
-  ]);
-
-  const byClass = new Map(
-    classes.map((schoolClass) => [
-      schoolClass.id,
-      {
-        classId: schoolClass.id,
-        className: schoolClass.name,
-        seniority: classSeniority(schoolClass),
-        studentsPending: 0,
-        currentYearBalance: 0,
-        lastYearBalance: 0,
-        studentCount: 0,
-        paidThisMonth: 0,
-      },
-    ])
-  );
-
-  for (const student of students) {
-    const row = byClass.get(student.classId);
-    if (!row) continue;
-    row.studentCount += 1;
-    if ((student.feeMembership?.feeAccount.payments.length ?? 0) > 0) row.paidThisMonth += 1;
-  }
-
-  let monthlyPayerPendingCount = 0;
-  let monthlyPayerPendingAmount = 0;
-  let currentYearBalance = 0;
-  let lastYearBalance = 0;
-  let lastYearOpening = 0;
-
-  for (const account of accounts) {
-    const opening = account.charges
-      .filter((charge) => charge.kind === "OPENING")
-      .reduce((sum, charge) => sum + charge.amount, 0);
-    lastYearOpening += opening;
-    const dues = splitFamilyDues(account.charges, account.payments, throughPeriod);
-    const owed = dues.lastYearDue + dues.currentYearDue;
-    currentYearBalance += dues.currentYearDue;
-    lastYearBalance += dues.lastYearDue;
-    if (account.billingMode === "MONTHLY" && owed > 0) {
-      monthlyPayerPendingCount += account.members.length;
-      monthlyPayerPendingAmount += owed;
-    }
-    if (account.members.length === 0) continue;
-
-    if (owed > 0) {
-      for (const member of account.members) {
-        const row = byClass.get(member.student.classId);
-        if (row) row.studentsPending += 1;
-      }
-    }
-
-    const senior = [...account.members].sort((a, b) => {
-      const byClassRank = classSeniority(b.student.schoolClass) - classSeniority(a.student.schoolClass);
-      if (byClassRank !== 0) return byClassRank;
-      return a.studentId.localeCompare(b.studentId);
-    })[0];
-    const seniorRow = senior ? byClass.get(senior.student.classId) : undefined;
-    if (seniorRow) {
-      if (owed > 0) seniorRow.currentYearBalance += dues.currentYearDue;
-      seniorRow.lastYearBalance += opening;
-    }
-  }
-
-  const classRows = [...byClass.values()]
-    .sort((a, b) => a.seniority - b.seniority || a.className.localeCompare(b.className, undefined, { numeric: true }))
-    .map(({ seniority: _seniority, ...row }) => row);
+    },
+  });
 
   return {
-    academicYear,
-    monthlyPayerPendingCount,
-    monthlyPayerPendingAmount,
-    schoolTotal: currentYearBalance + lastYearBalance,
-    monthLabel: monthLabel(throughPeriod),
-    lastYearOpening,
-    currentYearBalance,
-    lastYearBalance,
-    classes: classRows,
+    from,
+    to,
+    total: payments.reduce((sum, payment) => sum + payment.amount, 0),
+    count: payments.length,
+    payments: payments.map((payment) => ({
+      id: payment.id,
+      amount: payment.amount,
+      mode: payment.mode,
+      receiptNo: payment.receiptNo,
+      paidOn: payment.paidOn,
+      family: payment.feeAccount.members
+        .map((member) => {
+          const student = member.student;
+          const label = classLabelForDisplay(student.schoolClass);
+          return `${student.fullName} (${label} ${student.section.name})`;
+        })
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+        .join(", "),
+    })),
   };
 }

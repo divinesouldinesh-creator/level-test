@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import { formatInr, type FeeAccountSnapshot } from "../../fees";
 
@@ -46,7 +46,20 @@ function studentSearchUrl(term: string, classId: string): string | null {
   if (classId) params.set("classId", classId);
   params.set("page", "1");
   params.set("pageSize", "20");
+  params.set("brief", "1");
   return `/api/v1/admin/students?${params}`;
+}
+
+function WorkingNote({ label }: { label: string }) {
+  return (
+    <p className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+      <span
+        className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700"
+        aria-hidden
+      />
+      {label}
+    </p>
+  );
 }
 
 function AccountFeeSummary({ account }: { account: FeeAccountSnapshot }) {
@@ -121,6 +134,11 @@ export function FeeAccountPanel({ openStudentId }: { openStudentId?: string | nu
   const [siblingHits, setSiblingHits] = useState<StudentHit[]>([]);
   const [siblingId, setSiblingId] = useState("");
   const [addingSibling, setAddingSibling] = useState(false);
+  const chosenQuery = useRef<string | null>(null);
+  const searchGen = useRef(0);
+  const [searching, setSearching] = useState(false);
+  const [siblingSearching, setSiblingSearching] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   const showToast = useCallback((t: Toast) => {
     setToast(t);
@@ -128,20 +146,27 @@ export function FeeAccountPanel({ openStudentId }: { openStudentId?: string | nu
   }, []);
 
   const loadAccount = useCallback(async (id: string) => {
+    setOpening(true);
     setBusy(true);
     setErr(null);
-    const r = await api<FeeAccountSnapshot>(`/api/v1/admin/fees/students/${id}`);
-    setBusy(false);
-    if (!r.ok || !r.data) {
-      setErr(r.error ?? "Could not open this account");
-      setAccount(null);
-      return;
+    try {
+      const r = await api<FeeAccountSnapshot>(`/api/v1/admin/fees/students/${id}`);
+      if (!r.ok || !r.data) {
+        setErr(r.error ?? "Could not open this account");
+        setAccount(null);
+        return;
+      }
+      setAccount(r.data);
+    } finally {
+      setBusy(false);
+      setOpening(false);
     }
-    setAccount(r.data);
   }, []);
 
   const selectStudent = useCallback(
     async (id: string, name?: string) => {
+      searchGen.current += 1;
+      chosenQuery.current = name ?? "";
       setStudentId(id);
       setQ(name ?? "");
       setHits([]);
@@ -167,34 +192,58 @@ export function FeeAccountPanel({ openStudentId }: { openStudentId?: string | nu
   }, []);
 
   useEffect(() => {
-    const url = studentSearchUrl(q, classId);
-    if (!url) {
+    if (chosenQuery.current != null && q.trim() === chosenQuery.current.trim()) {
+      setSearching(false);
       setHits([]);
       return;
     }
+    chosenQuery.current = null;
+    const url = studentSearchUrl(q, classId);
+    if (!url) {
+      setSearching(false);
+      setHits([]);
+      return;
+    }
+    setSearching(true);
+    const gen = ++searchGen.current;
     const t = window.setTimeout(() => {
       void (async () => {
         const r = await api<{ students: StudentHit[] }>(url);
+        if (gen !== searchGen.current) return;
         setHits(r.data?.students ?? []);
+        setSearching(false);
       })();
     }, 250);
-    return () => window.clearTimeout(t);
+    return () => {
+      window.clearTimeout(t);
+      searchGen.current += 1;
+      setSearching(false);
+    };
   }, [q, classId]);
 
   useEffect(() => {
     const url = studentSearchUrl(siblingQ, siblingClassId);
     if (!url) {
+      setSiblingSearching(false);
       setSiblingHits([]);
       setSiblingId("");
       return;
     }
+    setSiblingSearching(true);
+    let active = true;
     const t = window.setTimeout(() => {
       void (async () => {
         const r = await api<{ students: StudentHit[] }>(url);
+        if (!active) return;
         setSiblingHits(r.data?.students ?? []);
+        setSiblingSearching(false);
       })();
     }, 250);
-    return () => window.clearTimeout(t);
+    return () => {
+      active = false;
+      window.clearTimeout(t);
+      setSiblingSearching(false);
+    };
   }, [siblingQ, siblingClassId]);
 
   const siblingFilter = useMemo(() => {
@@ -259,6 +308,7 @@ export function FeeAccountPanel({ openStudentId }: { openStudentId?: string | nu
             />
           </label>
         </div>
+        {searching ? <WorkingNote label="Searching…" /> : opening ? <WorkingNote label="Opening account…" /> : null}
         {hits.length > 0 ? (
           <ul className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200">
             {hits.map((s) => (
@@ -318,6 +368,7 @@ export function FeeAccountPanel({ openStudentId }: { openStudentId?: string | nu
                   onChange={(e) => setSiblingQ(e.target.value)}
                   placeholder="Name"
                 />
+                {siblingSearching ? <WorkingNote label="Searching…" /> : null}
               </label>
               {siblingQ.trim().length >= 2 ? (
                 <label className="text-sm md:col-span-2">

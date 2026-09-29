@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import {
   formatInr,
@@ -58,7 +58,20 @@ function studentSearchUrl(term: string, classId: string): string | null {
   if (classId) params.set("classId", classId);
   params.set("page", "1");
   params.set("pageSize", "20");
+  params.set("brief", "1");
   return `/api/v1/admin/students?${params}`;
+}
+
+function WorkingNote({ label }: { label: string }) {
+  return (
+    <p className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+      <span
+        className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700"
+        aria-hidden
+      />
+      {label}
+    </p>
+  );
 }
 
 export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | null }) {
@@ -91,6 +104,10 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
   const [editMode, setEditMode] = useState<FeePaymentMode>("CASH");
   const [editPaidOn, setEditPaidOn] = useState("");
   const [editNote, setEditNote] = useState("");
+  const chosenQuery = useRef<string | null>(null);
+  const searchGen = useRef(0);
+  const [searching, setSearching] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   const showToast = useCallback((t: Toast) => {
     setToast(t);
@@ -98,21 +115,28 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
   }, []);
 
   const loadAccount = useCallback(async (id: string) => {
+    setOpening(true);
     setBusy(true);
     setErr(null);
-    const r = await api<FeeAccountSnapshot>(`/api/v1/admin/fees/students/${id}`);
-    setBusy(false);
-    if (!r.ok || !r.data) {
-      setErr(r.error ?? "Could not open this account");
-      setAccount(null);
-      return;
+    try {
+      const r = await api<FeeAccountSnapshot>(`/api/v1/admin/fees/students/${id}`);
+      if (!r.ok || !r.data) {
+        setErr(r.error ?? "Could not open this account");
+        setAccount(null);
+        return;
+      }
+      setAccount(r.data);
+      setAmount("");
+    } finally {
+      setBusy(false);
+      setOpening(false);
     }
-    setAccount(r.data);
-    setAmount(r.data.balance > 0 ? String(r.data.balance) : "");
   }, []);
 
   const selectStudent = useCallback(
     async (id: string, name?: string) => {
+      searchGen.current += 1;
+      chosenQuery.current = name ?? "";
       setStudentId(id);
       setQ(name ?? "");
       setHits([]);
@@ -143,18 +167,33 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
   }, []);
 
   useEffect(() => {
-    const url = studentSearchUrl(q, classId);
-    if (!url) {
+    if (chosenQuery.current != null && q.trim() === chosenQuery.current.trim()) {
+      setSearching(false);
       setHits([]);
       return;
     }
+    chosenQuery.current = null;
+    const url = studentSearchUrl(q, classId);
+    if (!url) {
+      setSearching(false);
+      setHits([]);
+      return;
+    }
+    setSearching(true);
+    const gen = ++searchGen.current;
     const t = window.setTimeout(() => {
       void (async () => {
         const r = await api<{ students: StudentHit[] }>(url);
+        if (gen !== searchGen.current) return;
         setHits(r.data?.students ?? []);
+        setSearching(false);
       })();
     }, 250);
-    return () => window.clearTimeout(t);
+    return () => {
+      window.clearTimeout(t);
+      searchGen.current += 1;
+      setSearching(false);
+    };
   }, [q, classId]);
 
   async function collect() {
@@ -183,7 +222,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
       return;
     }
     setAccount(r.data.snapshot);
-    setAmount(r.data.snapshot.balance > 0 ? String(r.data.snapshot.balance) : "");
+    setAmount("");
     setDiscountInput("");
     setNote("");
     const outstanding = `Outstanding ${formatInr(r.data.snapshot.balance)}.`;
@@ -233,7 +272,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
     }
     setAccount(r.data);
     setEditingId("");
-    setAmount(r.data.balance > 0 ? String(r.data.balance) : "");
+    setAmount("");
     showToast({ type: "ok", message: `Receipt updated. Outstanding ${formatInr(r.data.balance)}.` });
   }
 
@@ -253,7 +292,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
     }
     setAccount(r.data);
     if (editingId === payment.id) setEditingId("");
-    setAmount(r.data.balance > 0 ? String(r.data.balance) : "");
+    setAmount("");
     showToast({ type: "ok", message: `Receipt ${payment.receiptNo} deleted. Outstanding ${formatInr(r.data.balance)}.` });
   }
 
@@ -323,7 +362,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
       }
       setAccount(accountSave.data);
       setEditingFee(false);
-      setAmount(accountSave.data.balance > 0 ? String(accountSave.data.balance) : "");
+      setAmount("");
       showToast({ type: "ok", message: `Yearly fee saved. Outstanding ${formatInr(accountSave.data.balance)}.` });
       return;
     }
@@ -382,7 +421,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
     }
     setAccount(accountSave.data);
     setEditingFee(false);
-    setAmount(accountSave.data.balance > 0 ? String(accountSave.data.balance) : "");
+    setAmount("");
     showToast({ type: "ok", message: `Fee saved. Outstanding ${formatInr(accountSave.data.balance)}.` });
   }
 
@@ -412,7 +451,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
     setAddingCharge(false);
     setExtraName("");
     setExtraAmount("");
-    setAmount(r.data.balance > 0 ? String(r.data.balance) : "");
+    setAmount("");
     showToast({ type: "ok", message: `${name} added. Outstanding ${formatInr(r.data.balance)}.` });
   }
 
@@ -429,7 +468,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
       return;
     }
     setAccount(r.data);
-    setAmount(r.data.balance > 0 ? String(r.data.balance) : "");
+    setAmount("");
     showToast({ type: "ok", message: `${name} removed. Outstanding ${formatInr(r.data.balance)}.` });
   }
 
@@ -499,6 +538,7 @@ export function FeePaymentPanel({ openStudentId }: { openStudentId?: string | nu
             />
           </label>
         </div>
+        {searching ? <WorkingNote label="Searching…" /> : opening ? <WorkingNote label="Opening account…" /> : null}
         {hits.length > 0 ? (
           <ul className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200">
             {hits.map((s) => (

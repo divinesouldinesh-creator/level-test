@@ -25,6 +25,7 @@ import { questionAnswerKey } from "../services/questionAnswer.js";
 import { persistParsedQuestions, normalizeQuestionFields } from "../services/questionPersist.js";
 import { bankOrder, questionHomeLevel } from "../services/sharedQuestionBank.js";
 import { parseQuestionSheetWithImages } from "../services/sheetQuestionImport.js";
+import { forgetUpload, rememberQuestionImages, rememberUploadFile } from "../services/storedUploads.js";
 import {
   buildRowsFromUpload,
   classLabelForDisplay,
@@ -50,6 +51,7 @@ import {
   upsertHolidayException,
 } from "../services/schoolHolidays.js";
 import feesRoutes from "./fees.js";
+import transportRoutes from "./transport.js";
 import { todayLoginCompletionCounts } from "../services/studentEngagement.js";
 
 const router = Router();
@@ -63,6 +65,7 @@ function officeMayAccessAdminRoute(method: string, path: string): boolean {
     "/teachers",
     "/attendance",
     "/fees",
+    "/transport",
     "/generate-students",
     "/upload-students",
     "/save-students",
@@ -80,7 +83,8 @@ function officeMayAccessAdminRoute(method: string, path: string): boolean {
 router.use((req, res, next) => {
   const pathOnly = req.path.split("?")[0] || "/";
   const isFeeRoute = pathOnly === "/fees" || pathOnly.startsWith("/fees/");
-  if (isFeeRoute && req.user?.role !== "OFFICE") {
+  const isTransportRoute = pathOnly === "/transport" || pathOnly.startsWith("/transport/");
+  if ((isFeeRoute || isTransportRoute) && req.user?.role !== "OFFICE") {
     res.status(403).json({ error: "Forbidden" });
     return;
   }
@@ -96,6 +100,7 @@ router.use((req, res, next) => {
 });
 
 router.use(feesRoutes);
+router.use(transportRoutes);
 
 router.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
@@ -1592,12 +1597,20 @@ router.post("/question-images", (req, res, next) => {
     }
     next();
   });
-}, (req, res) => {
+}, async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded" });
     return;
   }
-  res.json({ url: `/uploads/questions/${req.file.filename}` });
+  const url = `/uploads/questions/${req.file.filename}`;
+  try {
+    await rememberUploadFile(req.file.path, url);
+  } catch (err) {
+    console.error("question image store failed", err);
+    res.status(500).json({ error: "Could not store the image" });
+    return;
+  }
+  res.json({ url });
 });
 
 async function questionListWhere(query: { topicId?: string; levelId?: string; subjectId?: string; chapterTopicId?: string }) {
@@ -2053,6 +2066,12 @@ router.post("/questions/import-sheet", withSheetUpload("file"), async (req, res)
     return;
   }
 
+  try {
+    await rememberQuestionImages(uploadDir, parsed);
+  } catch (err) {
+    console.error("question image store failed", err);
+  }
+
   const result = await persistParsedQuestions(prisma, {
     parsed,
     subjectId: placement.subjectId,
@@ -2174,6 +2193,22 @@ router.get("/students", async (req, res) => {
 
   const take = wantAll ? 5000 : pageSize;
   const skip = wantAll ? 0 : (page - 1) * pageSize;
+
+  if (req.query.brief === "1") {
+    const list = await prisma.student.findMany({
+      where,
+      select: { id: true, fullName: true },
+      orderBy: { fullName: "asc" },
+      take: pageSize,
+    });
+    res.json({
+      students: list,
+      total: list.length,
+      page: 1,
+      pageSize: list.length,
+    });
+    return;
+  }
 
   const [total, list] = await Promise.all([
     prisma.student.count({ where }),
@@ -2501,15 +2536,21 @@ router.delete("/office-users/:officeId", async (req, res) => {
   res.json({ ok: true });
 });
 
-function deleteUploadedFileIfLocal(url: string | null | undefined) {
+async function deleteUploadedFileIfLocal(url: string | null | undefined) {
   if (!url || !url.startsWith("/uploads/")) return;
   const rel = url.replace(/^\/uploads\/?/, "");
-  const full = path.join(uploadDir, rel);
-  if (!full.startsWith(path.resolve(uploadDir))) return;
+  const full = path.resolve(uploadDir, rel);
+  const root = path.resolve(uploadDir);
+  if (full !== root && !full.startsWith(root + path.sep)) return;
   try {
     if (fs.existsSync(full)) fs.unlinkSync(full);
   } catch {
     /* ignore */
+  }
+  try {
+    await forgetUpload(url);
+  } catch (err) {
+    console.error("upload delete failed", err);
   }
 }
 
@@ -2552,9 +2593,10 @@ router.post("/school-logo", (req, res, next) => {
   }
   try {
     const current = await getSchoolBranding(prisma);
-    deleteUploadedFileIfLocal(current.logoUrl);
+    await deleteUploadedFileIfLocal(current.logoUrl);
 
     const logoUrl = `/uploads/school/${req.file.filename}`;
+    await rememberUploadFile(req.file.path, logoUrl);
     const branding = await updateSchoolLogo(prisma, logoUrl);
     res.json(branding);
   } catch (e) {
@@ -2565,7 +2607,7 @@ router.post("/school-logo", (req, res, next) => {
 router.delete("/school-logo", async (_req, res) => {
   try {
     const current = await getSchoolBranding(prisma);
-    deleteUploadedFileIfLocal(current.logoUrl);
+    await deleteUploadedFileIfLocal(current.logoUrl);
     const branding = await updateSchoolLogo(prisma, null);
     res.json(branding);
   } catch (e) {

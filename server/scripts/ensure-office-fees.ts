@@ -189,6 +189,57 @@ END $$`);
   await recordMigration("20260929140000_family_billing");
   await recordMigration("20260929150000_discount_effective_from");
   await recordMigration("20260929160000_transport_rupees");
+
+  await prisma.$executeRawUnsafe(`
+CREATE TABLE IF NOT EXISTS "Bus" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "vehicle_no" TEXT NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Bus_pkey" PRIMARY KEY ("id")
+)`);
+  await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "Bus_vehicle_no_key" ON "Bus"("vehicle_no")`);
+  await prisma.$executeRawUnsafe(`
+CREATE TABLE IF NOT EXISTS "DieselFill" (
+    "id" TEXT NOT NULL,
+    "bus_id" TEXT NOT NULL,
+    "filled_on" TEXT NOT NULL,
+    "litres" DOUBLE PRECISION NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "DieselFill_pkey" PRIMARY KEY ("id")
+)`);
+  await prisma.$executeRawUnsafe(
+    `CREATE INDEX IF NOT EXISTS "DieselFill_bus_id_filled_on_idx" ON "DieselFill"("bus_id", "filled_on")`
+  );
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "DieselFill_filled_on_idx" ON "DieselFill"("filled_on")`);
+  await prisma.$executeRawUnsafe(`
+DO $$ BEGIN
+  ALTER TABLE "DieselFill" ADD CONSTRAINT "DieselFill_bus_id_fkey"
+    FOREIGN KEY ("bus_id") REFERENCES "Bus"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`);
+  await recordMigration("20260929180000_bus_diesel");
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "DieselFill" ADD COLUMN IF NOT EXISTS "odometer_km" INTEGER NOT NULL DEFAULT 0`
+  );
+  await recordMigration("20260929190000_diesel_odometer");
+  await prisma.$executeRawUnsafe(`
+DO $$ BEGIN
+  CREATE TYPE "TransportUnitKind" AS ENUM ('BUS', 'GENERATOR');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`);
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "Bus" ADD COLUMN IF NOT EXISTS "kind" "TransportUnitKind" NOT NULL DEFAULT 'BUS'`
+  );
+  await prisma.$executeRawUnsafe(`ALTER TABLE "DieselFill" ALTER COLUMN "odometer_km" DROP NOT NULL`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "DieselFill" ALTER COLUMN "odometer_km" DROP DEFAULT`);
+  await recordMigration("20260929200000_transport_generator");
+  await prisma.$executeRawUnsafe(
+    `ALTER TABLE "DieselFill" ADD COLUMN IF NOT EXISTS "amount_rupees" INTEGER NOT NULL DEFAULT 0`
+  );
+  await recordMigration("20260929210000_diesel_amount");
+  await prisma.$executeRawUnsafe(`ALTER TYPE "TransportUnitKind" ADD VALUE IF NOT EXISTS 'MAGIC'`);
+  await recordMigration("20260929220000_transport_magic");
 }
 
 async function main() {

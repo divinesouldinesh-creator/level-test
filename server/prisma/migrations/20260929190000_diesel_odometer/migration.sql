@@ -1,0 +1,1 @@
+ALTER TABLE "DieselFill" ADD COLUMN "odometer_km" INTEGER NOT NULL DEFAULT 0;

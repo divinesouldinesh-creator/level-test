@@ -1,0 +1,1 @@
+ALTER TYPE "TransportUnitKind" ADD VALUE IF NOT EXISTS 'MAGIC';

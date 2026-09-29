@@ -1,0 +1,1 @@
+ALTER TABLE "DieselFill" ADD COLUMN "amount_rupees" INTEGER NOT NULL DEFAULT 0;

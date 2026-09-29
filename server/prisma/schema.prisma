@@ -956,3 +956,46 @@ model FeeReceiptSeq {
   academicYear String @id @map("academic_year")
   lastNumber   Int    @default(0) @map("last_number")
 }
+
+enum TransportUnitKind {
+  BUS
+  GENERATOR
+  MAGIC
+}
+
+/// A school bus or a generator. Diesel fills are separate from the student transport fee.
+model Bus {
+  id        String            @id @default(cuid())
+  name      String
+  vehicleNo String            @unique @map("vehicle_no")
+  kind      TransportUnitKind @default(BUS)
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  dieselFills DieselFill[]
+}
+
+model DieselFill {
+  id        String   @id @default(cuid())
+  busId     String   @map("bus_id")
+  /// IST calendar day YYYY-MM-DD
+  filledOn    String   @map("filled_on")
+  litres      Float
+  /// Rupees paid for this fill.
+  amountRupees Int     @default(0) @map("amount_rupees")
+  /// Odometer reading when this diesel was filled. Blank for a generator.
+  odometerKm  Int?     @map("odometer_km")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  bus Bus @relation(fields: [busId], references: [id], onDelete: Cascade)
+
+  @@index([busId, filledOn])
+  @@index([filledOn])
+}
+
+/// Uploaded question diagrams and logos. Kept in the database so a deploy does not drop the files.
+model StoredUpload {
+  path      String   @id
+  mimeType  String   @map("mime_type")
+  data      Bytes
+  createdAt DateTime @default(now()) @map("created_at")
+}
