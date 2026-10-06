@@ -169,6 +169,9 @@ function ClassesPanel({
   const [sectionOpenFor, setSectionOpenFor] = useState<string | null>(null);
   const [linkPick, setLinkPick] = useState<Record<string, string>>({});
   const [linkOpenFor, setLinkOpenFor] = useState<string | null>(null);
+  const [renameOpenFor, setRenameOpenFor] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameGrade, setRenameGrade] = useState("");
 
   async function addClass(e: React.FormEvent) {
     e.preventDefault();
@@ -185,6 +188,29 @@ function ClassesPanel({
       setNewName("");
       setNewGrade("");
       setAddingClass(false);
+      await onChanged();
+    }
+  }
+
+  function openRename(c: SchoolClassMeta) {
+    setRenameOpenFor(c.id);
+    setRenameName(c.name);
+    setRenameGrade(c.grade ?? "");
+  }
+
+  async function saveRename(classId: string) {
+    const name = renameName.trim();
+    if (!name) return;
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/classes/${classId}`, {
+      method: "PATCH",
+      json: { name, grade: renameGrade.trim() || undefined },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not rename class");
+    else {
+      setRenameOpenFor(null);
       await onChanged();
     }
   }
@@ -299,6 +325,55 @@ function ClassesPanel({
                   </span>
                 </summary>
                 <div className="border-t border-slate-100 px-3 py-3 space-y-3">
+                  {renameOpenFor === c.id ? (
+                    <form
+                      className="flex flex-wrap gap-2 items-center"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void saveRename(c.id);
+                      }}
+                    >
+                      <input
+                        className="rounded border border-slate-300 px-2 py-1 text-sm min-w-[160px]"
+                        value={renameName}
+                        onChange={(e) => setRenameName(e.target.value)}
+                        placeholder="Class name"
+                        disabled={busy}
+                        autoFocus
+                      />
+                      <input
+                        className="rounded border border-slate-300 px-2 py-1 text-sm w-24"
+                        value={renameGrade}
+                        onChange={(e) => setRenameGrade(e.target.value)}
+                        placeholder="Grade"
+                        disabled={busy}
+                      />
+                      <button
+                        type="submit"
+                        disabled={busy || !renameName.trim()}
+                        className="rounded-lg bg-slate-900 text-white px-3 py-1 text-sm disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setRenameOpenFor(null)}
+                        className="text-sm text-slate-600 underline disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => openRename(c)}
+                      className="text-sm font-medium text-slate-700 underline disabled:opacity-50"
+                    >
+                      Rename
+                    </button>
+                  )}
                   <div>
                     <div className="flex flex-wrap gap-2">
                       {c.sections.map((s) => (
