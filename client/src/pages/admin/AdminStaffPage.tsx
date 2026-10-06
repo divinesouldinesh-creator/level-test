@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { StaffOfficePanel } from "../../components/admin/staff/StaffOfficePanel";
+import { StaffPrincipalPanel } from "../../components/admin/staff/StaffPrincipalPanel";
 import { StaffTeachersPanel } from "../../components/admin/staff/StaffTeachersPanel";
 
-type StaffTab = "teachers" | "office";
+type StaffTab = "teachers" | "office" | "principal";
 
 export function AdminStaffPage() {
   const [tab, setTab] = useState<StaffTab>("teachers");
@@ -12,7 +13,7 @@ export function AdminStaffPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Staff</h1>
         <p className="text-slate-600 mt-1 text-sm md:text-base">
-          Manage teacher and office accounts.
+          Manage teacher, office, and principal accounts.
         </p>
       </div>
 
@@ -21,6 +22,7 @@ export function AdminStaffPage() {
           [
             ["teachers", "Teachers"],
             ["office", "Office"],
+            ["principal", "Principal"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -38,7 +40,9 @@ export function AdminStaffPage() {
         ))}
       </div>
 
-      {tab === "teachers" ? <StaffTeachersPanel heading={false} /> : <StaffOfficePanel />}
+      {tab === "teachers" ? <StaffTeachersPanel heading={false} /> : null}
+      {tab === "office" ? <StaffOfficePanel /> : null}
+      {tab === "principal" ? <StaffPrincipalPanel /> : null}
     </div>
   );
 }

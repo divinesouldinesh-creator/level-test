@@ -92,10 +92,53 @@ export async function getHolidaySettings(prisma: PrismaClient): Promise<HolidayS
   return dto;
 }
 
+/** Deletes attendance sessions on a calendar day. Entries cascade with the session. */
+export async function clearAttendanceForDates(prisma: PrismaClient, isos: string[]): Promise<number> {
+  const ranges = isos.flatMap((iso) => {
+    const start = parseIsoDate(iso);
+    if (!start) return [];
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    return [{ date: { gte: start, lt: end } }];
+  });
+  if (ranges.length === 0) return 0;
+  const result = await prisma.attendanceSession.deleteMany({
+    where: ranges.length === 1 ? ranges[0] : { OR: ranges },
+  });
+  return result.count;
+}
+
+/** Attendance on dates that were school days and are holidays under the new weekly rules. */
+async function clearAttendanceForNewWeeklyHolidays(
+  prisma: PrismaClient,
+  previous: HolidaySettingsDto,
+  next: HolidaySettingsDto
+): Promise<number> {
+  if (previous.sundaysOff === next.sundaysOff && previous.saturdayRule === next.saturdayRule) return 0;
+
+  const sessions = await prisma.attendanceSession.findMany({ select: { date: true } });
+  const candidateIsos = new Set<string>();
+  for (const session of sessions) {
+    const iso = dateToIso(session.date);
+    if (recurringHolidayName(iso, next) && !recurringHolidayName(iso, previous)) candidateIsos.add(iso);
+  }
+  if (candidateIsos.size === 0) return 0;
+
+  const candidateDates = [...candidateIsos].map((iso) => parseIsoDate(iso)).filter((d): d is Date => d != null);
+  const working = await prisma.schoolHolidayException.findMany({
+    where: { kind: "WORKING", date: { in: candidateDates } },
+    select: { date: true },
+  });
+  const workingIsos = new Set(working.map((row) => dateToIso(row.date)));
+  const toClear = [...candidateIsos].filter((iso) => !workingIsos.has(iso));
+  return clearAttendanceForDates(prisma, toClear);
+}
+
 export async function updateHolidaySettings(
   prisma: PrismaClient,
   patch: Partial<HolidaySettingsDto>
-): Promise<HolidaySettingsDto> {
+): Promise<{ settings: HolidaySettingsDto; clearedSessionCount: number }> {
+  const previous = await getHolidaySettings(prisma);
   const row = await prisma.schoolHolidaySettings.upsert({
     where: { id: HOLIDAY_SETTINGS_ID },
     create: {
@@ -111,7 +154,8 @@ export async function updateHolidaySettings(
   const dto = { sundaysOff: row.sundaysOff, saturdayRule: row.saturdayRule };
   invalidateHolidays();
   cacheSet(CACHE_KEY.holidaySettings, dto, CACHE_TTL_MS.holidays);
-  return dto;
+  const clearedSessionCount = await clearAttendanceForNewWeeklyHolidays(prisma, previous, dto);
+  return { settings: dto, clearedSessionCount };
 }
 
 function exceptionDto(row: { id: string; date: Date; kind: SchoolHolidayKind; name: string | null }): HolidayExceptionDto {
@@ -197,7 +241,7 @@ export async function holidayNameForDate(
 export async function upsertHolidayException(
   prisma: PrismaClient,
   input: { date: string; kind: SchoolHolidayKind; name?: string | null }
-): Promise<HolidayExceptionDto | { error: string }> {
+): Promise<(HolidayExceptionDto & { clearedSessionCount: number }) | { error: string }> {
   const date = parseIsoDate(input.date);
   if (!date) return { error: "date must be YYYY-MM-DD" };
   if (input.kind === "EXTRA") {
@@ -209,7 +253,8 @@ export async function upsertHolidayException(
       update: { kind: "EXTRA", name },
     });
     invalidateHolidays();
-    return exceptionDto(row);
+    const clearedSessionCount = await clearAttendanceForDates(prisma, [input.date]);
+    return { ...exceptionDto(row), clearedSessionCount };
   }
 
   const settings = await getHolidaySettings(prisma);
@@ -222,18 +267,22 @@ export async function upsertHolidayException(
     update: { kind: "WORKING", name: input.name?.trim() || null },
   });
   invalidateHolidays();
-  return exceptionDto(row);
+  return { ...exceptionDto(row), clearedSessionCount: 0 };
 }
 
 export async function deleteHolidayException(
   prisma: PrismaClient,
   id: string
-): Promise<boolean> {
-  try {
-    await prisma.schoolHolidayException.delete({ where: { id } });
-    invalidateHolidays();
-    return true;
-  } catch {
-    return false;
+): Promise<{ deleted: boolean; clearedSessionCount: number }> {
+  const row = await prisma.schoolHolidayException.findUnique({ where: { id } });
+  if (!row) return { deleted: false, clearedSessionCount: 0 };
+  const iso = dateToIso(row.date);
+  const kind = row.kind;
+  await prisma.schoolHolidayException.delete({ where: { id } });
+  invalidateHolidays();
+  let clearedSessionCount = 0;
+  if (kind === "WORKING" && (await holidayNameForDate(prisma, iso))) {
+    clearedSessionCount = await clearAttendanceForDates(prisma, [iso]);
   }
+  return { deleted: true, clearedSessionCount };
 }

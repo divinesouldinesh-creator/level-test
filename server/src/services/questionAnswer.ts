@@ -1,4 +1,5 @@
 import type { Question, QuestionType } from "@prisma/client";
+import { inlineMediaUrl } from "./storedUploads.js";
 
 export type SubmittedAnswer = {
   questionId: string;
@@ -164,5 +165,17 @@ export function toPublicQuestion(q: {
     options: visibleOptions(type, q.optionA, q.optionB, q.optionC, q.optionD),
     optionImageUrls: visibleOptionImages(type, q.optionImageA, q.optionImageB, q.optionImageC, q.optionImageD),
     topicId: q.topicId,
+  };
+}
+
+export async function toPublicQuestionWithMedia(
+  q: Parameters<typeof toPublicQuestion>[0]
+) {
+  const pub = toPublicQuestion(q);
+  const optionImageUrls = await Promise.all(pub.optionImageUrls.map((url) => inlineMediaUrl(url)));
+  return {
+    ...pub,
+    stemImageUrl: await inlineMediaUrl(pub.stemImageUrl),
+    optionImageUrls,
   };
 }

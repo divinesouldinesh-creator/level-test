@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api, getToken, setToken } from "./api";
 
-export type Role = "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE";
+export type Role = "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE" | "PRINCIPAL";
 
 export type AuthState = {
   role: Role | null;
@@ -14,7 +14,7 @@ export type AuthState = {
 };
 
 const PROFILE_KEY = "authProfile";
-const ROLES: Role[] = ["ADMIN", "TEACHER", "STUDENT", "OFFICE"];
+const ROLES: Role[] = ["ADMIN", "TEACHER", "STUDENT", "OFFICE", "PRINCIPAL"];
 
 const Ctx = createContext<{
   auth: AuthState;

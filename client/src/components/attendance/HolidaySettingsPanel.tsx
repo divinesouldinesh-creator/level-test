@@ -50,6 +50,22 @@ function utcDayOfWeekMon0(iso: string): number {
   return (d.getUTCDay() + 6) % 7;
 }
 
+function saturdayRank(rule: SaturdayRule): number {
+  if (rule === "ALL") return 2;
+  if (rule === "SECOND") return 1;
+  return 0;
+}
+
+function rulesAddHolidays(prev: HolidaySettings, next: HolidaySettings): boolean {
+  if (!prev.sundaysOff && next.sundaysOff) return true;
+  return saturdayRank(next.saturdayRule) > saturdayRank(prev.saturdayRule);
+}
+
+function clearedAttendanceNote(count: number): string {
+  if (count <= 0) return "";
+  return " Attendance already marked on those holiday days was removed for every class.";
+}
+
 function daysInYearMonth(yearMonth: string): string[] {
   const { to } = monthBounds(yearMonth);
   const [y, m] = yearMonth.split("-").map(Number);
@@ -123,29 +139,40 @@ export function HolidaySettingsPanel() {
     setSaving(true);
     setErr(null);
     setMessage(null);
-    const r = await api<{ settings: HolidaySettings }>("/api/v1/admin/attendance/holiday-settings", {
-      method: "PATCH",
-      json: next,
-    });
+    const r = await api<{ settings: HolidaySettings; clearedSessionCount?: number }>(
+      "/api/v1/admin/attendance/holiday-settings",
+      {
+        method: "PATCH",
+        json: next,
+      }
+    );
     setSaving(false);
     if (!r.ok || !r.data) {
       setErr(r.error ?? "Could not save holiday settings");
       return;
     }
     setSettings(r.data.settings);
-    setMessage("Holiday rules saved.");
+    setMessage(`Holiday rules saved.${clearedAttendanceNote(r.data.clearedSessionCount ?? 0)}`);
     await reload();
   }
 
   async function addExtra(e: React.FormEvent) {
     e.preventDefault();
     if (!extraDate || !extraName.trim()) return;
+    const name = extraName.trim();
+    if (
+      !window.confirm(
+        `Mark ${extraDate} as “${name}”? Attendance already saved on this day will be removed for every class and section.`
+      )
+    ) {
+      return;
+    }
     setSaving(true);
     setErr(null);
     setMessage(null);
-    const r = await api("/api/v1/admin/attendance/holidays", {
+    const r = await api<{ clearedSessionCount?: number }>("/api/v1/admin/attendance/holidays", {
       method: "POST",
-      json: { date: extraDate, kind: "EXTRA", name: extraName.trim() },
+      json: { date: extraDate, kind: "EXTRA", name },
     });
     setSaving(false);
     if (!r.ok) {
@@ -153,7 +180,12 @@ export function HolidaySettingsPanel() {
       return;
     }
     setExtraName("");
-    setMessage(`Added holiday on ${extraDate}.`);
+    const cleared = r.data?.clearedSessionCount ?? 0;
+    setMessage(
+      cleared > 0
+        ? `Added holiday on ${extraDate}. Attendance already marked for that day was removed.`
+        : `Added holiday on ${extraDate}.`
+    );
     setVisibleMonth(yearMonthFromIso(extraDate));
     setSelectedDate(extraDate);
     await reload();
@@ -180,13 +212,16 @@ export function HolidaySettingsPanel() {
     setSaving(true);
     setErr(null);
     setMessage(null);
-    const r = await api(`/api/v1/admin/attendance/holidays/${id}`, { method: "DELETE" });
+    const r = await api<{ clearedSessionCount?: number }>(`/api/v1/admin/attendance/holidays/${id}`, {
+      method: "DELETE",
+    });
     setSaving(false);
     if (!r.ok) {
       setErr(r.error ?? "Could not update holiday");
       return;
     }
-    setMessage(label);
+    const cleared = r.data?.clearedSessionCount ?? 0;
+    setMessage(cleared > 0 ? `${label} Attendance already marked for that day was removed.` : label);
     await reload();
   }
 
@@ -195,7 +230,13 @@ export function HolidaySettingsPanel() {
     const holiday = displayHolidayByDate.get(iso);
     const exception = exceptionByDate.get(iso);
     if (exception?.kind === "WORKING") {
-      if (!window.confirm(`Restore ${iso} as a holiday?`)) return;
+      if (
+        !window.confirm(
+          `Restore ${iso} as a holiday? Attendance already saved on this day will be removed for every class and section.`
+        )
+      ) {
+        return;
+      }
       await removeException(exception.id, `${iso} is a holiday again.`);
       return;
     }
@@ -223,7 +264,18 @@ export function HolidaySettingsPanel() {
             type="checkbox"
             checked={settings.sundaysOff}
             disabled={saving}
-            onChange={(e) => void saveSettings({ ...settings, sundaysOff: e.target.checked })}
+            onChange={(e) => {
+              const next = { ...settings, sundaysOff: e.target.checked };
+              if (
+                rulesAddHolidays(settings, next) &&
+                !window.confirm(
+                  "Sundays will be holidays. Attendance already saved on those Sundays will be removed for every class."
+                )
+              ) {
+                return;
+              }
+              void saveSettings(next);
+            }}
           />
           <span>Sundays are holidays</span>
         </label>
@@ -233,7 +285,18 @@ export function HolidaySettingsPanel() {
             className="w-full rounded-lg border px-3 py-2"
             value={settings.saturdayRule}
             disabled={saving}
-            onChange={(e) => void saveSettings({ ...settings, saturdayRule: e.target.value as SaturdayRule })}
+            onChange={(e) => {
+              const next = { ...settings, saturdayRule: e.target.value as SaturdayRule };
+              if (
+                rulesAddHolidays(settings, next) &&
+                !window.confirm(
+                  "More Saturdays will be holidays. Attendance already saved on those days will be removed for every class."
+                )
+              ) {
+                return;
+              }
+              void saveSettings(next);
+            }}
           >
             <option value="SECOND">Only 2nd Saturday is a holiday</option>
             <option value="ALL">All Saturdays are holidays</option>
@@ -244,7 +307,10 @@ export function HolidaySettingsPanel() {
 
       <form onSubmit={addExtra} className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
         <p className="text-sm font-medium text-slate-900">Add an extra holiday</p>
-        <p className="mt-1 text-xs text-slate-600">Diwali, local breaks, or any other closed day.</p>
+        <p className="mt-1 text-xs text-slate-600">
+          Diwali, local breaks, or any other closed day. Attendance already marked on that day is removed for every
+          class, so you do not need to change each student.
+        </p>
         <div className="mt-3 flex flex-col sm:flex-row gap-2">
           <input
             type="date"
@@ -394,7 +460,16 @@ export function HolidaySettingsPanel() {
                       type="button"
                       className="text-indigo-700 text-xs font-medium"
                       disabled={saving}
-                      onClick={() => void removeException(e.id, `${e.date} is a holiday again.`)}
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            `Restore ${e.date} as a holiday? Attendance already saved on this day will be removed for every class and section.`
+                          )
+                        ) {
+                          return;
+                        }
+                        void removeException(e.id, `${e.date} is a holiday again.`);
+                      }}
                     >
                       Restore holiday
                     </button>

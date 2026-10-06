@@ -47,6 +47,7 @@ export function LoginPage() {
     else if (role === "TEACHER") nav("/teacher");
     else if (role === "ADMIN") nav("/admin");
     else if (role === "OFFICE") nav("/office");
+    else if (role === "PRINCIPAL") nav("/principal");
   }
 
   return (

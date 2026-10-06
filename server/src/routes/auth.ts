@@ -27,6 +27,7 @@ type ProfileInput = {
   teacher: { fullName: string } | null;
   admin: { fullName: string } | null;
   office: { fullName: string } | null;
+  principal: { fullName: string } | null;
 };
 
 function profileFromUser(user: ProfileInput, className?: string | null) {
@@ -47,10 +48,27 @@ function profileFromUser(user: ProfileInput, className?: string | null) {
   if (user.office) {
     return { type: "office" as const, fullName: user.office.fullName };
   }
+  if (user.principal) {
+    return { type: "principal" as const, fullName: user.principal.fullName };
+  }
   if (user.role === "OFFICE") {
     return { type: "office" as const, fullName: "Office" };
   }
+  if (user.role === "PRINCIPAL") {
+    return { type: "principal" as const, fullName: "Principal" };
+  }
   return null;
+}
+
+async function loadPrincipalProfile(userId: string): Promise<{ fullName: string } | null> {
+  try {
+    return await prisma.principal.findUnique({
+      where: { userId },
+      select: { fullName: true },
+    });
+  } catch {
+    return null;
+  }
 }
 
 async function loadOfficeProfile(userId: string): Promise<{ fullName: string } | null> {
@@ -111,7 +129,7 @@ router.post("/login", async (req, res) => {
     }
 
     if (
-      (user.role === "STUDENT" || user.role === "TEACHER" || user.role === "OFFICE") &&
+      (user.role === "STUDENT" || user.role === "TEACHER" || user.role === "OFFICE" || user.role === "PRINCIPAL") &&
       user.passwordPlain !== password
     ) {
       prisma.user
@@ -120,6 +138,7 @@ router.post("/login", async (req, res) => {
     }
 
     const office = user.role === "OFFICE" ? await loadOfficeProfile(user.id) : null;
+    const principal = user.role === "PRINCIPAL" ? await loadPrincipalProfile(user.id) : null;
 
     if (user.student?.id) {
       try {
@@ -138,7 +157,7 @@ router.post("/login", async (req, res) => {
         email: user.email,
         studentLoginId: user.studentLoginId,
         profile: profileFromUser(
-          { ...user, office },
+          { ...user, office, principal },
           user.student?.schoolClass?.name
         ),
       },
@@ -164,13 +183,14 @@ router.get("/me", authMiddleware, async (req, res) => {
       return;
     }
     const office = user.role === "OFFICE" ? await loadOfficeProfile(user.id) : null;
+    const principal = user.role === "PRINCIPAL" ? await loadPrincipalProfile(user.id) : null;
     res.json({
       id: user.id,
       role: user.role,
       email: user.email,
       studentLoginId: user.studentLoginId,
       profile: profileFromUser(
-        { ...user, office },
+        { ...user, office, principal },
         user.student?.schoolClass?.name
       ),
     });
@@ -214,7 +234,7 @@ router.patch("/change-password", authMiddleware, async (req, res) => {
     where: { id: user.id },
     data: {
       passwordHash,
-      ...(user.role === "STUDENT" || user.role === "TEACHER" || user.role === "OFFICE"
+      ...(user.role === "STUDENT" || user.role === "TEACHER" || user.role === "OFFICE" || user.role === "PRINCIPAL"
         ? { passwordPlain: p.data.newPassword }
         : {}),
     },

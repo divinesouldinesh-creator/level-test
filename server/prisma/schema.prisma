@@ -13,6 +13,7 @@ enum Role {
   TEACHER
   STUDENT
   OFFICE
+  PRINCIPAL
 }
 
 enum Difficulty {
@@ -56,8 +57,9 @@ model User {
 
   student Student?
   teacher Teacher?
-  admin   Admin?
-  office  Office?
+  admin     Admin?
+  office    Office?
+  principal Principal?
 
   questionsCreated        Question[]          @relation("QuestionCreatedBy")
   questionImports         QuestionImport[]
@@ -65,6 +67,7 @@ model User {
   attendanceSessionsTaken AttendanceSession[] @relation("AttendanceTakenBy")
   classroomAssessmentsRecorded ClassroomAssessmentSession[] @relation("ClassroomRecordedBy")
   careCallsRecorded            CareCall[]                   @relation("CareCallRecordedBy")
+  principalActionsRecorded     PrincipalAction[]            @relation("PrincipalActionRecordedBy")
   feeChargesCreated            FeeCharge[]                  @relation("FeeChargeCreatedBy")
   feePaymentsRecorded          FeePayment[]                 @relation("FeePaymentRecordedBy")
 }
@@ -77,6 +80,13 @@ model Admin {
 }
 
 model Office {
+  id       String @id @default(cuid())
+  userId   String @unique @map("user_id")
+  fullName String @map("full_name")
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Principal {
   id       String @id @default(cuid())
   userId   String @unique @map("user_id")
   fullName String @map("full_name")
@@ -133,6 +143,7 @@ model Student {
   masterySessions            MasterySession[]
   classroomAssessmentEntries ClassroomAssessmentEntry[]
   careCalls                  CareCall[]
+  principalActions           PrincipalAction[]
   feeMembership              FeeAccountMember?
   feePaymentsAgainst         FeePayment[]       @relation("FeePaymentAgainstStudent")
   questionReports            QuestionReport[]
@@ -778,6 +789,65 @@ model CareCall {
   recordedBy User?   @relation("CareCallRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
 
   @@index([studentId, calledAt])
+  @@index([recordedById])
+}
+
+enum SupportArea {
+  SPEAKING
+  MATHS
+  ATTENDANCE
+}
+
+enum PrincipalActionKind {
+  SPOKE_TO_TEACHER
+  CALLED_PARENT
+  PARENT_MEETING
+  EXTRA_PRACTICE
+  ATTENDANCE_WARNING
+  RECHECK_SCHEDULED
+}
+
+enum PrincipalActionOutcome {
+  OPEN
+  IMPROVED
+  STILL_NEEDS_SUPPORT
+}
+
+/// Cut-offs for the principal support list. Singleton id = "default".
+model SupportSettings {
+  id                    String   @id @default("default")
+  speakingMaxLevelOrder Int      @default(0) @map("speaking_max_level_order")
+  mathsBelowPct         Float    @default(40) @map("maths_below_pct")
+  attendanceBelowPct    Float    @default(75) @map("attendance_below_pct")
+  recheckDays           Int      @default(14) @map("recheck_days")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+}
+
+/// One principal support step. Always insert a new row; close it with an outcome instead of editing the reason.
+model PrincipalAction {
+  id                String                 @id @default(cuid())
+  studentId         String                 @map("student_id")
+  area              SupportArea
+  actionKind        PrincipalActionKind    @map("action_kind")
+  note              String?
+  snapshotLabel     String                 @map("snapshot_label")
+  snapshotValue     Float?                 @map("snapshot_value")
+  snapshotDate      DateTime?              @map("snapshot_date")
+  recheckOn         DateTime               @map("recheck_on")
+  outcome           PrincipalActionOutcome @default(OPEN)
+  outcomeNote       String?                @map("outcome_note")
+  outcomeValue      Float?                 @map("outcome_value")
+  outcomeLabel      String?                @map("outcome_label")
+  outcomeRecordedAt DateTime?              @map("outcome_recorded_at")
+  recordedById      String?                @map("recorded_by_id")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  recordedBy User?   @relation("PrincipalActionRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([studentId, area, createdAt])
+  @@index([recheckOn])
   @@index([recordedById])
 }
 

@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { api } from "../../api";
 
-export function AdminSecurityPage() {
+export function AdminSecurityPage({
+  title = "Admin security",
+  description = "Change your admin login password.",
+}: {
+  title?: string;
+  description?: string;
+} = {}) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -40,8 +46,8 @@ export function AdminSecurityPage() {
   return (
     <div className="space-y-6 max-w-xl">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Admin security</h1>
-        <p className="text-slate-600 mt-1">Change your admin login password.</p>
+        <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
+        <p className="text-slate-600 mt-1">{description}</p>
       </div>
 
       <form onSubmit={submit} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">

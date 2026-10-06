@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, getToken, mediaUrl } from "../../api";
+import { api, getToken } from "../../api";
+import { QuestionImage } from "../../components/QuestionImage";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 import { parseNumericInput, questionTypeLabel, type QuestionType } from "../../questionTypes";
 
@@ -1340,8 +1341,8 @@ export function AdminQuestionBankPage() {
               ) : null}
               {form.stemImageUrl ? (
                 <div className="mt-2 flex flex-wrap items-start gap-2">
-                  <img
-                    src={mediaUrl(form.stemImageUrl)}
+                  <QuestionImage
+                    src={form.stemImageUrl}
                     alt="Stem preview"
                     className="max-h-40 max-w-full rounded border border-slate-200 object-contain bg-white"
                   />
@@ -1415,9 +1416,8 @@ export function AdminQuestionBankPage() {
                 </label>
                 {imageUrl ? (
                   <div className="mt-2 flex flex-wrap items-start gap-2">
-                    <img
-                      src={mediaUrl(imageUrl)}
-                      alt=""
+                    <QuestionImage
+                      src={imageUrl}
                       className="max-h-28 max-w-full rounded border border-slate-200 object-contain bg-white"
                     />
                     <button
@@ -1619,13 +1619,10 @@ export function AdminQuestionBankPage() {
                 <p className="text-sm text-slate-900">
                   {i + 1}. {q.stem}
                 </p>
-                {q.stemImageUrl ? (
-                  <img
-                    src={mediaUrl(q.stemImageUrl)}
-                    alt=""
-                    className="mt-2 max-h-28 rounded border border-slate-200 object-contain bg-slate-50"
-                  />
-                ) : null}
+                <QuestionImage
+                  src={q.stemImageUrl}
+                  className="mt-2 max-h-28 rounded border border-slate-200 object-contain bg-slate-50"
+                />
                 <p className="text-xs text-slate-500 mt-1">
                   {questionTypeLabel(q.type)}
                   {q.type === "NUMERIC"

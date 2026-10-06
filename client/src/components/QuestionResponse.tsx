@@ -1,5 +1,5 @@
-import { mediaUrl } from "../api";
 import { isNumericType } from "../questionTypes";
+import { QuestionImage } from "./QuestionImage";
 
 const LABELS = ["A", "B", "C", "D"];
 
@@ -34,13 +34,10 @@ export function QuestionChoices({
         >
           <span className="font-semibold text-brand-700 mr-2">{LABELS[i] ?? i + 1}.</span>
           {opt}
-          {imageUrl ? (
-            <img
-              src={mediaUrl(imageUrl)}
-              alt=""
-              className="mt-2 max-h-40 w-full object-contain rounded-lg border border-slate-100 bg-white"
-            />
-          ) : null}
+          <QuestionImage
+            src={imageUrl}
+            className="mt-2 max-h-40 w-full object-contain rounded-lg border border-slate-100 bg-white"
+          />
         </button>
         );
       })}

@@ -22,13 +22,20 @@ import {
   submitMasterySession,
 } from "../services/topicMastery.js";
 import { MasterySessionKind } from "@prisma/client";
-import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateStudentMastery } from "../lib/memoryCache.js";
+import { CACHE_KEY, CACHE_TTL_MS, cacheGet, cacheGetOrSet, cacheSet, invalidateStudentMastery } from "../lib/memoryCache.js";
 import {
   isAttemptedAnswer,
   scoreSubmittedAnswer,
   tallyTestScore,
-  toPublicQuestion,
+  toPublicQuestionWithMedia,
 } from "../services/questionAnswer.js";
+import {
+  explainMissedQuestion,
+  formatOptionAnswer,
+  takeTutorSlot,
+  TutorConfigError,
+  TutorUpstreamError,
+} from "../services/questionTutor.js";
 
 const submittedAnswerSchema = z.object({
   questionId: z.string(),
@@ -94,25 +101,27 @@ router.get("/daily-challenge/:challengeId", async (req, res) => {
   const challenge = await getChallengeForStudent(prisma, student.id, req.params.challengeId);
   if (!challenge) return res.status(404).json({ error: "Challenge not found" });
 
-  const questions = challenge.questions.map((cq) => {
-    const q = cq.question;
-    const base = {
-      ...toPublicQuestion(q),
-      topicName: q.topic.name,
-      orderIndex: cq.orderIndex,
-    };
-    if (challenge.status === "COMPLETED") {
-      return {
-        ...base,
-        selectedOption: cq.selectedOption,
-        numericAnswer: cq.numericAnswer,
-        correctOption: q.correctOption,
-        correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
-        isCorrect: cq.isCorrect,
+  const questions = await Promise.all(
+    challenge.questions.map(async (cq) => {
+      const q = cq.question;
+      const base = {
+        ...(await toPublicQuestionWithMedia(q)),
+        topicName: q.topic.name,
+        orderIndex: cq.orderIndex,
       };
-    }
-    return base;
-  });
+      if (challenge.status === "COMPLETED") {
+        return {
+          ...base,
+          selectedOption: cq.selectedOption,
+          numericAnswer: cq.numericAnswer,
+          correctOption: q.correctOption,
+          correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
+          isCorrect: cq.isCorrect,
+        };
+      }
+      return base;
+    })
+  );
 
   res.json({
     id: challenge.id,
@@ -251,24 +260,26 @@ router.get("/mastery/sessions/:sessionId", async (req, res) => {
   const session = await getMasterySession(prisma, student.id, req.params.sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
 
-  const questions = session.questions.map((sq) => {
-    const q = sq.question;
-    const base = {
-      ...toPublicQuestion(q),
-      orderIndex: sq.orderIndex,
-    };
-    if (session.status === "COMPLETED") {
-      return {
-        ...base,
-        selectedOption: sq.selectedOption,
-        numericAnswer: sq.numericAnswer,
-        correctOption: q.correctOption,
-        correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
-        isCorrect: sq.isCorrect,
+  const questions = await Promise.all(
+    session.questions.map(async (sq) => {
+      const q = sq.question;
+      const base = {
+        ...(await toPublicQuestionWithMedia(q)),
+        orderIndex: sq.orderIndex,
       };
-    }
-    return base;
-  });
+      if (session.status === "COMPLETED") {
+        return {
+          ...base,
+          selectedOption: sq.selectedOption,
+          numericAnswer: sq.numericAnswer,
+          correctOption: q.correctOption,
+          correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
+          isCorrect: sq.isCorrect,
+        };
+      }
+      return base;
+    })
+  );
 
   res.json({
     id: session.id,
@@ -738,7 +749,7 @@ function resultSlice(q: {
   return { id: q.topicId, name: q.topic?.name ?? "Chapter" };
 }
 
-function stripQuestion(q: {
+async function stripQuestion(q: {
   id: string;
   type?: string;
   stem: string;
@@ -749,7 +760,7 @@ function stripQuestion(q: {
   optionD: string;
   topicId: string;
 }) {
-  return toPublicQuestion(q);
+  return toPublicQuestionWithMedia(q);
 }
 
 router.get("/tests/:testId", async (req, res) => {
@@ -848,7 +859,7 @@ router.get("/tests/:testId", async (req, res) => {
       negativeMarking: test.wrongPenalty > 0,
       subject: test.subject.name,
       level: test.level?.name ?? null,
-      questions: test.testQuestions.map((tq) => stripQuestion(tq.question)),
+      questions: await Promise.all(test.testQuestions.map((tq) => stripQuestion(tq.question))),
     });
   } catch (error) {
     sendRouteError(res, error, "Failed to load test");
@@ -892,20 +903,22 @@ router.get("/tests/:testId/review", async (req, res) => {
     select: { questionId: true },
   });
 
-  const questions = test.testQuestions.map((tq) => {
-    const q = tq.question;
-    const sa = answerByQ.get(q.id);
-    return {
-      ...toPublicQuestion(q),
-      selectedOption: sa?.selectedOption ?? null,
-      numericAnswer: sa?.numericAnswer ?? null,
-      correctOption: q.correctOption,
-      correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
-      isCorrect: sa?.isCorrect ?? false,
-      topicId: q.topicId,
-      topicName: q.topic.name,
-    };
-  });
+  const questions = await Promise.all(
+    test.testQuestions.map(async (tq) => {
+      const q = tq.question;
+      const sa = answerByQ.get(q.id);
+      return {
+        ...(await toPublicQuestionWithMedia(q)),
+        selectedOption: sa?.selectedOption ?? null,
+        numericAnswer: sa?.numericAnswer ?? null,
+        correctOption: q.correctOption,
+        correctNumeric: q.type === "NUMERIC" ? q.correctNumeric : null,
+        isCorrect: sa?.isCorrect ?? false,
+        topicId: q.topicId,
+        topicName: q.topic.name,
+      };
+    })
+  );
 
   res.json({
     score: attempt.score,
@@ -914,6 +927,108 @@ router.get("/tests/:testId/review", async (req, res) => {
     questions,
     reportedQuestionIds: reports.map((r) => r.questionId),
   });
+});
+
+router.post("/tests/:testId/questions/:questionId/explain", async (req, res) => {
+  try {
+    const student = await prisma.student.findUnique({
+      where: { userId: req.user!.sub },
+      include: { schoolClass: { select: { name: true, grade: true } } },
+    });
+    if (!student) {
+      res.status(400).json({ error: "Not a student" });
+      return;
+    }
+
+    const cacheKey = `question-help:${student.id}:${req.params.testId}:${req.params.questionId}`;
+    const cached = cacheGet<{ idea: string; whyMissed: string; whyCorrect: string }>(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const test = await prisma.test.findFirst({
+      where: { id: req.params.testId, studentId: student.id, status: "COMPLETED" },
+      include: {
+        subject: { select: { name: true } },
+        level: { select: { name: true, order: true } },
+        attempts: {
+          include: {
+            studentAnswers: { where: { questionId: req.params.questionId } },
+          },
+        },
+        testQuestions: {
+          where: { questionId: req.params.questionId },
+          include: { question: { include: { topic: { select: { name: true } } } } },
+        },
+      },
+    });
+    if (!test) {
+      res.status(404).json({ error: "Test not found" });
+      return;
+    }
+    const row = test.testQuestions[0];
+    const answer = test.attempts[0]?.studentAnswers[0];
+    if (!row || !answer) {
+      res.status(404).json({ error: "Question is not on this test" });
+      return;
+    }
+    if (answer.isCorrect) {
+      res.status(400).json({ error: "This question was already correct" });
+      return;
+    }
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      res.status(503).json({ error: "AI help is not set up yet. Add OPENAI_API_KEY on the server." });
+      return;
+    }
+    if (!takeTutorSlot(student.id)) {
+      res.status(429).json({ error: "You have asked for a lot of help. Try again in a little while." });
+      return;
+    }
+
+    const q = row.question;
+    const options = [q.optionA, q.optionB, q.optionC, q.optionD];
+    const studentAnswer =
+      q.type === "NUMERIC"
+        ? answer.numericAnswer == null
+          ? "Left blank"
+          : String(answer.numericAnswer)
+        : formatOptionAnswer(options, answer.selectedOption);
+    const correctAnswer =
+      q.type === "NUMERIC"
+        ? q.correctNumeric == null
+          ? ""
+          : String(q.correctNumeric)
+        : formatOptionAnswer(options, q.correctOption);
+
+    const help = await explainMissedQuestion({
+      grade: student.schoolClass.grade,
+      className: student.schoolClass.name,
+      subjectName: test.subject.name,
+      levelName: test.level?.name ?? null,
+      levelOrder: test.level?.order ?? null,
+      topicName: q.topic.name,
+      difficulty: q.difficulty,
+      type: q.type,
+      stem: q.stem,
+      hasDiagram: Boolean(q.stemImageUrl),
+      options: q.type === "NUMERIC" ? [] : [q.optionA, q.optionB, q.optionC, q.optionD],
+      studentAnswer,
+      correctAnswer,
+    });
+    cacheSet(cacheKey, help, CACHE_TTL_MS.questionHelp);
+    res.json(help);
+  } catch (error) {
+    if (error instanceof TutorConfigError) {
+      res.status(503).json({ error: error.message });
+      return;
+    }
+    if (error instanceof TutorUpstreamError) {
+      res.status(502).json({ error: error.message });
+      return;
+    }
+    sendRouteError(res, error, "Could not explain this question");
+  }
 });
 
 const reportReasonSchema = z.enum(["WRONG_ANSWER", "UNCLEAR", "BAD_DIAGRAM", "OTHER"]);

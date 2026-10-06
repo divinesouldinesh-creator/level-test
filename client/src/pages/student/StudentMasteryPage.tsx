@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, mediaUrl } from "../../api";
+import { api } from "../../api";
+import { QuestionImage } from "../../components/QuestionImage";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 import { studentNav } from "../../studentNav";
@@ -227,13 +228,7 @@ export function StudentMasteryPage() {
         {q && (
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <p className="text-lg font-medium text-slate-900 select-none">{q.stem}</p>
-            {q.stemImageUrl && (
-              <img
-                src={mediaUrl(q.stemImageUrl)}
-                alt=""
-                className="mt-3 max-h-56 rounded-lg border border-slate-100"
-              />
-            )}
+            <QuestionImage src={q.stemImageUrl} className="mt-3 max-h-56 w-full object-contain rounded-lg border border-slate-100 bg-slate-50" />
             <QuestionResponse
               type={q.type}
               options={q.options}

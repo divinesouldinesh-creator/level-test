@@ -9,6 +9,9 @@ const AdminLayout = lazy(() =>
 const OfficeLayout = lazy(() =>
   import("./layouts/OfficeLayout").then((m) => ({ default: m.OfficeLayout }))
 );
+const PrincipalLayout = lazy(() =>
+  import("./layouts/PrincipalLayout").then((m) => ({ default: m.PrincipalLayout }))
+);
 const StudentHomePage = lazy(() =>
   import("./pages/student/StudentHomePage").then((m) => ({ default: m.StudentHomePage }))
 );
@@ -80,6 +83,9 @@ const AdminTopicLessonsPage = lazy(() =>
 const AdminAttendancePage = lazy(() =>
   import("./pages/admin/AdminAttendancePage").then((m) => ({ default: m.AdminAttendancePage }))
 );
+const AdminPrincipalActionsPage = lazy(() =>
+  import("./pages/admin/AdminPrincipalActionsPage").then((m) => ({ default: m.AdminPrincipalActionsPage }))
+);
 const OfficeOverviewPage = lazy(() =>
   import("./pages/office/OfficeOverviewPage").then((m) => ({ default: m.OfficeOverviewPage }))
 );
@@ -121,7 +127,7 @@ function Guard({
   role,
   children,
 }: {
-  role: "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE";
+  role: "ADMIN" | "TEACHER" | "STUDENT" | "OFFICE" | "PRINCIPAL";
   children: React.ReactNode;
 }) {
   const { auth } = useAuth();
@@ -325,6 +331,7 @@ function AppRoutes() {
           <Route path="topic-lessons" element={<AdminTopicLessonsPage />} />
           <Route path="students" element={<AdminStudentsPage />} />
           <Route path="attendance" element={<AdminAttendancePage />} />
+          <Route path="principal-actions" element={<AdminPrincipalActionsPage />} />
           <Route path="staff" element={<AdminStaffPage />} />
           <Route path="teachers" element={<Navigate to="/admin/staff" replace />} />
           <Route path="branding" element={<AdminSchoolBrandingPage />} />
@@ -348,6 +355,25 @@ function AppRoutes() {
           <Route path="transport" element={<OfficeTransportPage />} />
           <Route path="attendance" element={<AdminAttendancePage simple />} />
           <Route path="teachers" element={<AdminTeachersPage />} />
+        </Route>
+        <Route
+          path="/principal"
+          element={
+            <Guard role="PRINCIPAL">
+              <PrincipalLayout />
+            </Guard>
+          }
+        >
+          <Route index element={<AdminPrincipalActionsPage />} />
+          <Route
+            path="security"
+            element={
+              <AdminSecurityPage
+                title="Password"
+                description="Change your principal login password."
+              />
+            }
+          />
         </Route>
         <Route path="/" element={<Navigate to="/login" replace />} />
       </Routes>

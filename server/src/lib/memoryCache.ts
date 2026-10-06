@@ -9,6 +9,7 @@ export const CACHE_TTL_MS = {
   teacherClasses: 60 * 1000,
   studentProfile: 2 * 60 * 1000,
   studentMastery: 30 * 1000,
+  questionHelp: 6 * 60 * 60 * 1000,
 } as const;
 
 export const CACHE_KEY = {

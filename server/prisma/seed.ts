@@ -109,6 +109,26 @@ async function main() {
     });
   }
 
+  let principalUser = await prisma.user.findUnique({
+    where: { email: "principal@school.local" },
+    include: { principal: true },
+  });
+  if (!principalUser) {
+    principalUser = await prisma.user.create({
+      data: {
+        email: "principal@school.local",
+        passwordHash,
+        role: "PRINCIPAL",
+        principal: { create: { fullName: "School Principal" } },
+      },
+      include: { principal: true },
+    });
+  } else if (principalUser.role === "PRINCIPAL" && !principalUser.principal) {
+    await prisma.principal.create({
+      data: { userId: principalUser.id, fullName: "School Principal" },
+    });
+  }
+
   const teacherSeeds = [
     { email: "teacher@school.local", fullName: "Demo Teacher" },
     { email: "kanchan@school.local", fullName: "Kanchan Yadav" },

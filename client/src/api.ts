@@ -1,9 +1,10 @@
-const base = import.meta.env.VITE_API_URL ?? "";
+const base = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
 /** Resolve a stored media path (e.g. /uploads/…) against the API origin when needed. */
 export function mediaUrl(path: string | null | undefined): string | undefined {
   if (!path) return undefined;
-  if (/^https?:\/\//i.test(path)) return path;
+  if (path.startsWith("data:") || path.startsWith("blob:") || /^https?:\/\//i.test(path)) return path;
+  if (path.startsWith("/uploads/")) return `${base}/api/v1/media${path}`;
   return `${base}${path}`;
 }
 

@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PrismaClient } from "@prisma/client";
-import { syncUploadDirToStore } from "../src/services/storedUploads.js";
+import { backfillQuestionUploads, syncUploadDirToStore } from "../src/services/storedUploads.js";
 
 const prisma = new PrismaClient();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +16,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 async function main() {
   const uploadDir = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
   const saved = await syncUploadDirToStore(uploadDir);
+  const resolved = await backfillQuestionUploads(uploadDir);
 
   const migrationName = "20260929230000_stored_uploads";
   try {
@@ -37,7 +38,9 @@ async function main() {
   }
 
   const rows = await prisma.$queryRaw<{ n: bigint }[]>`SELECT COUNT(*)::bigint AS n FROM "StoredUpload"`;
-  console.log(`Stored uploads ensured. Copied ${saved} new file(s). ${Number(rows[0]?.n ?? 0)} in the database.`);
+  console.log(
+    `Stored uploads ensured. Copied ${saved} new file(s). Resolved ${resolved} question image(s). ${Number(rows[0]?.n ?? 0)} in the database.`
+  );
 }
 
 main()

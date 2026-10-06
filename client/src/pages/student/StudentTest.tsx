@@ -9,10 +9,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, mediaUrl } from "../../api";
+import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { AppShell } from "../../components/AppShell";
 import { studentNav } from "../../studentNav";
+import { QuestionImage } from "../../components/QuestionImage";
 import { QuestionResponse } from "../../components/QuestionResponse";
 import {
   formatNumeric,
@@ -71,6 +72,12 @@ type ReviewPayload = {
 };
 
 type PracticeState = { picks: number[]; solved: boolean };
+
+type QuestionHelp = {
+  idea: string;
+  whyMissed: string;
+  whyCorrect: string;
+};
 
 type TestResult = {
   score: number;
@@ -163,6 +170,9 @@ export function StudentTest() {
   const [reportNote, setReportNote] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
   const [reportErr, setReportErr] = useState<string | null>(null);
+  const [helpById, setHelpById] = useState<Record<string, QuestionHelp>>({});
+  const [helpBusyId, setHelpBusyId] = useState<string | null>(null);
+  const [helpErrById, setHelpErrById] = useState<Record<string, string>>({});
   const [startingLevel, setStartingLevel] = useState<string | null>(null);
   const [subjectId, setSubjectId] = useState<string | null>(null);
   const [wrongPenalty, setWrongPenalty] = useState(0);
@@ -318,6 +328,25 @@ export function StudentTest() {
     }
     setReportedIds((prev) => new Set(prev).add(questionId));
     setReportFor(null);
+  }
+
+  async function askHelp(questionId: string) {
+    if (!testId || helpBusyId) return;
+    setHelpBusyId(questionId);
+    setHelpErrById((prev) => {
+      const next = { ...prev };
+      delete next[questionId];
+      return next;
+    });
+    const r = await api<QuestionHelp>(`/api/v1/student/tests/${testId}/questions/${questionId}/explain`, {
+      method: "POST",
+    });
+    setHelpBusyId(null);
+    if (!r.ok || !r.data) {
+      setHelpErrById((prev) => ({ ...prev, [questionId]: r.error ?? "Could not load help" }));
+      return;
+    }
+    setHelpById((prev) => ({ ...prev, [questionId]: r.data! }));
   }
 
   function practicePick(item: ReviewItem, optIdx: number) {
@@ -581,13 +610,10 @@ export function StudentTest() {
                               </span>
                             )}
                           </div>
-                          {q.stemImageUrl ? (
-                            <img
-                              src={mediaUrl(q.stemImageUrl)}
-                              alt=""
-                              className="mt-2 max-h-56 w-full object-contain rounded-lg border border-slate-100 bg-slate-50"
-                            />
-                          ) : null}
+                          <QuestionImage
+                            src={q.stemImageUrl}
+                            className="mt-2 max-h-56 w-full object-contain rounded-lg border border-slate-100 bg-slate-50"
+                          />
                           <p className="mt-1 text-xs text-slate-500">Chapter: {q.topicName}</p>
                           {!q.isCorrect && isNumericType(q.type) && q.numericAnswer != null ? (
                             <p className="mt-1 text-xs text-slate-500">
@@ -660,13 +686,10 @@ export function StudentTest() {
                                 >
                                   <span className="font-semibold mr-2">{labels[idx]}.</span>
                                   {opt}
-                                  {q.optionImageUrls?.[idx] ? (
-                                    <img
-                                      src={mediaUrl(q.optionImageUrls[idx])}
-                                      alt=""
-                                      className="mt-2 max-h-40 w-full object-contain rounded-lg border border-slate-100 bg-white"
-                                    />
-                                  ) : null}
+                                  <QuestionImage
+                                    src={q.optionImageUrls?.[idx]}
+                                    className="mt-2 max-h-40 w-full object-contain rounded-lg border border-slate-100 bg-white"
+                                  />
                                   {suffix ? <span className="text-xs ml-2">{suffix}</span> : null}
                                 </button>
                               );
@@ -709,6 +732,41 @@ export function StudentTest() {
                                   >
                                     Reset
                                   </button>
+                                </>
+                              )}
+                            </div>
+                          ) : null}
+
+                          {!q.isCorrect ? (
+                            <div className="mt-3">
+                              {helpById[q.id] ? (
+                                <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-slate-800 space-y-2">
+                                  <p>
+                                    <span className="font-semibold text-indigo-900">The idea. </span>
+                                    {helpById[q.id].idea}
+                                  </p>
+                                  <p>
+                                    <span className="font-semibold text-indigo-900">Your answer. </span>
+                                    {helpById[q.id].whyMissed}
+                                  </p>
+                                  <p>
+                                    <span className="font-semibold text-indigo-900">Why the right answer works. </span>
+                                    {helpById[q.id].whyCorrect}
+                                  </p>
+                                </div>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={helpBusyId === q.id}
+                                    onClick={() => void askHelp(q.id)}
+                                    className="rounded-lg border border-indigo-300 bg-white text-indigo-700 px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                                  >
+                                    {helpBusyId === q.id ? "Preparing help…" : "Help me understand"}
+                                  </button>
+                                  {helpErrById[q.id] ? (
+                                    <p className="mt-2 text-xs text-rose-700">{helpErrById[q.id]}</p>
+                                  ) : null}
                                 </>
                               )}
                             </div>
@@ -864,13 +922,7 @@ export function StudentTest() {
         onCut={(e) => e.preventDefault()}
       >
         <p className="text-lg md:text-xl font-medium leading-relaxed">{current.stem}</p>
-        {current.stemImageUrl ? (
-          <img
-            src={mediaUrl(current.stemImageUrl)}
-            alt=""
-            className="mt-4 max-h-72 w-full object-contain rounded-xl border border-slate-100 bg-slate-50"
-          />
-        ) : null}
+        <QuestionImage src={current.stemImageUrl} />
         <QuestionResponse
           type={current.type}
           options={current.options}

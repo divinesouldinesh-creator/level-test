@@ -3,6 +3,7 @@ import { ClassroomAssessmentKind } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { pickBoardQuestions } from "../services/testGenerator.js";
+import { inlineMediaUrl } from "../services/storedUploads.js";
 
 export const ORAL_SCOPE_KEY = "oral";
 const MARKS_PASS_PERCENT = 75;
@@ -1023,20 +1024,22 @@ router.get("/classroom-assessments/questions", async (req, res) => {
       })
     : [];
   const byId = new Map(rows.map((q) => [q.id, q]));
-  const questions = picked.questionIds.flatMap((id) => {
-    const q = byId.get(id);
-    if (!q) return [];
-    const answer = boardAnswer(q);
-    return [
-      {
-        id: q.id,
-        stem: q.stem,
-        stemImageUrl: q.stemImageUrl,
-        answer: answer.text,
-        answerImageUrl: answer.imageUrl,
-      },
-    ];
-  });
+  const questions = await Promise.all(
+    picked.questionIds.flatMap((id) => {
+      const q = byId.get(id);
+      if (!q) return [];
+      const answer = boardAnswer(q);
+      return [
+        (async () => ({
+          id: q.id,
+          stem: q.stem,
+          stemImageUrl: await inlineMediaUrl(q.stemImageUrl),
+          answer: answer.text,
+          answerImageUrl: await inlineMediaUrl(answer.imageUrl),
+        }))(),
+      ];
+    })
+  );
 
   res.json({
     subjectId,

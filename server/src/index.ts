@@ -8,7 +8,7 @@ import adminRoutes from "./routes/admin.js";
 import teacherRoutes from "./routes/teacher.js";
 import studentRoutes from "./routes/student.js";
 import settingsRoutes from "./routes/settings.js";
-import { readStoredUpload, syncUploadDirToStore } from "./services/storedUploads.js";
+import { resolveUpload, syncUploadDirToStore } from "./services/storedUploads.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -45,7 +45,8 @@ app.use(
   })
 );
 app.use(express.json({ limit: "2mb" }));
-app.use("/uploads", async (req, res, next) => {
+
+async function sendStoredMedia(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     next();
     return;
@@ -57,40 +58,35 @@ app.use("/uploads", async (req, res, next) => {
     next();
     return;
   }
+  if (rel.startsWith("uploads/")) rel = rel.slice("uploads/".length);
   if (!rel || rel.includes("..") || rel.includes("\\")) {
     next();
     return;
   }
-  const diskPath = path.resolve(uploadDir, rel);
-  const root = path.resolve(uploadDir);
-  if (diskPath !== root && !diskPath.startsWith(root + path.sep)) {
-    next();
-    return;
-  }
-  if (fs.existsSync(diskPath) && fs.statSync(diskPath).isFile()) {
-    next();
-    return;
-  }
   try {
-    const stored = await readStoredUpload(`/uploads/${rel}`);
+    const stored = await resolveUpload(`/uploads/${rel}`, uploadDir);
     if (!stored) {
-      next();
+      res.status(404).type("text/plain").send("Not found");
       return;
     }
-    const body = Buffer.from(stored.data);
+    const body = Buffer.isBuffer(stored.data) ? stored.data : Buffer.from(stored.data);
     res.setHeader("Content-Type", stored.mimeType);
     res.setHeader("Content-Length", body.length);
     res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     if (req.method === "HEAD") {
       res.end();
       return;
     }
-    res.send(body);
+    res.end(body);
   } catch (err) {
     next(err);
   }
-});
-app.use("/uploads", express.static(uploadDir));
+}
+
+app.use("/uploads", sendStoredMedia);
+app.use("/api/v1/media/uploads", sendStoredMedia);
+app.use("/api/v1/media", sendStoredMedia);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

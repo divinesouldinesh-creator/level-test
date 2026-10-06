@@ -31,6 +31,8 @@
     "db:ensure-branch-group": "tsx scripts/ensure-branch-group.ts",
     "db:ensure-question-pick-index": "tsx scripts/ensure-question-pick-index.ts",
     "db:ensure-stored-uploads": "tsx scripts/ensure-stored-uploads.ts",
+    "db:ensure-principal-actions": "tsx scripts/ensure-principal-actions.ts",
+    "db:ensure-principal-role": "tsx scripts/ensure-principal-role.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

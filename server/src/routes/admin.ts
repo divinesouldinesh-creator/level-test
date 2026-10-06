@@ -52,10 +52,11 @@ import {
 } from "../services/schoolHolidays.js";
 import feesRoutes from "./fees.js";
 import transportRoutes from "./transport.js";
+import principalActionRoutes from "./principalActions.js";
 import { todayLoginCompletionCounts } from "../services/studentEngagement.js";
 
 const router = Router();
-router.use(authMiddleware, requireRole("ADMIN", "OFFICE"));
+router.use(authMiddleware, requireRole("ADMIN", "OFFICE", "PRINCIPAL"));
 
 /** Office may use people/attendance admin APIs only; curriculum stays ADMIN-only. */
 function officeMayAccessAdminRoute(method: string, path: string): boolean {
@@ -80,6 +81,14 @@ function officeMayAccessAdminRoute(method: string, path: string): boolean {
   return false;
 }
 
+/** Principal sees the support list only, plus class names for its filters. */
+function principalMayAccessAdminRoute(method: string, path: string): boolean {
+  const p = path.split("?")[0] || "/";
+  if (p === "/principal-actions" || p.startsWith("/principal-actions/")) return true;
+  if (p === "/classes" || p.startsWith("/classes/")) return method.toUpperCase() === "GET";
+  return false;
+}
+
 router.use((req, res, next) => {
   const pathOnly = req.path.split("?")[0] || "/";
   const isFeeRoute = pathOnly === "/fees" || pathOnly.startsWith("/fees/");
@@ -96,11 +105,16 @@ router.use((req, res, next) => {
     next();
     return;
   }
+  if (req.user?.role === "PRINCIPAL" && principalMayAccessAdminRoute(req.method, req.path)) {
+    next();
+    return;
+  }
   res.status(403).json({ error: "Forbidden" });
 });
 
 router.use(feesRoutes);
 router.use(transportRoutes);
+router.use(principalActionRoutes);
 
 router.use((req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD") {
@@ -695,8 +709,8 @@ router.patch("/attendance/holiday-settings", async (req, res) => {
     res.status(400).json({ error: "Provide sundaysOff and/or saturdayRule" });
     return;
   }
-  const settings = await updateHolidaySettings(prisma, p.data);
-  res.json({ settings });
+  const { settings, clearedSessionCount } = await updateHolidaySettings(prisma, p.data);
+  res.json({ settings, clearedSessionCount });
 });
 
 router.post("/attendance/holidays", async (req, res) => {
@@ -708,9 +722,9 @@ router.post("/attendance/holidays", async (req, res) => {
 });
 
 router.delete("/attendance/holidays/:id", async (req, res) => {
-  const ok = await deleteHolidayException(prisma, req.params.id);
-  if (!ok) return res.status(404).json({ error: "Holiday not found" });
-  res.json({ ok: true });
+  const result = await deleteHolidayException(prisma, req.params.id);
+  if (!result.deleted) return res.status(404).json({ error: "Holiday not found" });
+  res.json({ ok: true, clearedSessionCount: result.clearedSessionCount });
 });
 
 router.post("/classes", async (req, res) => {
@@ -719,6 +733,29 @@ router.post("/classes", async (req, res) => {
   if (!p.success) return res.status(400).json(p.error.flatten());
   const c = await prisma.schoolClass.create({ data: p.data });
   res.json(c);
+});
+
+router.patch("/classes/:classId", async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1),
+    grade: z.string().optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const name = p.data.name.trim();
+  if (!name) return res.status(400).json({ error: "Class name is required" });
+  try {
+    const c = await prisma.schoolClass.update({
+      where: { id: req.params.classId },
+      data: {
+        name,
+        grade: p.data.grade?.trim() || null,
+      },
+    });
+    res.json(c);
+  } catch {
+    res.status(404).json({ error: "Class not found" });
+  }
 });
 
 router.post("/classes/:classId/sections", async (req, res) => {
@@ -1746,6 +1783,11 @@ router.post("/questions", async (req, res) => {
       difficulty: p.data.difficulty ?? "MEDIUM",
     },
   });
+  try {
+    await rememberQuestionImages(uploadDir, [q]);
+  } catch (err) {
+    console.error("question image store failed", err);
+  }
   res.json(q);
 });
 
@@ -1897,6 +1939,11 @@ router.patch("/questions/:id", async (req, res) => {
       contentHash: nextHash,
     },
   });
+  try {
+    await rememberQuestionImages(uploadDir, [q]);
+  } catch (err) {
+    console.error("question image store failed", err);
+  }
   res.json(q);
 });
 
@@ -2533,6 +2580,91 @@ router.delete("/office-users/:officeId", async (req, res) => {
   const office = await prisma.office.findUnique({ where: { id: officeId } });
   if (!office) return res.status(404).json({ error: "Office user not found" });
   await prisma.user.delete({ where: { id: office.userId } });
+  res.json({ ok: true });
+});
+
+router.post("/principal-users", async (req, res) => {
+  const schema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+    fullName: z.string().min(1),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const email = p.data.email.toLowerCase();
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) return res.status(409).json({ error: "Email already in use" });
+  try {
+    const passwordHash = await bcrypt.hash(p.data.password, 10);
+    const user = await prisma.user.create({
+      data: {
+        email,
+        passwordHash,
+        passwordPlain: p.data.password,
+        role: "PRINCIPAL",
+        principal: { create: { fullName: p.data.fullName.trim() } },
+      },
+      include: { principal: true },
+    });
+    res.json({ id: user.principal!.id });
+  } catch (err) {
+    console.error("create principal user failed", err);
+    res.status(500).json({
+      error: "Could not create principal user. Ensure the principal role migration has been applied.",
+    });
+  }
+});
+
+router.get("/principal-users", async (_req, res) => {
+  try {
+    const rows = await prisma.principal.findMany({
+      include: { user: { select: { email: true, passwordPlain: true } } },
+      orderBy: { fullName: "asc" },
+    });
+    res.json({
+      principalUsers: rows.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        fullName: row.fullName,
+        email: row.user.email ?? "",
+        password: row.user.passwordPlain ?? "",
+      })),
+    });
+  } catch (err) {
+    console.error("list principal users failed", err);
+    res.status(500).json({
+      error: "Could not load principal users. Ensure the principal role migration has been applied.",
+    });
+  }
+});
+
+router.patch("/principal-users/:principalId/reset-password", async (req, res) => {
+  const p = resetPasswordSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const principal = await prisma.principal.findUnique({
+    where: { id: req.params.principalId },
+    include: { user: true },
+  });
+  if (!principal) return res.status(404).json({ error: "Principal user not found" });
+  const passwordHash = await bcrypt.hash(p.data.password, 10);
+  await prisma.user.update({
+    where: { id: principal.userId },
+    data: { passwordHash, passwordPlain: p.data.password },
+  });
+  res.json({
+    password: p.data.password,
+    principalUser: {
+      id: principal.id,
+      fullName: principal.fullName,
+      email: principal.user.email,
+    },
+  });
+});
+
+router.delete("/principal-users/:principalId", async (req, res) => {
+  const principal = await prisma.principal.findUnique({ where: { id: req.params.principalId } });
+  if (!principal) return res.status(404).json({ error: "Principal user not found" });
+  await prisma.user.delete({ where: { id: principal.userId } });
   res.json({ ok: true });
 });
 
