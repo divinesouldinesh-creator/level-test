@@ -30,11 +30,17 @@ import {
   toPublicQuestionWithMedia,
 } from "../services/questionAnswer.js";
 import {
+  answerFollowUpDoubt,
   explainMissedQuestion,
   formatOptionAnswer,
+  isTutorConfigured,
+  parseHelpThread,
   takeTutorSlot,
+  TUTOR_MAX_FOLLOW_UPS,
   TutorConfigError,
   TutorUpstreamError,
+  type MissedQuestionBrief,
+  type QuestionHelpThread,
 } from "../services/questionTutor.js";
 
 const submittedAnswerSchema = z.object({
@@ -941,7 +947,7 @@ router.post("/tests/:testId/questions/:questionId/explain", async (req, res) => 
     }
 
     const cacheKey = `question-help:${student.id}:${req.params.testId}:${req.params.questionId}`;
-    const cached = cacheGet<{ idea: string; whyMissed: string; whyCorrect: string }>(cacheKey);
+    const cached = parseHelpThread(cacheGet(cacheKey));
     if (cached) {
       res.json(cached);
       return;
@@ -977,8 +983,8 @@ router.post("/tests/:testId/questions/:questionId/explain", async (req, res) => 
       res.status(400).json({ error: "This question was already correct" });
       return;
     }
-    if (!process.env.OPENAI_API_KEY?.trim()) {
-      res.status(503).json({ error: "AI help is not set up yet. Add OPENAI_API_KEY on the server." });
+    if (!isTutorConfigured()) {
+      res.status(503).json({ error: "AI help is not set up yet. Add GROQ_API_KEY on the server." });
       return;
     }
     if (!takeTutorSlot(student.id)) {
@@ -1016,8 +1022,9 @@ router.post("/tests/:testId/questions/:questionId/explain", async (req, res) => 
       studentAnswer,
       correctAnswer,
     });
-    cacheSet(cacheKey, help, CACHE_TTL_MS.questionHelp);
-    res.json(help);
+    const thread: QuestionHelpThread = { ...help, followUps: [] };
+    cacheSet(cacheKey, thread, CACHE_TTL_MS.questionHelp);
+    res.json(thread);
   } catch (error) {
     if (error instanceof TutorConfigError) {
       res.status(503).json({ error: error.message });
@@ -1028,6 +1035,132 @@ router.post("/tests/:testId/questions/:questionId/explain", async (req, res) => 
       return;
     }
     sendRouteError(res, error, "Could not explain this question");
+  }
+});
+
+const followUpBodySchema = z.object({
+  question: z.string().trim().min(1).max(400),
+});
+
+router.post("/tests/:testId/questions/:questionId/explain/follow-up", async (req, res) => {
+  try {
+    const parsed = followUpBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Type a short question about this item." });
+      return;
+    }
+
+    const student = await prisma.student.findUnique({
+      where: { userId: req.user!.sub },
+      include: { schoolClass: { select: { name: true, grade: true } } },
+    });
+    if (!student) {
+      res.status(400).json({ error: "Not a student" });
+      return;
+    }
+
+    const cacheKey = `question-help:${student.id}:${req.params.testId}:${req.params.questionId}`;
+    const thread = parseHelpThread(cacheGet(cacheKey));
+    if (!thread) {
+      res.status(400).json({ error: "Open Help me understand first." });
+      return;
+    }
+    if (thread.followUps.length >= TUTOR_MAX_FOLLOW_UPS) {
+      res.status(429).json({ error: "You have used the follow-up questions for this item." });
+      return;
+    }
+    if (!isTutorConfigured()) {
+      res.status(503).json({ error: "AI help is not set up yet. Add GROQ_API_KEY on the server." });
+      return;
+    }
+    if (!takeTutorSlot(student.id)) {
+      res.status(429).json({ error: "You have asked for a lot of help. Try again in a little while." });
+      return;
+    }
+
+    const test = await prisma.test.findFirst({
+      where: { id: req.params.testId, studentId: student.id, status: "COMPLETED" },
+      include: {
+        subject: { select: { name: true } },
+        level: { select: { name: true, order: true } },
+        attempts: {
+          include: {
+            studentAnswers: { where: { questionId: req.params.questionId } },
+          },
+        },
+        testQuestions: {
+          where: { questionId: req.params.questionId },
+          include: { question: { include: { topic: { select: { name: true } } } } },
+        },
+      },
+    });
+    if (!test) {
+      res.status(404).json({ error: "Test not found" });
+      return;
+    }
+    const row = test.testQuestions[0];
+    const answer = test.attempts[0]?.studentAnswers[0];
+    if (!row || !answer) {
+      res.status(404).json({ error: "Question is not on this test" });
+      return;
+    }
+    if (answer.isCorrect) {
+      res.status(400).json({ error: "This question was already correct" });
+      return;
+    }
+
+    const q = row.question;
+    const options = [q.optionA, q.optionB, q.optionC, q.optionD];
+    const studentAnswer =
+      q.type === "NUMERIC"
+        ? answer.numericAnswer == null
+          ? "Left blank"
+          : String(answer.numericAnswer)
+        : formatOptionAnswer(options, answer.selectedOption);
+    const correctAnswer =
+      q.type === "NUMERIC"
+        ? q.correctNumeric == null
+          ? ""
+          : String(q.correctNumeric)
+        : formatOptionAnswer(options, q.correctOption);
+
+    const brief: MissedQuestionBrief = {
+      grade: student.schoolClass.grade,
+      className: student.schoolClass.name,
+      subjectName: test.subject.name,
+      levelName: test.level?.name ?? null,
+      levelOrder: test.level?.order ?? null,
+      topicName: q.topic.name,
+      difficulty: q.difficulty,
+      type: q.type,
+      stem: q.stem,
+      hasDiagram: Boolean(q.stemImageUrl),
+      options: q.type === "NUMERIC" ? [] : [q.optionA, q.optionB, q.optionC, q.optionD],
+      studentAnswer,
+      correctAnswer,
+    };
+
+    const reply = await answerFollowUpDoubt(brief, thread, thread.followUps, parsed.data.question);
+    const next: QuestionHelpThread = {
+      ...thread,
+      followUps: [...thread.followUps, { question: parsed.data.question, reply }],
+    };
+    cacheSet(cacheKey, next, CACHE_TTL_MS.questionHelp);
+    res.json({
+      reply,
+      followUps: next.followUps,
+      remaining: TUTOR_MAX_FOLLOW_UPS - next.followUps.length,
+    });
+  } catch (error) {
+    if (error instanceof TutorConfigError) {
+      res.status(503).json({ error: error.message });
+      return;
+    }
+    if (error instanceof TutorUpstreamError) {
+      res.status(502).json({ error: error.message });
+      return;
+    }
+    sendRouteError(res, error, "Could not answer this follow-up");
   }
 });
 

@@ -73,11 +73,16 @@ type ReviewPayload = {
 
 type PracticeState = { picks: number[]; solved: boolean };
 
+type TutorFollowUp = { question: string; reply: string };
+
 type QuestionHelp = {
   idea: string;
   whyMissed: string;
   whyCorrect: string;
+  followUps?: TutorFollowUp[];
 };
+
+const MAX_FOLLOW_UPS = 4;
 
 type TestResult = {
   score: number;
@@ -173,6 +178,9 @@ export function StudentTest() {
   const [helpById, setHelpById] = useState<Record<string, QuestionHelp>>({});
   const [helpBusyId, setHelpBusyId] = useState<string | null>(null);
   const [helpErrById, setHelpErrById] = useState<Record<string, string>>({});
+  const [followDraftById, setFollowDraftById] = useState<Record<string, string>>({});
+  const [followBusyId, setFollowBusyId] = useState<string | null>(null);
+  const [followErrById, setFollowErrById] = useState<Record<string, string>>({});
   const [startingLevel, setStartingLevel] = useState<string | null>(null);
   const [subjectId, setSubjectId] = useState<string | null>(null);
   const [wrongPenalty, setWrongPenalty] = useState(0);
@@ -346,7 +354,42 @@ export function StudentTest() {
       setHelpErrById((prev) => ({ ...prev, [questionId]: r.error ?? "Could not load help" }));
       return;
     }
-    setHelpById((prev) => ({ ...prev, [questionId]: r.data! }));
+    setHelpById((prev) => ({
+      ...prev,
+      [questionId]: { ...r.data!, followUps: r.data!.followUps ?? [] },
+    }));
+  }
+
+  async function askFollowUp(questionId: string) {
+    if (!testId || followBusyId || helpBusyId) return;
+    const question = (followDraftById[questionId] ?? "").trim();
+    if (!question) {
+      setFollowErrById((prev) => ({ ...prev, [questionId]: "Type a short question first." }));
+      return;
+    }
+    const used = helpById[questionId]?.followUps?.length ?? 0;
+    if (used >= MAX_FOLLOW_UPS) return;
+    setFollowBusyId(questionId);
+    setFollowErrById((prev) => {
+      const next = { ...prev };
+      delete next[questionId];
+      return next;
+    });
+    const r = await api<{ reply: string; followUps: TutorFollowUp[] }>(
+      `/api/v1/student/tests/${testId}/questions/${questionId}/explain/follow-up`,
+      { method: "POST", json: { question } }
+    );
+    setFollowBusyId(null);
+    if (!r.ok || !r.data) {
+      setFollowErrById((prev) => ({ ...prev, [questionId]: r.error ?? "Could not answer that" }));
+      return;
+    }
+    setHelpById((prev) => {
+      const cur = prev[questionId];
+      if (!cur) return prev;
+      return { ...prev, [questionId]: { ...cur, followUps: r.data!.followUps } };
+    });
+    setFollowDraftById((prev) => ({ ...prev, [questionId]: "" }));
   }
 
   function practicePick(item: ReviewItem, optIdx: number) {
@@ -753,6 +796,54 @@ export function StudentTest() {
                                     <span className="font-semibold text-indigo-900">Why the right answer works. </span>
                                     {helpById[q.id].whyCorrect}
                                   </p>
+                                  {(helpById[q.id].followUps ?? []).map((turn, i) => (
+                                    <div key={`${q.id}-fu-${i}`} className="rounded-md border border-indigo-100 bg-white/70 p-2 space-y-1">
+                                      <p>
+                                        <span className="font-semibold text-indigo-900">You asked. </span>
+                                        {turn.question}
+                                      </p>
+                                      <p>
+                                        <span className="font-semibold text-indigo-900">Answer. </span>
+                                        {turn.reply}
+                                      </p>
+                                    </div>
+                                  ))}
+                                  {(helpById[q.id].followUps?.length ?? 0) < MAX_FOLLOW_UPS ? (
+                                    <form
+                                      className="pt-1 space-y-2"
+                                      onSubmit={(e) => {
+                                        e.preventDefault();
+                                        void askFollowUp(q.id);
+                                      }}
+                                    >
+                                      <label className="block text-xs font-medium text-indigo-900" htmlFor={`follow-${q.id}`}>
+                                        Still stuck? Ask about this question.
+                                      </label>
+                                      <textarea
+                                        id={`follow-${q.id}`}
+                                        value={followDraftById[q.id] ?? ""}
+                                        onChange={(e) =>
+                                          setFollowDraftById((prev) => ({ ...prev, [q.id]: e.target.value.slice(0, 400) }))
+                                        }
+                                        rows={2}
+                                        maxLength={400}
+                                        placeholder="Ask a short question about this item"
+                                        className="w-full rounded-lg border border-indigo-200 bg-white px-2 py-1.5 text-sm"
+                                      />
+                                      {followErrById[q.id] ? (
+                                        <p className="text-xs text-rose-700">{followErrById[q.id]}</p>
+                                      ) : null}
+                                      <button
+                                        type="submit"
+                                        disabled={followBusyId === q.id || helpBusyId === q.id}
+                                        className="rounded-lg border border-indigo-300 bg-white text-indigo-700 px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                                      >
+                                        {followBusyId === q.id ? "Thinking…" : "Ask"}
+                                      </button>
+                                    </form>
+                                  ) : (
+                                    <p className="text-xs text-indigo-800">You have used the follow-up questions for this item.</p>
+                                  )}
                                 </div>
                               ) : (
                                 <>
