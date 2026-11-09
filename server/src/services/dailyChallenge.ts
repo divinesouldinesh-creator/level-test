@@ -142,7 +142,7 @@ async function chooseSubjectAndLevel(
   topicCands: TopicCand[];
 } | null> {
   const classSubjects = await prisma.classSubject.findMany({
-    where: { classId },
+    where: { classId, studentVisible: true },
     include: { subject: true },
     orderBy: { subject: { name: "asc" } },
   });

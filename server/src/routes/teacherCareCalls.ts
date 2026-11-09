@@ -2,29 +2,18 @@ import { Router } from "express";
 import { CareCallYesNo } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { istDayKey } from "../services/engagementCalendar.js";
+import {
+  answerMapForCall,
+  callHasAnswer,
+  careCallAnswerInclude,
+  createCareCall,
+  monthKey,
+  questionsForMonth,
+} from "../services/careCallPlan.js";
 
 const router = Router();
 
 const yesNoZ = z.enum(["YES", "NO"]);
-
-function serializeCall(c: {
-  id: string;
-  calledAt: Date;
-  englishMirrorPractice: CareCallYesNo | null;
-  heavyPhoneTv: CareCallYesNo | null;
-}) {
-  return {
-    id: c.id,
-    calledAt: c.calledAt.toISOString(),
-    englishMirrorPractice: c.englishMirrorPractice,
-    heavyPhoneTv: c.heavyPhoneTv,
-  };
-}
-
-function monthKey(date: Date): string {
-  return istDayKey(date).slice(0, 7);
-}
 
 router.get("/care-calls", async (req, res) => {
   const classId = typeof req.query.classId === "string" ? req.query.classId : "";
@@ -45,14 +34,32 @@ router.get("/care-calls", async (req, res) => {
     select: { id: true, fullName: true, user: { select: { studentLoginId: true } } },
     orderBy: { fullName: "asc" },
   });
+  const month = monthKey();
+  const questions = await questionsForMonth(month);
+  const calls =
+    students.length === 0
+      ? []
+      : await prisma.careCall.findMany({
+          where: { studentId: { in: students.map((s) => s.id) } },
+          orderBy: { calledAt: "desc" },
+          include: careCallAnswerInclude,
+        });
+  const latest = new Map<string, (typeof calls)[number]>();
+  for (const call of calls) {
+    if (monthKey(call.calledAt) !== month) continue;
+    if (latest.has(call.studentId)) continue;
+    if (!callHasAnswer(answerMapForCall(questions, call))) continue;
+    latest.set(call.studentId, call);
+  }
 
   res.json({
-    students: students.map((s) => ({
-      id: s.id,
-      fullName: s.fullName,
-      studentLoginId: s.user.studentLoginId,
-      englishMirrorPractice: null as CareCallYesNo | null,
-      heavyPhoneTv: null as CareCallYesNo | null,
+    month,
+    questions,
+    students: students.map((student) => ({
+      id: student.id,
+      fullName: student.fullName,
+      studentLoginId: student.user.studentLoginId,
+      answers: answerMapForCall(questions, latest.get(student.id) ?? null),
     })),
   });
 });
@@ -85,7 +92,7 @@ router.get("/care-calls/months", async (req, res) => {
     select: { calledAt: true },
     orderBy: { calledAt: "desc" },
   });
-  const months = [...new Set(calls.map((c) => monthKey(c.calledAt)))];
+  const months = [...new Set(calls.map((call) => monthKey(call.calledAt)))];
   res.json({ months });
 });
 
@@ -113,32 +120,36 @@ router.get("/care-calls/records", async (req, res) => {
     select: { id: true, fullName: true, user: { select: { studentLoginId: true } } },
     orderBy: { fullName: "asc" },
   });
+  const questions = await questionsForMonth(month);
   if (students.length === 0) {
-    res.json({ month, students: [] });
+    res.json({ month, questions, students: [] });
     return;
   }
 
   const calls = await prisma.careCall.findMany({
     where: { studentId: { in: students.map((s) => s.id) } },
     orderBy: { calledAt: "desc" },
+    include: careCallAnswerInclude,
   });
-  const latestInMonth = new Map<string, (typeof calls)[number]>();
-  for (const c of calls) {
-    if (monthKey(c.calledAt) !== month) continue;
-    if (!latestInMonth.has(c.studentId)) latestInMonth.set(c.studentId, c);
+  const latest = new Map<string, (typeof calls)[number]>();
+  for (const call of calls) {
+    if (monthKey(call.calledAt) !== month) continue;
+    if (latest.has(call.studentId)) continue;
+    if (!callHasAnswer(answerMapForCall(questions, call))) continue;
+    latest.set(call.studentId, call);
   }
 
   res.json({
     month,
-    students: students.map((s) => {
-      const call = latestInMonth.get(s.id) ?? null;
+    questions,
+    students: students.map((student) => {
+      const call = latest.get(student.id) ?? null;
       return {
-        id: s.id,
-        fullName: s.fullName,
-        studentLoginId: s.user.studentLoginId,
+        id: student.id,
+        fullName: student.fullName,
+        studentLoginId: student.user.studentLoginId,
         recorded: Boolean(call),
-        englishMirrorPractice: call?.englishMirrorPractice ?? null,
-        heavyPhoneTv: call?.heavyPhoneTv ?? null,
+        answers: answerMapForCall(questions, call),
         calledAt: call ? call.calledAt.toISOString() : null,
       };
     }),
@@ -152,8 +163,7 @@ const saveSchema = z.object({
     .array(
       z.object({
         studentId: z.string().min(1),
-        englishMirrorPractice: yesNoZ.nullable(),
-        heavyPhoneTv: yesNoZ.nullable(),
+        answers: z.array(z.object({ questionId: z.string().min(1), value: yesNoZ })),
       })
     )
     .min(1),
@@ -178,26 +188,34 @@ router.put("/care-calls", async (req, res) => {
     where: { classId: p.data.classId, sectionId: p.data.sectionId },
     select: { id: true },
   });
-  const allowed = new Set(students.map((s) => s.id));
-  for (const e of p.data.entries) {
-    if (!allowed.has(e.studentId)) {
+  const allowed = new Set(students.map((student) => student.id));
+  for (const entry of p.data.entries) {
+    if (!allowed.has(entry.studentId)) {
       res.status(400).json({ error: "All students must belong to this class and section" });
       return;
     }
   }
 
-  const now = new Date();
-  await prisma.careCall.createMany({
-    data: p.data.entries.map((e) => ({
-      studentId: e.studentId,
-      calledAt: now,
-      englishMirrorPractice: e.englishMirrorPractice,
-      heavyPhoneTv: e.heavyPhoneTv,
-      recordedById: req.user?.sub ?? null,
-    })),
-  });
+  const questions = await questionsForMonth(monthKey());
+  const filled = p.data.entries.filter((entry) => entry.answers.length > 0);
+  if (filled.length === 0) {
+    res.status(400).json({ error: "Mark at least one student" });
+    return;
+  }
 
-  res.json({ saved: p.data.entries.length });
+  for (const entry of filled) {
+    await createCareCall({
+      studentId: entry.studentId,
+      recordedById: req.user?.sub ?? null,
+      questions,
+      answers: entry.answers.map((answer) => ({
+        questionId: answer.questionId,
+        value: answer.value as CareCallYesNo,
+      })),
+    });
+  }
+
+  res.json({ saved: filled.length });
 });
 
 export default router;

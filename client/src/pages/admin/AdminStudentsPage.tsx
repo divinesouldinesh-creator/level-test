@@ -18,6 +18,13 @@ type SchoolClassMeta = {
 type Toast = { type: "ok" | "err"; message: string };
 type ResetDialog = { studentId: string; studentName: string; password: string };
 type RenameDialog = { studentId: string; fullName: string };
+type MoveSectionDialog = {
+  studentId: string;
+  studentName: string;
+  classId: string;
+  sectionId: string;
+  nextSectionId: string;
+};
 
 export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list" } = {}) {
   const [tab, setTab] = useState<AdminStudentTabId>(mode === "list" ? "list" : "generate");
@@ -41,6 +48,7 @@ export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [resetDialog, setResetDialog] = useState<ResetDialog | null>(null);
   const [renameDialog, setRenameDialog] = useState<RenameDialog | null>(null);
+  const [moveDialog, setMoveDialog] = useState<MoveSectionDialog | null>(null);
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [confirm, setConfirm] = useState<{
@@ -277,6 +285,38 @@ export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list
     await loadStudents();
   }
 
+  function moveSection(studentId: string) {
+    const student = allStudents.find((s) => s.id === studentId);
+    if (!student) return;
+    const sections = classMeta.find((c) => c.id === student.classId)?.sections ?? [];
+    const next = sections.find((section) => section.id !== student.sectionId);
+    setMoveDialog({
+      studentId,
+      studentName: student.fullName,
+      classId: student.classId,
+      sectionId: student.sectionId,
+      nextSectionId: next?.id ?? "",
+    });
+  }
+
+  async function submitMoveSection() {
+    if (!moveDialog || !moveDialog.nextSectionId) return;
+    const studentId = moveDialog.studentId;
+    setBusyId(studentId);
+    const r = await api<{ sectionName: string }>(`/api/v1/admin/students/${studentId}/section`, {
+      method: "PATCH",
+      json: { sectionId: moveDialog.nextSectionId },
+    });
+    setBusyId(null);
+    if (!r.ok) {
+      showToast({ type: "err", message: r.error ?? "Could not move the student" });
+      return;
+    }
+    showToast({ type: "ok", message: `${moveDialog.studentName} is now in section ${r.data?.sectionName ?? ""}.` });
+    setMoveDialog(null);
+    await loadStudents();
+  }
+
   async function deleteStudent(studentId: string) {
     if (!window.confirm("Delete this student account permanently?")) return;
     setBusyId(studentId);
@@ -357,7 +397,7 @@ export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list
         </h1>
         <p className="text-slate-600 mt-1 text-sm md:text-base">
           {mode === "list"
-            ? "Search the list, print cards, and update names or passwords."
+            ? "Search the list, print cards, update names or passwords, and move a student to another section."
             : "Generate or import accounts, edit names in the preview if needed, then save. Print and CSV use the latest names."}
         </p>
       </div>
@@ -427,6 +467,7 @@ export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list
           onDeleteSelected={deleteSelectedStudents}
           onResetPassword={(id) => void resetPassword(id)}
           onRename={(id) => renameStudent(id)}
+          onMoveSection={(id) => moveSection(id)}
           onDelete={(id) => void deleteStudent(id)}
           onPrintClass={() => void printFilteredClass()}
           page={page}
@@ -467,6 +508,60 @@ export function AdminStudentsPage({ mode = "manage" }: { mode?: "manage" | "list
                 onClick={() => confirm.onConfirm()}
               >
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {moveDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-900">Move section</h3>
+            <p className="mt-2 text-sm text-slate-700">
+              Move {moveDialog.studentName} to another section in the same class. Saved tests, marks, and
+              attendance stay as they are.
+            </p>
+            {(() => {
+              const sections = classMeta.find((c) => c.id === moveDialog.classId)?.sections ?? [];
+              const choices = sections.filter((section) => section.id !== moveDialog.sectionId);
+              if (choices.length === 0) {
+                return <p className="mt-4 text-sm text-slate-600">This class has only one section.</p>;
+              }
+              return (
+                <label className="mt-4 block text-sm font-medium text-slate-700">
+                  New section
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 min-h-[44px]"
+                    value={moveDialog.nextSectionId}
+                    onChange={(e) =>
+                      setMoveDialog((prev) => (prev ? { ...prev, nextSectionId: e.target.value } : prev))
+                    }
+                  >
+                    {choices.map((section) => (
+                      <option key={section.id} value={section.id}>
+                        {section.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })()}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium min-h-[44px]"
+                onClick={() => setMoveDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busyId === moveDialog.studentId || !moveDialog.nextSectionId}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white min-h-[44px] disabled:opacity-50"
+                onClick={() => void submitMoveSection()}
+              >
+                Move
               </button>
             </div>
           </div>

@@ -326,13 +326,17 @@ model ChapterTopic {
   @@index([subjectChapterId])
 }
 
-/// Join: which subjects a class studies (students see these subjects)
+/// Join: which subjects a class studies. Students see studentVisible rows.
+/// classTestVisible controls the teacher class-test dropdown for skill subjects.
+/// A teacher-added subject is studentVisible false and classTestVisible true.
 model ClassSubject {
-  id          String      @id @default(cuid())
-  classId     String      @map("class_id")
-  subjectId   String      @map("subject_id")
-  schoolClass SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
-  subject     Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  id               String      @id @default(cuid())
+  classId          String      @map("class_id")
+  subjectId        String      @map("subject_id")
+  studentVisible   Boolean     @default(true) @map("student_visible")
+  classTestVisible Boolean     @default(true) @map("class_test_visible")
+  schoolClass      SchoolClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subject          Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
   @@unique([classId, subjectId])
   @@index([classId])
@@ -787,9 +791,44 @@ model CareCall {
 
   student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
   recordedBy User?   @relation("CareCallRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+  answers    CareCallAnswer[]
 
   @@index([studentId, calledAt])
   @@index([recordedById])
+}
+
+/// A Yes/No question on the monthly care call. code marks the two original questions.
+model CareCallQuestion {
+  id         String                  @id @default(cuid())
+  code       String?                 @unique
+  label      String                  @unique
+  createdAt  DateTime                @default(now()) @map("created_at")
+  monthLinks CareCallMonthQuestion[]
+  answers    CareCallAnswer[]
+}
+
+/// Questions used for one calendar month. A month with no rows inherits the previous plan.
+model CareCallMonthQuestion {
+  id         String           @id @default(cuid())
+  month      String
+  questionId String           @map("question_id")
+  sortOrder  Int              @default(0) @map("sort_order")
+  question   CareCallQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([month, questionId])
+  @@index([month])
+}
+
+model CareCallAnswer {
+  id         String           @id @default(cuid())
+  careCallId String           @map("care_call_id")
+  questionId String           @map("question_id")
+  value      CareCallYesNo
+  careCall   CareCall         @relation(fields: [careCallId], references: [id], onDelete: Cascade)
+  question   CareCallQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([careCallId, questionId])
+  @@index([questionId])
 }
 
 enum SupportArea {

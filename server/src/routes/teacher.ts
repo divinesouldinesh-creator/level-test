@@ -14,7 +14,7 @@ import {
 } from "../services/studentAccounts.js";
 import { updateStudentNameSchema } from "../schemas/student.js";
 import { addIstDays, istDayKey, istDayUtcRange, istInclusiveDayRangeUtc, previousIstDayKey } from "../services/engagementCalendar.js";
-import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet } from "../lib/memoryCache.js";
+import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateCatalog } from "../lib/memoryCache.js";
 import classroomAssessmentRoutes, { classroomHistoryForStudent } from "./teacherClassroom.js";
 import careCallRoutes from "./teacherCareCalls.js";
 import { subjectIdsHidingTeacherMarks, topicIdsWithHiddenTeacherMarks } from "../services/teacherMarksVisibility.js";
@@ -412,7 +412,7 @@ router.get("/subjects", async (req, res) => {
   const classId = typeof req.query.classId === "string" ? req.query.classId.trim() : "";
   if (classId) {
     const links = await prisma.classSubject.findMany({
-      where: { classId },
+      where: { classId, classTestVisible: true },
       include: {
         subject: {
           select: {
@@ -425,14 +425,17 @@ router.get("/subjects", async (req, res) => {
       },
     });
     const subjects = links
-      .map((l) => l.subject)
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .map((l) => ({ ...l.subject, classTestOnly: !l.studentVisible }))
+      .sort((a, b) => Number(a.classTestOnly) - Number(b.classTestOnly) || a.name.localeCompare(b.name));
     res.json(subjects);
     return;
   }
 
   const subjects = await cacheGetOrSet(CACHE_KEY.teacherSubjects, CACHE_TTL_MS.catalog, () =>
     prisma.subject.findMany({
+      where: {
+        OR: [{ classSubjects: { none: {} } }, { classSubjects: { some: { studentVisible: true } } }],
+      },
       orderBy: { name: "asc" },
       select: {
         id: true,
@@ -443,6 +446,72 @@ router.get("/subjects", async (req, res) => {
     })
   );
   res.json(subjects);
+});
+
+router.post("/classroom-subjects", async (req, res) => {
+  const schema = z.object({
+    classId: z.string().min(1),
+    name: z.string().trim().min(1).max(80),
+    mode: z.enum(["MARKS", "ORAL"]).default("MARKS"),
+    levels: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+  });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: "Enter a subject name" });
+
+  const schoolClass = await prisma.schoolClass.findUnique({ where: { id: p.data.classId }, select: { id: true } });
+  if (!schoolClass) return res.status(404).json({ error: "Class not found" });
+
+  const name = p.data.name.trim();
+  const levelNames: string[] = [];
+  if (p.data.mode === "ORAL") {
+    const seen = new Set<string>();
+    for (const level of p.data.levels ?? []) {
+      const levelName = level.trim();
+      const key = levelName.toLowerCase();
+      if (!levelName || seen.has(key)) continue;
+      seen.add(key);
+      levelNames.push(levelName);
+    }
+  }
+  if (p.data.mode === "ORAL" && levelNames.length === 0) {
+    return res.status(400).json({ error: "Enter at least one level name" });
+  }
+
+  const duplicate = await prisma.classSubject.findFirst({
+    where: {
+      classId: p.data.classId,
+      classTestVisible: true,
+      subject: { name: { equals: name, mode: "insensitive" } },
+    },
+    select: { id: true },
+  });
+  if (duplicate) return res.status(400).json({ error: "That subject is already on the class test list" });
+
+  const subject = await prisma.subject.create({
+    data: {
+      name,
+      code: p.data.mode === "ORAL" ? "ORAL" : null,
+      levels:
+        p.data.mode === "ORAL"
+          ? { create: levelNames.map((levelName, order) => ({ name: levelName, order })) }
+          : undefined,
+      classSubjects: {
+        create: {
+          classId: p.data.classId,
+          studentVisible: false,
+          classTestVisible: true,
+        },
+      },
+    },
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      levels: { orderBy: { order: "asc" }, select: { id: true, name: true, order: true } },
+    },
+  });
+  invalidateCatalog();
+  res.json({ ...subject, classTestOnly: true });
 });
 
 router.get("/analytics/weak-topics", async (req, res) => {

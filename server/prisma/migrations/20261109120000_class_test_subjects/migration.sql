@@ -1,0 +1,2 @@
+ALTER TABLE "ClassSubject" ADD COLUMN IF NOT EXISTS "student_visible" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "ClassSubject" ADD COLUMN IF NOT EXISTS "class_test_visible" BOOLEAN NOT NULL DEFAULT true;

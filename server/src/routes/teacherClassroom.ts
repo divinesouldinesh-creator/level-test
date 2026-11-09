@@ -17,7 +17,20 @@ export function dateOnly(value: string): Date | null {
 
 export function scopeKeyFor(kind: ClassroomAssessmentKind, testedLevelId?: string | null): string {
   if (kind === "ORAL") return ORAL_SCOPE_KEY;
-  return testedLevelId ?? "";
+  const id = testedLevelId?.trim();
+  return id ? id : "marks";
+}
+
+/** Skill subjects require the level that was tested. A teacher-added subject has no levels. */
+export function marksLevelProblem(levels: { id: string }[], testedLevelId: string): string | null {
+  if (levels.length === 0) {
+    return testedLevelId ? "This subject has no levels" : null;
+  }
+  if (!testedLevelId) return "testedLevelId is required for marks tests";
+  if (!levels.some((level) => level.id === testedLevelId)) {
+    return "testedLevelId must belong to this subject";
+  }
+  return null;
 }
 
 export function ymd(date: Date): string {
@@ -158,7 +171,7 @@ export async function classroomHistoryForStudent(
 
 function kindForSubject(subject: { name: string; code: string | null }): ClassroomAssessmentKind {
   const code = (subject.code ?? "").toUpperCase();
-  if (code === "SPEAK" || subject.name.trim().toLowerCase() === "speaking") return "ORAL";
+  if (code === "ORAL" || code === "SPEAK" || subject.name.trim().toLowerCase() === "speaking") return "ORAL";
   return "MARKS";
 }
 
@@ -220,11 +233,6 @@ router.get("/classroom-assessments", async (req, res) => {
     res.status(400).json({ error: "date must be YYYY-MM-DD" });
     return;
   }
-  if (kind === "MARKS" && !testedLevelId) {
-    res.status(400).json({ error: "testedLevelId is required for marks tests" });
-    return;
-  }
-
   const [section, subject] = await Promise.all([
     prisma.section.findFirst({ where: { id: sectionId, classId } }),
     prisma.subject.findUnique({
@@ -240,9 +248,16 @@ router.get("/classroom-assessments", async (req, res) => {
     res.status(404).json({ error: "Subject not found" });
     return;
   }
-  if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) {
-    res.status(400).json({ error: "testedLevelId must belong to this subject" });
+  if (kind !== kindForSubject(subject)) {
+    res.status(400).json({ error: "This subject uses a different class-test type" });
     return;
+  }
+  if (kind === "MARKS") {
+    const levelProblem = marksLevelProblem(subject.levels, testedLevelId);
+    if (levelProblem) {
+      res.status(400).json({ error: levelProblem });
+      return;
+    }
   }
 
   const scopeKey = scopeKeyFor(kind, testedLevelId || null);
@@ -595,13 +610,12 @@ router.get("/classroom-assessments/dates", async (req, res) => {
 
   const kind = kindForSubject(subject);
   const testedLevelId = typeof req.query.testedLevelId === "string" ? req.query.testedLevelId : "";
-  if (kind === "MARKS" && !testedLevelId) {
-    res.status(400).json({ error: "testedLevelId is required for marks tests" });
-    return;
-  }
-  if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) {
-    res.status(400).json({ error: "testedLevelId must belong to this subject" });
-    return;
+  if (kind === "MARKS") {
+    const levelProblem = marksLevelProblem(subject.levels, testedLevelId);
+    if (levelProblem) {
+      res.status(400).json({ error: levelProblem });
+      return;
+    }
   }
 
   const sessions = await prisma.classroomAssessmentSession.findMany({
@@ -610,7 +624,9 @@ router.get("/classroom-assessments/dates", async (req, res) => {
       sectionId,
       subjectId,
       kind,
-      ...(kind === "MARKS" ? { testedLevelId } : {}),
+      ...(kind === "MARKS"
+        ? { testedLevelId: subject.levels.length > 0 ? testedLevelId : null }
+        : {}),
     },
     select: { date: true },
     orderBy: { date: "desc" },
@@ -652,13 +668,12 @@ router.get("/classroom-assessments/records", async (req, res) => {
   }
 
   const kind = kindForSubject(subject);
-  if (kind === "MARKS" && !testedLevelId) {
-    res.status(400).json({ error: "testedLevelId is required for marks tests" });
-    return;
-  }
-  if (kind === "MARKS" && !subject.levels.some((l) => l.id === testedLevelId)) {
-    res.status(400).json({ error: "testedLevelId must belong to this subject" });
-    return;
+  if (kind === "MARKS") {
+    const levelProblem = marksLevelProblem(subject.levels, testedLevelId);
+    if (levelProblem) {
+      res.status(400).json({ error: levelProblem });
+      return;
+    }
   }
 
   const students = await prisma.student.findMany({
@@ -819,9 +834,6 @@ router.put("/classroom-assessments", async (req, res) => {
   const { classId, sectionId, subjectId, kind } = p.data;
   const testedLevelId = p.data.testedLevelId?.trim() || null;
 
-  if (kind === "MARKS" && !testedLevelId) {
-    return res.status(400).json({ error: "testedLevelId is required for marks tests" });
-  }
   if (kind === "ORAL" && testedLevelId) {
     return res.status(400).json({ error: "Oral assessments do not use a class-wide tested level" });
   }
@@ -835,11 +847,15 @@ router.put("/classroom-assessments", async (req, res) => {
   ]);
   if (!section) return res.status(400).json({ error: "Invalid class and section" });
   if (!subject) return res.status(404).json({ error: "Subject not found" });
-
-  const levelIds = new Set(subject.levels.map((l) => l.id));
-  if (kind === "MARKS" && testedLevelId && !levelIds.has(testedLevelId)) {
-    return res.status(400).json({ error: "testedLevelId must belong to this subject" });
+  if (kind !== kindForSubject(subject)) {
+    return res.status(400).json({ error: "This subject uses a different class-test type" });
   }
+
+  if (kind === "MARKS") {
+    const levelProblem = marksLevelProblem(subject.levels, testedLevelId ?? "");
+    if (levelProblem) return res.status(400).json({ error: levelProblem });
+  }
+  const levelIds = new Set(subject.levels.map((l) => l.id));
 
   const students = await prisma.student.findMany({
     where: { classId, sectionId },

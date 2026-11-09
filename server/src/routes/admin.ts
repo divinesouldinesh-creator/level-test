@@ -13,7 +13,7 @@ import {
   attendanceReportQuerySchemaWithStudent,
   attendanceSummaryQuerySchema,
 } from "../schemas/attendanceReportQuery.js";
-import { updateStudentNameSchema } from "../schemas/student.js";
+import { moveStudentSectionSchema, updateStudentNameSchema } from "../schemas/student.js";
 import { questionContentHash } from "../utils/questionHash.js";
 import {
   extractTextFromDocx,
@@ -40,6 +40,17 @@ import {
 } from "../services/schoolBranding.js";
 import { sendBrandingError } from "../utils/brandingErrors.js";
 import { CACHE_KEY, CACHE_TTL_MS, cacheGetOrSet, invalidateCatalog } from "../lib/memoryCache.js";
+import { istDayUtcRange, istInclusiveDayRangeUtc } from "../services/engagementCalendar.js";
+import {
+  addQuestionToMonth,
+  careCallSubmissions,
+  describeMonth,
+  isMonthKey,
+  monthHasCalls,
+  monthKey,
+  nextMonthKey,
+  removeQuestionFromMonth,
+} from "../services/careCallPlan.js";
 import {
   deleteHolidayException,
   getHolidaySettings,
@@ -420,6 +431,128 @@ router.get("/coverage/summary", async (_req, res) => {
       })),
     })),
   });
+});
+
+router.get("/care-call-submissions", async (req, res) => {
+  const month = typeof req.query.month === "string" && isMonthKey(req.query.month) ? req.query.month : monthKey();
+  try {
+    res.json(await careCallSubmissions(month));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not load care calls" });
+  }
+});
+
+router.get("/care-call-questions", async (_req, res) => {
+  const current = monthKey();
+  const [thisMonth, following] = await Promise.all([describeMonth(current), describeMonth(nextMonthKey(current))]);
+  res.json({ current: thisMonth, next: following });
+});
+
+router.post("/care-call-questions", async (req, res) => {
+  const schema = z.object({ month: z.string(), label: z.string() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success || !isMonthKey(parsed.data.month)) {
+    res.status(400).json({ error: "Enter a question name" });
+    return;
+  }
+  const current = monthKey();
+  const next = nextMonthKey(current);
+  if (parsed.data.month !== current && parsed.data.month !== next) {
+    res.status(400).json({ error: "Questions can be changed for this month or next month" });
+    return;
+  }
+  try {
+    const questions = await addQuestionToMonth(parsed.data.month, parsed.data.label);
+    res.json({ month: parsed.data.month, locked: await monthHasCalls(parsed.data.month), questions });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not add the question" });
+  }
+});
+
+router.delete("/care-call-questions/:questionId", async (req, res) => {
+  const month = typeof req.query.month === "string" ? req.query.month : "";
+  if (!isMonthKey(month)) {
+    res.status(400).json({ error: "month must be YYYY-MM" });
+    return;
+  }
+  const current = monthKey();
+  const next = nextMonthKey(current);
+  if (month !== current && month !== next) {
+    res.status(400).json({ error: "Questions can be changed for this month or next month" });
+    return;
+  }
+  try {
+    const questions = await removeQuestionFromMonth(month, req.params.questionId);
+    res.json({ month, locked: false, questions });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not remove the question" });
+  }
+});
+
+router.get("/class-test-uploads", async (req, res) => {
+  const fromQuery = typeof req.query.from === "string" ? req.query.from : "";
+  const toQuery = typeof req.query.to === "string" ? req.query.to : "";
+  const date = typeof req.query.date === "string" ? req.query.date : "";
+  const range = fromQuery && toQuery ? istInclusiveDayRangeUtc(fromQuery, toQuery) : istDayUtcRange(date);
+  if (!range) return res.status(400).json({ error: "Use a valid date, or from and to with from on or before to" });
+  const dayCount = (range.end.getTime() - range.start.getTime()) / 86_400_000;
+  if (dayCount > 366) return res.status(400).json({ error: "Choose a range of one year or less" });
+
+  const requestedIds = typeof req.query.subjectIds === "string"
+    ? req.query.subjectIds.split(",").map((id) => id.trim()).filter(Boolean)
+    : [];
+
+  const skillLinks = await prisma.classSubject.findMany({
+    where: { studentVisible: true },
+    select: { subjectId: true, subject: { select: { id: true, name: true } } },
+  });
+  const subjectsById = new Map<string, { id: string; name: string }>();
+  for (const link of skillLinks) subjectsById.set(link.subject.id, link.subject);
+  const subjects = [...subjectsById.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const skillIds = new Set(subjects.map((subject) => subject.id));
+  const subjectIds = requestedIds.filter((id) => skillIds.has(id));
+
+  const sessions = await prisma.classroomAssessmentSession.findMany({
+    where: {
+      updatedAt: { gte: range.start, lt: range.end },
+      ...(subjectIds.length ? { subjectId: { in: subjectIds } } : { subjectId: { in: [...skillIds] } }),
+    },
+    include: {
+      schoolClass: { select: { id: true, name: true } },
+      section: { select: { name: true } },
+      subject: {
+        select: {
+          id: true,
+          name: true,
+          classSubjects: { select: { classId: true, studentVisible: true } },
+        },
+      },
+      testedLevel: { select: { name: true } },
+      recordedBy: { select: { email: true, teacher: { select: { fullName: true } } } },
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  const rows = sessions
+    .filter((session) =>
+      session.subject.classSubjects.some(
+        (link) => link.classId === session.classId && link.studentVisible
+      )
+    )
+    .map((session) => ({
+      id: session.id,
+      teacherName: session.recordedBy?.teacher?.fullName ?? session.recordedBy?.email ?? "Unknown",
+      className: session.schoolClass.name,
+      sectionName: session.section.name,
+      subjectId: session.subject.id,
+      subjectName: session.subject.name,
+      kind: session.kind,
+      levelName: session.testedLevel?.name ?? null,
+      testDate: session.date.toISOString().slice(0, 10),
+      savedAt: session.updatedAt.toISOString(),
+    }));
+
+  res.json({ from: fromQuery || date, to: toQuery || date, subjects, rows });
 });
 
 // --- Classes / sections ---
@@ -917,6 +1050,29 @@ router.post("/classes/:classId/subjects/:subjectId/clone", async (req, res) => {
   });
 
   res.json(created);
+});
+
+router.patch("/classes/:classId/subjects/:subjectId", async (req, res) => {
+  const schema = z.object({ classTestVisible: z.boolean() });
+  const p = schema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+  const link = await prisma.classSubject.findUnique({
+    where: {
+      classId_subjectId: {
+        classId: req.params.classId,
+        subjectId: req.params.subjectId,
+      },
+    },
+  });
+  if (!link) return res.status(404).json({ error: "Class subject link not found" });
+  if (!link.studentVisible) {
+    return res.status(400).json({ error: "Teacher-added subjects stay on the class test list" });
+  }
+  const updated = await prisma.classSubject.update({
+    where: { id: link.id },
+    data: { classTestVisible: p.data.classTestVisible },
+  });
+  res.json(updated);
 });
 
 router.delete("/classes/:classId/subjects/:subjectId", async (req, res) => {
@@ -2306,6 +2462,45 @@ router.patch("/students/:studentId", async (req, res) => {
   const student = await prisma.student.update({
     where: { id: studentId },
     data: { fullName: p.data.fullName },
+    include: {
+      schoolClass: true,
+      section: true,
+      user: { select: { studentLoginId: true } },
+    },
+  });
+
+  res.json({
+    id: student.id,
+    fullName: student.fullName,
+    classId: student.classId,
+    sectionId: student.sectionId,
+    className: student.schoolClass.name,
+    classLabel: classLabelForDisplay(student.schoolClass),
+    sectionName: student.section.name,
+    username: student.user.studentLoginId ?? "",
+  });
+});
+
+router.patch("/students/:studentId/section", async (req, res) => {
+  const p = moveStudentSectionSchema.safeParse(req.body);
+  if (!p.success) return res.status(400).json(p.error.flatten());
+
+  const studentId = req.params.studentId;
+  const existing = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!existing) return res.status(404).json({ error: "Student not found" });
+
+  const section = await prisma.section.findUnique({ where: { id: p.data.sectionId } });
+  if (!section) return res.status(404).json({ error: "Section not found" });
+  if (section.classId !== existing.classId) {
+    return res.status(400).json({ error: "Choose a section in the same class" });
+  }
+  if (section.id === existing.sectionId) {
+    return res.status(400).json({ error: "Student is already in this section" });
+  }
+
+  const student = await prisma.student.update({
+    where: { id: studentId },
+    data: { sectionId: section.id },
     include: {
       schoolClass: true,
       section: true,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { useAuth } from "../../auth";
 import { api } from "../../api";
@@ -15,14 +15,18 @@ type ClassRow = {
   studentCount: number;
   sections: SectionRow[];
 };
+type CareQuestion = { id: string; label: string };
 type RosterRow = {
   id: string;
   fullName: string;
   studentLoginId: string | null;
-  englishMirrorPractice: CareCallYesNo | null;
-  heavyPhoneTv: CareCallYesNo | null;
+  answers: Record<string, CareCallYesNo | null>;
 };
 type RecordRow = RosterRow & { recorded: boolean };
+
+function answerKey(questions: CareQuestion[], answers: Record<string, CareCallYesNo | null>): string {
+  return questions.map((question) => `${question.id}:${answers[question.id] ?? ""}`).join("|");
+}
 
 function TickPair({
   value,
@@ -60,12 +64,15 @@ export function TeacherCareCallPage() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
+  const [questions, setQuestions] = useState<CareQuestion[]>([]);
   const [rows, setRows] = useState<RosterRow[]>([]);
   const [recordMonths, setRecordMonths] = useState<string[]>([]);
   const [recordMonth, setRecordMonth] = useState("");
+  const [recordQuestions, setRecordQuestions] = useState<CareQuestion[]>([]);
   const [recordRows, setRecordRows] = useState<RecordRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savedAnswers = useRef(new Map<string, string>());
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -108,14 +115,23 @@ export function TeacherCareCallPage() {
       setLoading(true);
       setError(null);
       const q = new URLSearchParams({ classId, sectionId });
-      const r = await api<{ students: RosterRow[] }>(`/api/v1/teacher/care-calls?${q.toString()}`);
+      const r = await api<{ questions: CareQuestion[]; students: RosterRow[] }>(
+        `/api/v1/teacher/care-calls?${q.toString()}`
+      );
       setLoading(false);
       if (!r.ok) {
         setError(r.error ?? "Could not load students");
+        setQuestions([]);
         setRows([]);
         return;
       }
-      setRows(r.data?.students ?? []);
+      const nextQuestions = r.data?.questions ?? [];
+      const students = r.data?.students ?? [];
+      setQuestions(nextQuestions);
+      savedAnswers.current = new Map(
+        students.map((student) => [student.id, answerKey(nextQuestions, student.answers ?? {})])
+      );
+      setRows(students);
     })();
   }, [classId, sectionId]);
 
@@ -142,7 +158,10 @@ export function TeacherCareCallPage() {
         return;
       }
       const q = new URLSearchParams({ classId, sectionId, month: recordMonth });
-      const r = await api<{ students: RecordRow[] }>(`/api/v1/teacher/care-calls/records?${q.toString()}`);
+      const r = await api<{ questions: CareQuestion[]; students: RecordRow[] }>(
+        `/api/v1/teacher/care-calls/records?${q.toString()}`
+      );
+      setRecordQuestions(r.ok ? r.data?.questions ?? [] : []);
       setRecordRows(r.ok ? r.data?.students ?? [] : []);
     })();
   }, [tab, classId, sectionId, recordMonth]);
@@ -153,6 +172,15 @@ export function TeacherCareCallPage() {
 
   async function saveClass() {
     if (!classId || !sectionId || rows.length === 0) return;
+    const entries = rows.filter((row) => {
+      if (!Object.values(row.answers ?? {}).some(Boolean)) return false;
+      return savedAnswers.current.get(row.id) !== answerKey(questions, row.answers ?? {});
+    });
+    if (entries.length === 0) {
+      setError(null);
+      setMessage("No new answers to save.");
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -161,10 +189,12 @@ export function TeacherCareCallPage() {
       json: {
         classId,
         sectionId,
-        entries: rows.map((row) => ({
+        entries: entries.map((row) => ({
           studentId: row.id,
-          englishMirrorPractice: row.englishMirrorPractice,
-          heavyPhoneTv: row.heavyPhoneTv,
+          answers: questions.flatMap((question) => {
+            const value = row.answers?.[question.id];
+            return value ? [{ questionId: question.id, value }] : [];
+          }),
         })),
       },
     });
@@ -173,7 +203,10 @@ export function TeacherCareCallPage() {
       setError(r.error ?? "Could not save care calls");
       return;
     }
-    setMessage("Care calls saved.");
+    for (const row of entries) {
+      savedAnswers.current.set(row.id, answerKey(questions, row.answers ?? {}));
+    }
+    setMessage(`Saved ${entries.length} student${entries.length === 1 ? "" : "s"}.`);
   }
 
   const classSectionSelectors = (
@@ -214,7 +247,7 @@ export function TeacherCareCallPage() {
   return (
     <AppShell title={auth.profile?.fullName ?? "Teacher"} onLogout={logout} nav={[...teacherPortalNav]}>
       <h1 className="text-2xl font-bold text-slate-900">Care calls</h1>
-      <p className="text-slate-600 mt-1">Mark the whole class at once. Two ticks per student.</p>
+      <p className="text-slate-600 mt-1">Mark the students you called. Answers already saved this month stay filled in.</p>
 
       <div className="mt-4 flex flex-wrap gap-2 p-1 rounded-xl bg-slate-100 border border-slate-200">
         {(
@@ -252,8 +285,9 @@ export function TeacherCareCallPage() {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="text-left p-3">Student</th>
-                    <th className="text-left p-3">English practice</th>
-                    <th className="text-left p-3">Heavy phone / TV</th>
+                    {questions.map((question) => (
+                      <th key={question.id} className="text-left p-3">{question.label}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -263,18 +297,16 @@ export function TeacherCareCallPage() {
                         <p className="font-medium text-slate-900">{row.fullName}</p>
                         <p className="text-xs text-slate-500">{row.studentLoginId ?? "—"}</p>
                       </td>
-                      <td className="p-3">
-                        <TickPair
-                          value={row.englishMirrorPractice}
-                          onChange={(englishMirrorPractice) => patchRow(row.id, { englishMirrorPractice })}
-                        />
-                      </td>
-                      <td className="p-3">
-                        <TickPair
-                          value={row.heavyPhoneTv}
-                          onChange={(heavyPhoneTv) => patchRow(row.id, { heavyPhoneTv })}
-                        />
-                      </td>
+                      {questions.map((question) => (
+                        <td key={question.id} className="p-3">
+                          <TickPair
+                            value={row.answers?.[question.id] ?? null}
+                            onChange={(value) =>
+                              patchRow(row.id, { answers: { ...row.answers, [question.id]: value } })
+                            }
+                          />
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -321,8 +353,9 @@ export function TeacherCareCallPage() {
               <thead className="bg-slate-50">
                 <tr>
                   <th className="text-left p-3">Student</th>
-                  <th className="text-left p-3">English practice</th>
-                  <th className="text-left p-3">Heavy phone / TV</th>
+                  {recordQuestions.map((question) => (
+                    <th key={question.id} className="text-left p-3">{question.label}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -332,8 +365,11 @@ export function TeacherCareCallPage() {
                       <p className="font-medium text-slate-900">{row.fullName}</p>
                       <p className="text-xs text-slate-500">{row.studentLoginId ?? "—"}</p>
                     </td>
-                    <td className="p-3">{row.recorded ? yesNoLabel(row.englishMirrorPractice) : "—"}</td>
-                    <td className="p-3">{row.recorded ? yesNoLabel(row.heavyPhoneTv) : "—"}</td>
+                    {recordQuestions.map((question) => (
+                      <td key={question.id} className="p-3">
+                        {row.recorded ? yesNoLabel(row.answers?.[question.id] ?? null) : "—"}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>

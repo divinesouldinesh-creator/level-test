@@ -347,7 +347,7 @@ router.get("/subjects", async (req, res) => {
     CACHE_TTL_MS.catalog,
     async () => {
       const classSubjects = await prisma.classSubject.findMany({
-        where: { classId: student.classId },
+        where: { classId: student.classId, studentVisible: true },
         include: {
           subject: {
             include: { area: { select: { id: true, name: true, code: true } } },
@@ -379,7 +379,7 @@ router.get("/subject-areas", async (req, res) => {
     CACHE_TTL_MS.catalog,
     async () => {
       const classSubjects = await prisma.classSubject.findMany({
-        where: { classId: student.classId },
+        where: { classId: student.classId, studentVisible: true },
         include: {
           subject: {
             include: { area: true },
@@ -443,7 +443,7 @@ router.get("/subjects/:subjectId/chapters", async (req, res) => {
   }
   const subjectId = req.params.subjectId;
   const allowed = await prisma.classSubject.findFirst({
-    where: { classId: student.classId, subjectId },
+    where: { classId: student.classId, subjectId, studentVisible: true },
     include: { subject: { select: { id: true, name: true, testMode: true, chapterTestQuestionCount: true, chapterWeightByBank: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
   });
   if (!allowed) {
@@ -508,7 +508,7 @@ router.get("/subjects/:subjectId/levels", async (req, res) => {
   }
   const subjectId = req.params.subjectId;
   const allowed = await prisma.classSubject.findFirst({
-    where: { classId: student.classId, subjectId },
+    where: { classId: student.classId, subjectId, studentVisible: true },
   });
   if (!allowed) {
     res.status(403).json({ error: "Subject not available for your class" });
@@ -587,7 +587,7 @@ router.post("/tests/start", async (req, res) => {
   }
 
   const allowed = await prisma.classSubject.findFirst({
-    where: { classId: student.classId, subjectId },
+    where: { classId: student.classId, subjectId, studentVisible: true },
     include: { subject: { select: { id: true, testMode: true, chapterTestQuestionCount: true, chapterWeightByBank: true, chapterNegativeMarking: true, chapterWrongPenalty: true } } },
   });
   if (!allowed) {

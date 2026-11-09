@@ -83,6 +83,12 @@ const AdminTopicLessonsPage = lazy(() =>
 const AdminAttendancePage = lazy(() =>
   import("./pages/admin/AdminAttendancePage").then((m) => ({ default: m.AdminAttendancePage }))
 );
+const AdminClassTestUploadsPage = lazy(() =>
+  import("./pages/admin/AdminClassTestUploadsPage").then((m) => ({ default: m.AdminClassTestUploadsPage }))
+);
+const AdminCareCallQuestionsPage = lazy(() =>
+  import("./pages/admin/AdminCareCallQuestionsPage").then((m) => ({ default: m.AdminCareCallQuestionsPage }))
+);
 const AdminPrincipalActionsPage = lazy(() =>
   import("./pages/admin/AdminPrincipalActionsPage").then((m) => ({ default: m.AdminPrincipalActionsPage }))
 );
@@ -331,6 +337,8 @@ function AppRoutes() {
           <Route path="topic-lessons" element={<AdminTopicLessonsPage />} />
           <Route path="students" element={<AdminStudentsPage />} />
           <Route path="attendance" element={<AdminAttendancePage />} />
+          <Route path="class-tests" element={<AdminClassTestUploadsPage />} />
+          <Route path="care-calls" element={<AdminCareCallQuestionsPage />} />
           <Route path="principal-actions" element={<AdminPrincipalActionsPage />} />
           <Route path="staff" element={<AdminStaffPage />} />
           <Route path="teachers" element={<Navigate to="/admin/staff" replace />} />

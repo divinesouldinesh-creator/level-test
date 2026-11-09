@@ -23,6 +23,7 @@ export function StudentTable({
   onDeleteSelected,
   onResetPassword,
   onRename,
+  onMoveSection,
   onDelete,
   onPrintClass,
   page,
@@ -48,6 +49,7 @@ export function StudentTable({
   onDeleteSelected: () => void;
   onResetPassword: (id: string) => void;
   onRename: (id: string) => void;
+  onMoveSection: (id: string) => void;
   onDelete: (id: string) => void;
   onPrintClass: () => void;
   page: number;
@@ -269,6 +271,14 @@ export function StudentTable({
                         onClick={() => onRename(row.id)}
                       >
                         Rename
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === row.id}
+                        className="rounded-md border border-slate-200 px-2 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+                        onClick={() => onMoveSection(row.id)}
+                      >
+                        Move section
                       </button>
                       <button
                         type="button"

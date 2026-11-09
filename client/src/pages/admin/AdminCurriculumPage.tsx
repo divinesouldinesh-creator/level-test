@@ -5,7 +5,11 @@ import { useConfirmDialog, type ConfirmRequest } from "../../components/ConfirmD
 type RequestConfirm = (req: ConfirmRequest) => void;
 
 type SectionRow = { id: string; name: string };
-type ClassSubjectLink = { subject: { id: string; name: string; code: string | null } };
+type ClassSubjectLink = {
+  studentVisible?: boolean;
+  classTestVisible?: boolean;
+  subject: { id: string; name: string; code: string | null };
+};
 type SchoolClassMeta = {
   id: string;
   name: string;
@@ -233,6 +237,18 @@ function ClassesPanel({
     }
   }
 
+  async function setClassTestVisible(classId: string, subjectId: string, classTestVisible: boolean) {
+    setBusy(true);
+    setErr(null);
+    const r = await api(`/api/v1/admin/classes/${classId}/subjects/${subjectId}`, {
+      method: "PATCH",
+      json: { classTestVisible },
+    });
+    setBusy(false);
+    if (!r.ok) setErr(r.error ?? "Could not update the class test list");
+    else await onChanged();
+  }
+
   async function linkSubject(classId: string, subjectId: string) {
     if (!subjectId) return;
     setBusy(true);
@@ -314,6 +330,7 @@ function ClassesPanel({
         ) : (
           classes.map((c) => {
             const linkedIds = new Set(c.subjects.map((s) => s.subject.id));
+            const studentSubjects = c.subjects.filter((cs) => cs.studentVisible !== false);
             const addOptions = subjectOptions.filter((o) => !linkedIds.has(o.id));
             return (
               <details key={c.id} className="rounded-lg border border-slate-200 bg-slate-50 open:bg-white">
@@ -414,13 +431,25 @@ function ClassesPanel({
                     )}
                   </div>
                   <div>
+                    <p className="text-xs text-slate-500 mb-2">
+                      Class test controls which of these subjects the teacher sees when recording marks. Students still see every subject listed here.
+                    </p>
                     <div className="flex flex-wrap gap-2">
-                      {c.subjects.map((cs) => (
+                      {studentSubjects.map((cs) => (
                         <span
                           key={cs.subject.id}
-                          className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-900 pl-3 pr-1 py-1 text-sm"
+                          className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-900 pl-3 pr-1 py-1 text-sm"
                         >
                           {cs.subject.name}
+                          <label className="inline-flex items-center gap-1 text-xs font-medium text-indigo-800">
+                            <input
+                              type="checkbox"
+                              checked={cs.classTestVisible !== false}
+                              disabled={busy}
+                              onChange={(e) => void setClassTestVisible(c.id, cs.subject.id, e.target.checked)}
+                            />
+                            Class test
+                          </label>
                           <button
                             type="button"
                             disabled={busy}

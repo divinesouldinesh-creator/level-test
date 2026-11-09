@@ -8,6 +8,8 @@ import adminRoutes from "./routes/admin.js";
 import teacherRoutes from "./routes/teacher.js";
 import studentRoutes from "./routes/student.js";
 import settingsRoutes from "./routes/settings.js";
+import { prisma } from "./lib/prisma.js";
+import { ensureCareCallQuestions } from "./services/careCallPlan.js";
 import { resolveUpload, syncUploadDirToStore } from "./services/storedUploads.js";
 
 const app = express();
@@ -105,6 +107,23 @@ app.use("/api/v1/student", studentRoutes);
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
   res.status(500).json({ error: "Server error" });
+});
+
+void prisma
+  .$executeRawUnsafe(
+    `ALTER TABLE "ClassSubject" ADD COLUMN IF NOT EXISTS "student_visible" BOOLEAN NOT NULL DEFAULT true`
+  )
+  .then(() =>
+    prisma.$executeRawUnsafe(
+      `ALTER TABLE "ClassSubject" ADD COLUMN IF NOT EXISTS "class_test_visible" BOOLEAN NOT NULL DEFAULT true`
+    )
+  )
+  .catch((err) => {
+    console.error("class test subject columns", err);
+  });
+
+void ensureCareCallQuestions().catch((err) => {
+  console.error("care call questions", err);
 });
 
 void syncUploadDirToStore(uploadDir)

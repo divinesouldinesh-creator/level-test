@@ -17,6 +17,8 @@ export function AdminLayout() {
         { to: "/admin/coverage", label: "Coverage" },
         { to: "/admin/students", label: "Students" },
         { to: "/admin/attendance", label: "Attendance" },
+        { to: "/admin/class-tests", label: "Class tests" },
+        { to: "/admin/care-calls", label: "Care calls" },
         { to: "/admin/staff", label: "Staff" },
         { to: "/admin/branding", label: "School branding" },
         { to: "/admin/security", label: "Security" },

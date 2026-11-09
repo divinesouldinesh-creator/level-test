@@ -102,6 +102,7 @@ export async function listMasteryQueue(
   const classSubjects = await prisma.classSubject.findMany({
     where: {
       classId,
+      studentVisible: true,
       ...(opts?.subjectIds?.length ? { subjectId: { in: opts.subjectIds } } : {}),
     },
     include: { subject: true },
