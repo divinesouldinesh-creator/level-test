@@ -54,20 +54,39 @@ export function NumericAnswerInput({
   onChange: (next: string) => void;
   disabled?: boolean;
 }) {
+  function toggleSign() {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("-")) onChange(trimmed.slice(1));
+    else onChange(trimmed ? `-${trimmed}` : "-");
+  }
+
   return (
     <label className="mt-4 block">
       <span className="text-sm font-medium text-slate-700">Your answer (number)</span>
-      <input
-        type="text"
-        inputMode="decimal"
-        autoComplete="off"
-        spellCheck={false}
-        disabled={disabled}
-        className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 text-base"
-        placeholder="Type a number"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <div className="mt-1 flex gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={value.trim().startsWith("-") ? "Remove minus" : "Make negative"}
+          aria-pressed={value.trim().startsWith("-")}
+          className="shrink-0 rounded-xl border border-slate-300 bg-white px-4 text-lg font-semibold text-slate-800 min-h-[48px] min-w-[48px] disabled:opacity-60"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={toggleSign}
+        >
+          −
+        </button>
+        <input
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={disabled}
+          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-base"
+          placeholder="Type a number"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
     </label>
   );
 }
