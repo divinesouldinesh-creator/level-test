@@ -21,7 +21,13 @@ if (!fs.existsSync(uploadDir)) {
 /** Browser origins allowed when the client calls the API with an absolute URL (VITE_API_URL). Default covers local Vite. */
 function corsAllowedOrigins(): string[] {
   const fromList = process.env.CORS_ORIGINS?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
-  const defaults = ["http://localhost:5173", "http://127.0.0.1:5173"];
+  const defaults = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    // Capacitor Android WebView origin (androidScheme: https).
+    "https://localhost",
+    "capacitor://localhost",
+  ];
   const extra = process.env.FRONTEND_ORIGIN?.trim();
   return [...new Set([...defaults, ...fromList, ...(extra ? [extra] : [])])];
 }

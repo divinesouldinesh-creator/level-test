@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Level Test</string>
+    <string name="title_activity_main">Level Test</string>
+    <string name="package_name">com.leveltest.app</string>
+    <string name="custom_url_scheme">com.leveltest.app</string>
+</resources>
